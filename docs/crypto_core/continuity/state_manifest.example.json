@@ -1,5 +1,5 @@
 {
-  "$comment": "EXAMPLE_ONLY - an illustrative STATE_MANIFEST_V1 instance, not current repository state. Every hash, number and name below is a fabricated placeholder. Never read this file as proof of anything; compile a real manifest from live git and gh output instead. The fixture deliberately shows both halves of the proof-pairing rule: pr_number, pr_state, review_threads_unresolved and claude_capacity are null because their evidence says UNKNOWN, while the remaining registered fields carry values because their evidence says PROVEN.",
+  "$comment": "EXAMPLE_ONLY - an illustrative STATE_MANIFEST_V1 instance, not current repository state. Every hash, number and name below is a fabricated placeholder. Never read this file as proof of anything; compile a real manifest from live git and gh output instead. The fixture deliberately shows both halves of the proof-pairing rule: pr_number, pr_state and review_threads_unresolved are null because their evidence says UNKNOWN, while the remaining registered fields carry values because their evidence says PROVEN. It also shows the relations that topology alone cannot express: CLAUDE_CONTINUITY is only legal because openai capacity is PROVEN EXHAUSTED and claude capacity is PROVEN available, and model_runtime declares CONFIGURATION_EVIDENCE_ONLY so it leaves model_actual and observed_effort null rather than presenting a settings pin as proven execution.",
   "schema": "STATE_MANIFEST_V1",
   "repo": "example-owner/EXAMPLE_REPO",
   "compiled_at_evidence": "EXAMPLE_ONLY placeholder. A real manifest records the exact commands run, for example 'git rev-parse HEAD', 'git rev-parse HEAD^{tree}', 'gh pr list --state open --json number'.",
@@ -42,8 +42,8 @@
   "blockers_evidence": "PROVEN",
   "openai_agentic_capacity": "EXHAUSTED",
   "openai_agentic_capacity_evidence": "PROVEN",
-  "claude_capacity": null,
-  "claude_capacity_evidence": "UNKNOWN",
+  "claude_capacity": "NORMAL",
+  "claude_capacity_evidence": "PROVEN",
   "capacity_routing_mode": "CLAUDE_CONTINUITY",
   "capacity_routing_mode_evidence": "PROVEN",
   "task_boundary": "EXAMPLE_SEMANTIC_BOUNDARY_V1",
@@ -58,9 +58,9 @@
   "model_runtime": {
     "model_id": "example-model-id",
     "model_requested": "example-model-id",
-    "model_actual": "example-model-id",
+    "model_actual": null,
     "requested_effort": "xhigh",
-    "observed_effort": "xhigh",
+    "observed_effort": null,
     "capability_mode": null,
     "host_setting_raw": "EXAMPLE_ONLY: the raw host selector string, copied verbatim, never normalized.",
     "environment": "EXAMPLE_ONLY: the execution environment name.",
@@ -68,5 +68,6 @@
     "model_evidence_source": "CONFIGURATION_EVIDENCE_ONLY",
     "model_fallback": null
   },
-  "next_safe_action": "EXAMPLE_ONLY: exactly one concrete next action, stated once."
+  "next_safe_action": "EXAMPLE_ONLY: exactly one concrete next action, stated once.",
+  "next_safe_action_evidence": "PROVEN"
 }

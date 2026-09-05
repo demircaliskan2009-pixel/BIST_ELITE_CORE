@@ -211,6 +211,36 @@ PROHIBITED_RATIO_TOKENS = (
 
 VALIDATOR_REL = "scripts/crypto_core/validate_agent_os_v2.py"
 
+# The independent contract test is listed in REQUIRED_CONTROL_PLANE_ARTIFACTS, which is a MUTABLE
+# registry. Deleting the test and its registry entry together would therefore leave a self-consistent
+# control plane with no oracle at all. This literal constant, plus the CI anchor step below, closes
+# that circle from OUTSIDE the registry: the requirement survives the registry entry being removed.
+BOOTSTRAP_ORACLE_PATH = "tests/crypto_core/test_agent_os_v2_contract.py"
+
+# Exact command shapes. Exactness is deliberate: the previous lexical co-occurrence check accepted
+# `echo <path>`, `<cmd> || true` and a disabled job, all of which contain the path while enforcing
+# nothing. The validator does not try to understand arbitrary shell.
+CI_VALIDATOR_COMMAND = "python scripts/crypto_core/validate_agent_os_v2.py"
+CI_ORACLE_ANCHOR_COMMAND = "test -f tests/crypto_core/test_agent_os_v2_contract.py"
+
+# Provider capacity vocabulary used by the manifest relation checker.
+CAPACITY_AVAILABLE = frozenset({"NORMAL", "CONSERVE", "CRITICAL"})
+CAPACITY_CONSTRAINED = frozenset({"CONSERVE", "CRITICAL"})
+
+# `max` legality is per family. A restriction belonging to ONE family must never be written as a
+# restriction on the effort itself - doing so silently made the documented T3D/T3E/T4 max branches
+# unreachable. This closed list catches the machine-readable relapse forms only; English paraphrase
+# stays the independent audit's responsibility.
+PROHIBITED_GLOBAL_MAX_TOKENS = (
+    "under the T3B contract",
+    "max is only legal in T3B",
+    "max only exists in T3B",
+    "max only in T3B",
+)
+# A T3B-only MAX_EFFORT_CLASSES declaration is caught STRUCTURALLY by the class-vs-matrix
+# cross-check in _check_effort_family_legality, not lexically: the literal would be a prefix of
+# the legitimate multi-class declaration and would false-positive on it.
+
 # Volatile current-state patterns forbidden in the ACTIVE region of a DURABLE surface.
 # The hex rule requires both a digit and a hex letter so ordinary words and plain numbers cannot
 # false-positive; a real commit hash effectively always satisfies it.
@@ -267,6 +297,10 @@ REQUIRED_CANONICAL_TOKENS = (
     "CAPACITY_STOP",
     "Work is not a separate free provider",
     "There is no enforced provider ratio anywhere in this control plane.",
+    "PER_FAMILY_EFFORT_LEGALITY",
+    "HOST_DISCOVERY_BEATS_REGISTRY_ASSUMPTION",
+    "TYPED_EXEMPTION_REGIONS",
+    "ORACLE_EXTERNAL_BOOTSTRAP_ANCHOR",
 )
 
 REQUIRED_CONTINUITY_INDEX_TOKENS = (
@@ -286,6 +320,8 @@ BLOCK_VOLATILE_FIELDS = "VOLATILE_STATE_FIELDS"
 BLOCK_PROOF_PAIRED = "PROOF_PAIRED_MANIFEST_FIELDS"
 BLOCK_CAPACITY_STATES = "PROVIDER_CAPACITY_STATES"
 BLOCK_ROUTING_MODES = "CAPACITY_ROUTING_MODES"
+BLOCK_HOST_DISCOVERY = "HOST_DISCOVERY_SCAN_PATHS"
+BLOCK_MAX_FAMILY = "MAX_EFFORT_FAMILY_TRIGGERS"
 BLOCK_ROUTING_MATRIX = "ROLE_ROUTING_MATRIX"
 BLOCK_EFFORT_ENUM = "REASONING_EFFORT_ENUM"
 BLOCK_PROMPT_FIELDS = "PROMPT_COMPILER_V2_1_FIELDS"
@@ -333,52 +369,73 @@ def block_lines(text: str, name: str) -> list[str] | None:
     return [ln.strip() for ln in lines[span[0] : span[1]] if ln.strip()]
 
 
-def marker_region_failures(rel: str, lines: list[str]) -> list[str]:
-    """Prove every exempt-region marker pair is balanced, ordered and non-nested.
+def exemption_scan(rel: str, lines: list[str]) -> tuple[list[str], list[tuple[int, str]]]:
+    """Parse exempt regions with a TYPED STACK and return (failures, active lines).
 
-    An unterminated exemption would silently swallow the rest of a file, which is exactly the
-    fail-open shape this control plane exists to remove. Unbalanced markers therefore FAIL rather
-    than being tolerated.
+    A shared anonymous depth counter - one counter per region type, or worse one counter for all of
+    them - lets one region type close another. Opening HISTORICAL_RECORD, then EXAMPLE_ONLY, then
+    closing HISTORICAL_RECORD would balance a naive counter while leaving the rest of the file
+    exempt, which is exactly how a pinned value hides. The stack therefore carries the exact type of
+    every open region, and a closer must match the type on top.
+
+    Failing shapes: a crossed pair in either direction, a stray closer, an unterminated region, and
+    any nesting - the contract defines no nested combination, so nesting is a violation rather than
+    a tolerated case.
     """
     failures: list[str] = []
-    for name in EXEMPT_REGION_BLOCKS:
-        depth = 0
-        for lineno, raw in enumerate(lines, start=1):
-            stripped = raw.strip()
-            if stripped == _begin(name):
-                if depth:
-                    failures.append(f"{rel}: nested {name}_BEGIN at line {lineno}")
-                depth += 1
-            elif stripped == _end(name):
-                if depth == 0:
-                    failures.append(f"{rel}: {name}_END without BEGIN at line {lineno}")
-                else:
-                    depth -= 1
-        if depth:
-            failures.append(f"{rel}: unterminated {name}_BEGIN (region would swallow the rest of the file)")
-    return failures
+    stack: list[tuple[str, int]] = []
+    active: list[tuple[int, str]] = []
+
+    for lineno, raw_line in enumerate(lines, start=1):
+        stripped = raw_line.strip()
+
+        opened = next((name for name in EXEMPT_REGION_BLOCKS if stripped == _begin(name)), None)
+        if opened is not None:
+            if stack:
+                failures.append(
+                    f"{rel}:{lineno}: {opened}_BEGIN nested inside an open {stack[-1][0]} region; "
+                    f"no nested exemption combination is defined"
+                )
+            stack.append((opened, lineno))
+            continue
+
+        closed = next((name for name in EXEMPT_REGION_BLOCKS if stripped == _end(name)), None)
+        if closed is not None:
+            if not stack:
+                failures.append(f"{rel}:{lineno}: {closed}_END without a matching BEGIN")
+            elif stack[-1][0] != closed:
+                failures.append(
+                    f"{rel}:{lineno}: crossed exemption regions - {closed}_END closes an open "
+                    f"{stack[-1][0]} region opened at line {stack[-1][1]}"
+                )
+                stack.pop()
+            else:
+                stack.pop()
+            continue
+
+        if not stack:
+            active.append((lineno, raw_line))
+
+    for name, lineno in stack:
+        failures.append(
+            f"{rel}: unterminated {name}_BEGIN at line {lineno} (the region would swallow the rest of the file)"
+        )
+    return failures, active
+
+
+def marker_region_failures(rel: str, lines: list[str]) -> list[str]:
+    """Structural failures from the typed exemption parse."""
+    return exemption_scan(rel, lines)[0]
 
 
 def active_lines(lines: list[str]) -> list[tuple[int, str]]:
     """Return (1-based line number, text) for every line OUTSIDE an exempt region.
 
-    Region membership is decided by explicit structural markers only. Headings, section numbers and
-    prose proximity are deliberately irrelevant: renaming or reformatting a heading can no longer
-    change which text is treated as active.
+    Region membership is decided by the typed structural parse in ``exemption_scan``. Headings,
+    section numbers and prose proximity are deliberately irrelevant: renaming or reformatting a
+    heading cannot change which text is treated as active.
     """
-    out: list[tuple[int, str]] = []
-    depth = 0
-    for lineno, raw in enumerate(lines, start=1):
-        stripped = raw.strip()
-        if any(stripped == _begin(name) for name in EXEMPT_REGION_BLOCKS):
-            depth += 1
-            continue
-        if any(stripped == _end(name) for name in EXEMPT_REGION_BLOCKS):
-            depth = max(0, depth - 1)
-            continue
-        if depth == 0:
-            out.append((lineno, raw))
-    return out
+    return exemption_scan("<scan>", lines)[1]
 
 
 def parse_registry(text: str, name: str) -> list[str] | None:
@@ -430,6 +487,8 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
     retired = parse_registry(canonical_text, BLOCK_RETIRED_PATHS)
     volatile_pairs = parse_surface_registry(canonical_text, BLOCK_VOLATILE_FIELDS)
     proof_paired = parse_registry(canonical_text, BLOCK_PROOF_PAIRED)
+    host_globs = parse_registry(canonical_text, BLOCK_HOST_DISCOVERY)
+    max_family = parse_registry(canonical_text, BLOCK_MAX_FAMILY)
     for label, value in (
         (BLOCK_REQUIRED_ARTIFACTS, artifacts),
         (BLOCK_DURABLE_SURFACES, durable),
@@ -437,6 +496,8 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
         (BLOCK_RETIRED_PATHS, retired),
         (BLOCK_VOLATILE_FIELDS, volatile_pairs),
         (BLOCK_PROOF_PAIRED, proof_paired),
+        (BLOCK_HOST_DISCOVERY, host_globs),
+        (BLOCK_MAX_FAMILY, max_family),
     ):
         if value is None:
             failures.append(f"{CANONICAL}: {label} block missing or malformed")
@@ -447,6 +508,8 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
         or retired is None
         or volatile_pairs is None
         or proof_paired is None
+        or host_globs is None
+        or max_family is None
     ):
         return None
 
@@ -459,6 +522,8 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
         (BLOCK_RETIRED_PATHS, retired),
         (BLOCK_VOLATILE_FIELDS, [f for f, _c in volatile_pairs]),
         (BLOCK_PROOF_PAIRED, proof_paired),
+        (BLOCK_HOST_DISCOVERY, host_globs),
+        (BLOCK_MAX_FAMILY, max_family),
     ):
         if not values:
             failures.append(f"{CANONICAL}: {label} registry is empty")
@@ -482,6 +547,8 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
         "retired": retired,
         "volatile_fields": [f for f, _c in volatile_pairs],
         "proof_paired": proof_paired,
+        "host_globs": host_globs,
+        "max_family": max_family,
     }
 
 
@@ -496,6 +563,14 @@ def _check_existence(root: Path, ctx: dict[str, object], failures: list[str]) ->
     for path in ctx["retired"]:  # type: ignore[union-attr]
         if (root / path).exists():
             failures.append(f"retired control-plane path still present in the tree: {path}")
+
+    # Anchored on a literal constant, NOT on the mutable required-artifact registry, so removing the
+    # registry entry does not remove the requirement.
+    if not (root / BOOTSTRAP_ORACLE_PATH).is_file():
+        failures.append(
+            f"independent contract oracle missing: {BOOTSTRAP_ORACLE_PATH} "
+            f"(required by the external bootstrap anchor, independently of any registry entry)"
+        )
 
 
 def _check_roles(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
@@ -827,6 +902,103 @@ def _check_prohibited_sizing(root: Path, ctx: dict[str, object], failures: list[
                     )
 
 
+def _check_host_discovery(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
+    """A host auto-discovery location must be registered or empty - never merely unregistered.
+
+    Registry membership decides AUTHORITY; it does not decide what a host LOADS. An agent, skill or
+    prompt file sitting in a conventional discovery directory gets loaded whatever the registry says,
+    so "unregistered therefore inert" was false. The allowed set in each declared location is
+    currently empty, and this scan claims nothing about host conventions outside that declared list.
+    """
+    registered = {path for path, _role in ctx["surfaces"]} | set(ctx["artifacts"])  # type: ignore[union-attr]
+    for pattern in ctx["host_globs"]:  # type: ignore[union-attr]
+        for found in sorted(root.glob(pattern)):
+            if not found.is_file():
+                continue
+            rel = found.relative_to(root).as_posix()
+            if rel in registered:
+                continue
+            failures.append(
+                f"host auto-discovery surface present but not registered: {rel} "
+                f"(matched {pattern}; a discoverable path must be registered with a safe role or absent)"
+            )
+
+
+def max_effort_is_legal(family_rows: list[str], task_class: str, task_intent: str) -> bool:
+    """Is `max` legal for this exact (class, intent) pair, per the canonical per-family table?"""
+    for raw_row in family_rows:
+        row = raw_row.strip()
+        if row.startswith("- "):
+            row = row[2:]
+        parts = [part.strip() for part in row.split("::")]
+        if len(parts) != 3 or parts[0] != task_class:
+            continue
+        return task_intent in {i.strip() for i in parts[1].split(",") if i.strip()}
+    return False
+
+
+def _check_effort_family_legality(
+    root: Path, ctx: dict[str, object], max_effort_classes: frozenset[str], failures: list[str]
+) -> None:
+    """`max` legality is per family, and the table must agree with the routing matrix."""
+    canonical_text: str = ctx["canonical_text"]  # type: ignore[assignment]
+    rows: list[str] = list(ctx["max_family"])  # type: ignore[arg-type]
+
+    parsed: dict[str, set[str]] = {}
+    for row in rows:
+        parts = [part.strip() for part in row.split("::")]
+        if len(parts) != 3 or not parts[2]:
+            failures.append(f"{CANONICAL}: malformed {BLOCK_MAX_FAMILY} row (need CLASS :: INTENTS :: trigger): {row}")
+            continue
+        task_class, intents_raw, _trigger = parts
+        if task_class in parsed:
+            failures.append(f"{CANONICAL}: duplicate {BLOCK_MAX_FAMILY} row for {task_class}")
+        parsed[task_class] = {i.strip() for i in intents_raw.split(",") if i.strip()}
+
+    if max_effort_classes and set(parsed) != set(max_effort_classes):
+        failures.append(
+            f"{CANONICAL}: MAX_EFFORT_CLASSES declares "
+            f"{','.join(sorted(max_effort_classes)) or 'none'} but {BLOCK_MAX_FAMILY} covers "
+            f"{','.join(sorted(parsed)) or 'none'}"
+        )
+
+    # Each family may only reach max through an intent it actually routes.
+    routed: dict[str, set[str]] = {}
+    for row in block_lines(canonical_text, BLOCK_ROUTING_MATRIX) or []:
+        if not row.startswith("ROUTE:"):
+            continue
+        fields = [f.strip() for f in row[len("ROUTE:") :].split("|")]
+        if len(fields) != 6:
+            continue
+        routed.setdefault(fields[0], set()).update(i.strip() for i in fields[1].split(",") if i.strip())
+
+    for task_class, intents in parsed.items():
+        illegal = sorted(intents - routed.get(task_class, set()))
+        for intent in illegal:
+            failures.append(
+                f"{CANONICAL}: {BLOCK_MAX_FAMILY} lets {task_class} reach max through {intent}, "
+                f"which {task_class} does not route in section 3"
+            )
+
+    # The mutation-only family stays mutation-only even at max.
+    illegal_t3b = sorted(parsed.get("T3B", set()) - T3B_ALLOWED_INTENTS)
+    for intent in illegal_t3b:
+        failures.append(f"{CANONICAL}: T3B may not reach max through {intent}; T3B is IMPLEMENTATION/REPAIR only")
+
+    # A one-family restriction must never be restated as a restriction on the effort itself.
+    for path, _role in ctx["surfaces"]:  # type: ignore[union-attr]
+        text = read_text(root, path)
+        if text is None:
+            continue
+        for lineno, line in active_lines(text.splitlines()):
+            for token in PROHIBITED_GLOBAL_MAX_TOKENS:
+                if token.rstrip("\n") in line:
+                    failures.append(
+                        f"{path}:{lineno}: max restricted globally to one family ({token.strip()!r}); "
+                        f"legality is per family - see {BLOCK_MAX_FAMILY}"
+                    )
+
+
 def _check_capacity_contract(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
     """Provider capacity is a routing input, never a durable pin and never an enforced ratio.
 
@@ -944,13 +1116,9 @@ def _check_continuity_fixtures(root: Path, ctx: dict[str, object], failures: lis
             return
         if example.get("schema") != "STATE_MANIFEST_V1":
             failures.append(f"{example_path}: schema field must be STATE_MANIFEST_V1")
-        for field in registered:
-            failures.extend(proof_pair_failures(example_path, example, field, f"{field}_evidence"))
-        authorization = example.get("authorization") or {}
-        if authorization.get("merge_authorized") is not False:
-            failures.append(
-                f"{example_path}: merge_authorized must be false; merge authority is never carried in state"
-            )
+        # The committed fixture is validated by the SAME deterministic relation checker the contract
+        # uses, never by prose inspection.
+        failures.extend(manifest_relation_failures(example_path, example, registered))
 
 
 def proof_pair_failures(label: str, instance: dict, value_field: str, evidence_field: str) -> list[str]:
@@ -1085,12 +1253,161 @@ def _step_is_disabled(step_lines: list[str]) -> bool:
     return inline.strip().lower().replace(" ", "") in ("false", "${{false}}")
 
 
-def _check_ci_wiring(root: Path, failures: list[str]) -> None:
-    """Prove an EXECUTABLE validator invocation inside the required CI job.
+def manifest_relation_failures(label: str, instance: dict, registered: list[str]) -> list[str]:
+    """Prove the exact evidence/value SEMANTICS of an ephemeral manifest, not just its topology.
 
-    A substring match over the job body is not enough: a YAML comment, a shell comment inside a
-    ``run:`` block, or an ``if: false`` step all contain the path while executing nothing. The gate
-    therefore has to be found as a real command line inside an enabled step.
+    Topology alone - "does a companion field exist" - let an inverted pair through: a value with
+    UNKNOWN evidence, or null with PROVEN, or a continuation routing mode chosen while the capacity
+    it depends on was never proven. These are the relations that make the manifest mean something.
+    """
+    failures: list[str] = []
+
+    for field in registered:
+        failures.extend(proof_pair_failures(label, instance, field, f"{field}_evidence"))
+
+    # --- runtime proof ------------------------------------------------------------------------
+    runtime = instance.get("model_runtime")
+    if not isinstance(runtime, dict):
+        failures.append(
+            f"{label}: model_runtime is missing; a manifest that participates in routing or audit "
+            f"must carry a runtime-proof block with an explicit evidence class"
+        )
+    else:
+        source = runtime.get("model_evidence_source")
+        actual = runtime.get("model_actual")
+        observed = runtime.get("observed_effort")
+        host_raw = runtime.get("host_setting_raw")
+        if source not in MODEL_EVIDENCE_CLASSES:
+            failures.append(
+                f"{label}: model_evidence_source must be one of {list(MODEL_EVIDENCE_CLASSES)}, got {source!r}"
+            )
+        elif source == "RUNTIME_TELEMETRY":
+            if actual is None:
+                failures.append(f"{label}: RUNTIME_TELEMETRY claims runtime proof but model_actual is null")
+        elif source == "USER_ATTESTED_UI_SELECTION":
+            if actual is None and host_raw is None:
+                failures.append(
+                    f"{label}: USER_ATTESTED_UI_SELECTION carries neither model_actual nor "
+                    f"host_setting_raw, so nothing was actually attested"
+                )
+        else:
+            # CONFIGURATION_EVIDENCE_ONLY, UNKNOWN and CONTRADICTED prove no execution. Populating an
+            # actual/observed value under them would present configuration or a contradiction as proof.
+            if actual is not None:
+                failures.append(f"{label}: {source} must not populate model_actual as proven execution")
+            if observed is not None:
+                failures.append(f"{label}: {source} must not populate observed_effort as proven execution")
+
+    # --- provider capacity --------------------------------------------------------------------
+    openai_capacity = instance.get("openai_agentic_capacity")
+    claude_capacity = instance.get("claude_capacity")
+    mode = instance.get("capacity_routing_mode")
+
+    if mode is None:
+        pass
+    elif openai_capacity is None or claude_capacity is None:
+        failures.append(
+            f"{label}: capacity_routing_mode {mode!r} was selected while a provider capacity is "
+            f"UNKNOWN; an unproven capacity must leave the routing mode null, never guess a mode"
+        )
+    else:
+        requirement = {
+            "CLAUDE_CONTINUITY": (openai_capacity == "EXHAUSTED" and claude_capacity in CAPACITY_AVAILABLE),
+            "OPENAI_CONTINUITY": (claude_capacity == "EXHAUSTED" and openai_capacity in CAPACITY_AVAILABLE),
+            "BOTH_EXHAUSTED_STOP": (openai_capacity == "EXHAUSTED" and claude_capacity == "EXHAUSTED"),
+            "QUALITY_OPTIMAL": (openai_capacity == "NORMAL" and claude_capacity == "NORMAL"),
+            "CLAUDE_FIRST_CONSERVATION": (
+                openai_capacity in CAPACITY_CONSTRAINED and claude_capacity in CAPACITY_AVAILABLE
+            ),
+            "OPENAI_FIRST_CONSERVATION": (
+                claude_capacity in CAPACITY_CONSTRAINED and openai_capacity in CAPACITY_AVAILABLE
+            ),
+        }.get(mode)
+        if requirement is None:
+            failures.append(f"{label}: unknown capacity_routing_mode {mode!r}")
+        elif not requirement:
+            failures.append(
+                f"{label}: capacity_routing_mode {mode!r} contradicts the proven capacities "
+                f"(openai={openai_capacity!r}, claude={claude_capacity!r})"
+            )
+
+    # --- authority never travels in state -------------------------------------------------------
+    authorization = instance.get("authorization") or {}
+    if authorization.get("merge_authorized") is not False:
+        failures.append(f"{label}: merge_authorized must be false; merge authority is never carried in state")
+
+    return failures
+
+
+def _step_executable_lines(step_lines: list[str]) -> list[str] | None:
+    """Executable command lines of a step, comments and blanks removed. None when there is no run."""
+    inline, block = _step_key(step_lines, "run")
+    if inline is not None:
+        return [inline.strip()]
+    if block is None:
+        return None
+    return [ln.strip() for ln in block if ln.strip() and not ln.strip().startswith("#")]
+
+
+def _step_is_fail_masked(step_lines: list[str]) -> bool:
+    inline, _block = _step_key(step_lines, "continue-on-error")
+    return inline is not None and inline.strip().lower() == "true"
+
+
+def _find_exact_step(steps: list[list[str]], command: str) -> str | None:
+    """Return None when an enabled step runs EXACTLY this command, else the reason it does not.
+
+    Exactness is the whole point. The previous check accepted the path anywhere in the job body, so
+    `echo <cmd>`, `<cmd> || true` and a disabled job all passed while enforcing nothing. Rather than
+    trying to understand shell, the validator requires one dedicated step whose executable content is
+    exactly the documented command - which rejects every prefix, suffix, wrapper and status mask
+    without having to enumerate them.
+    """
+    saw_mention = False
+    for step in steps:
+        commands = _step_executable_lines(step)
+        if commands is None:
+            continue
+        if any(command in line for line in commands):
+            saw_mention = True
+        if commands != [command]:
+            continue
+        if _step_is_disabled(step):
+            return f"the step running {command!r} is disabled with 'if: false'"
+        if _step_is_fail_masked(step):
+            return f"the step running {command!r} sets continue-on-error, so its failure cannot fail the job"
+        return None
+    if saw_mention:
+        return (
+            f"{command!r} appears in the job but not as a dedicated step whose run is exactly that "
+            f"command; a prefix, a wrapper, an appended '|| true' or extra commands do not satisfy it"
+        )
+    return f"no enabled step runs exactly {command!r}"
+
+
+def _job_is_disabled(job_lines: list[str]) -> bool:
+    """A job-level `if: false` disables every step inside it, however exact each step looks."""
+    for line in job_lines:
+        match = re.match(r"^    if:\s*(.+?)\s*$", line)
+        if match:
+            return match.group(1).strip().lower().replace(" ", "") in ("false", "${{false}}")
+    return False
+
+
+def _job_is_fail_masked(job_lines: list[str]) -> bool:
+    for line in job_lines:
+        match = re.match(r"^    continue-on-error:\s*(\S+)\s*$", line)
+        if match:
+            return match.group(1).strip().lower() == "true"
+    return False
+
+
+def _check_ci_wiring(root: Path, failures: list[str]) -> None:
+    """Prove two EXACT, enabled, fail-propagating steps inside the required CI job.
+
+    One runs the control-plane validator. The other is the external bootstrap anchor that proves the
+    independent contract oracle exists - anchored here, outside the mutable artifact registry, so
+    deleting the oracle and its registry entry together still fails.
     """
     ci_path = ".github/workflows/ci.yml"
     text = read_text(root, ci_path)
@@ -1103,28 +1420,26 @@ def _check_ci_wiring(root: Path, failures: list[str]) -> None:
         failures.append(f"{ci_path}: required job 'tests' not found in the jobs mapping")
         return
 
-    steps = _job_steps(job_bodies["tests"])
+    body = job_bodies["tests"]
+    if _job_is_disabled(body):
+        failures.append(f"{ci_path}: the required 'tests' job is disabled with 'if: false'")
+        return
+    if _job_is_fail_masked(body):
+        failures.append(f"{ci_path}: the required 'tests' job sets continue-on-error, so it cannot fail")
+        return
+
+    steps = _job_steps(body)
     if not steps:
         failures.append(f"{ci_path}: the 'tests' job declares no steps")
         return
 
-    for step in steps:
-        if _step_is_disabled(step):
-            continue
-        inline, block = _step_key(step, "run")
-        commands = [inline] if inline else list(block or [])
-        for command in commands:
-            stripped = (command or "").strip()
-            if not stripped or stripped.startswith("#"):
-                continue
-            if VALIDATOR_REL in stripped and "python" in stripped:
-                return
-
-    failures.append(
-        f"{ci_path}: no enabled step in the 'tests' job executes {VALIDATOR_REL}. "
-        f"A comment, a shell-commented line inside a run block, or an 'if: false' step does not "
-        f"satisfy the hard gate"
-    )
+    for command, label in (
+        (CI_VALIDATOR_COMMAND, "control-plane validator gate"),
+        (CI_ORACLE_ANCHOR_COMMAND, "independent-oracle bootstrap anchor"),
+    ):
+        reason = _find_exact_step(steps, command)
+        if reason is not None:
+            failures.append(f"{ci_path}: {label} not enforced - {reason}")
 
 
 # ---------------------------------------------------------------------------
@@ -1150,6 +1465,8 @@ def collect_failures(root: Path) -> list[str]:
     _check_durable_surfaces(root, ctx, failures)
     _check_model_agnostic(root, ctx, failures)
     _check_prohibited_sizing(root, ctx, failures)
+    _check_host_discovery(root, ctx, failures)
+    _check_effort_family_legality(root, ctx, max_effort_classes, failures)
     _check_capacity_contract(root, ctx, failures)
     _check_continuity_fixtures(root, ctx, failures)
     _check_ci_wiring(root, failures)

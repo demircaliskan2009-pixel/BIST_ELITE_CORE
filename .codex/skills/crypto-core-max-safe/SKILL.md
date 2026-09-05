@@ -53,6 +53,13 @@ downgrade a gate. When the pool is exhausted, the protected gate waits
 (`ASTRA_REQUIRED_BUT_UNAVAILABLE`) while nonprotected work continues elsewhere — the project does not
 stop (`PROVIDER_EXHAUSTION_IS_NOT_PROJECT_STOP`).
 
+## Host surfaces
+
+Registry membership decides AUTHORITY, not what a host LOADS. An agent, skill or prompt file in a
+conventional discovery directory is loaded regardless, so it must be registered with a safe role or
+absent — there is no inert third state. The legacy GitHub agent, prompt and skill directories are now
+empty and the canonical control plane keeps them that way.
+
 ## Setup load contract
 
 Read, and prove you read: `AGENTS.md`, `docs/crypto_core/agent_os_v2.md`, this skill, the controller

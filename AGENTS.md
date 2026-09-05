@@ -126,6 +126,14 @@ canonical control plane. A durable surface may NAME a live-state field to explai
 give one a value. Live state written as ordinary prose is not caught by that scan and is the
 independent semantic audit's responsibility — this file claims nothing more.
 
+## Host surfaces
+
+A file in a host auto-discovery location is loaded by that host whatever any registry says, so an
+unregistered file there is not inert — it is undeclared behavior. Every such path must be either
+explicitly registered with a safe role, or absent. The canonical control plane declares which
+locations are scanned and keeps the allowed set in each of them empty; the scan claims nothing about
+host conventions outside that declared list.
+
 ## Capacity
 
 The capacity of one provider does not decide whether the project moves. When one authorized provider

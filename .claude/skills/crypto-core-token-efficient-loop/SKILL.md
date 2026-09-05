@@ -57,6 +57,8 @@ TASK_FAMILY_AUTHORITY_REF: canonical section 3. EFFORT_AUTHORITY_REF: canonical 
   never write it into a durable file.
 - Effort is chosen per task from the work itself (canonical section 3.2), never from file count,
   project importance or a previous audit failure. De-escalate when the remaining work gets simpler.
+  `max` legality is per family — see `MAX_EFFORT_FAMILY_TRIGGERS` in canonical section 20 — so never
+  restate a single family restriction as a rule about the effort itself.
 - One repository writer at a time; one open PR; maximum safe work per prompt, then stop at the gate.
 - Subagents default 0, maximum 2 read-only for genuinely independent substantial tracks, no
   recursion, only the primary session mutates. A same-model self-review is

@@ -225,8 +225,15 @@ importance of the project and never from the size of the diff:
 - `xhigh` — heavy coherent implementation, complex repair, substantial cross-module work,
   long-horizon implementation reasoning, major interacting invariants. This is the normal
   serious-analysis level for the frontier lane.
-- `max` — named capability-critical IMPLEMENTATION or REPAIR only, under the T3B contract, and only
-  in a class listed by `MAX_EFFORT_CLASSES` (section 0).
+- `max` — capability-critical only, legal ONLY in a class listed by `MAX_EFFORT_CLASSES` (section 0)
+  and ONLY on a NAMED trigger belonging to THAT family. `max` is not a property of one family: what
+  varies per family is which intent may reach it and what trigger must be named. The per-family
+  legality table is `MAX_EFFORT_FAMILY_TRIGGERS` in section 20, and it is the authority.
+
+`PER_FAMILY_EFFORT_LEGALITY` — the previous regime restricted `max` to implementation and repair
+globally, which silently made the documented T3D, T3E and T4 `max` branches unreachable. That was a
+T3B-specific rule written as a universal one. It is retired: a restriction that belongs to one family
+is never stated as a restriction on the effort itself.
 
 Do not choose effort by file count. Do not choose `xhigh` merely because the project is important.
 Do not choose `max` merely because a previous audit failed. Escalation requires a named reason
@@ -739,6 +746,14 @@ than broad and false.
 Structurally bounded `HISTORICAL_RECORD` regions and declared `EXAMPLE_ONLY` fixtures are the only
 exemptions, and they are marker-bounded rather than inferred from prose proximity.
 
+`TYPED_EXEMPTION_REGIONS` — exemption markers are parsed with a TYPED STACK, never a shared anonymous
+depth counter. An opener pushes its exact type; a closer must match the type on top of the stack.
+Crossed regions fail: opening `HISTORICAL_RECORD`, then `EXAMPLE_ONLY`, then closing
+`HISTORICAL_RECORD` is a structural violation in either direction, because a shared counter would let
+one region type silently close another and leave the remainder of a file exempt. An unterminated
+region fails. A stray closer fails. No nested combination is defined by this contract, so nesting
+fails as well.
+
 ### 15.1 FRESH_CHAT_BOOTSTRAP
 
 Canonical startup order for any new session:
@@ -849,11 +864,25 @@ unless a genuine new safety defect appears.
 Every entry carries exactly one `CONTROL_PLANE_ROLE` marker, and only the canonical authority may
 carry `CANONICAL_AUTHORITY`. Format: `- <path> :: <ROLE>`.
 
-`UNREGISTERED_PATHS_CARRY_NO_AUTHORITY` — membership of this registry is what makes a file active
-doctrine. Any other file in the tree, whatever it says about itself and however official its path
-looks, carries NO active routing, task-family, effort, sizing, merge or execution authority. A
-leftover legacy surface is therefore inert by construction rather than by deletion, and deleting one
-is a separate authorized housekeeping decision, never a prerequisite for this control plane to hold.
+`HOST_DISCOVERY_BEATS_REGISTRY_ASSUMPTION` — registry membership decides what is AUTHORITATIVE. It
+does NOT decide what a host actually LOADS. A host that auto-discovers agent, skill or prompt files
+from a conventional directory will load them whatever this registry says, so an unregistered file in
+a discovery location is not inert: it is undeclared behavior. The previous formulation
+(`UNREGISTERED_PATHS_CARRY_NO_AUTHORITY`) was true about authority and wrong about effect, and it was
+used to justify leaving competing surfaces in place.
+
+The rule is therefore: any path in a host auto-discovery location must be EITHER explicitly
+registered above with a safe role, OR absent. There is no third state. The deterministic scan covers
+exactly the GitHub host locations declared in `HOST_DISCOVERY_SCAN_PATHS` below, and the allowed set
+in each of them is currently EMPTY. The scan claims nothing about host locations outside that
+declared list — an unknown external host convention is the independent audit's problem, not the
+scanner's.
+
+<!-- HOST_DISCOVERY_SCAN_PATHS_BEGIN -->
+- .github/agents/**/*.agent.md
+- .github/skills/**/SKILL.md
+- .github/prompts/*.prompt.md
+<!-- HOST_DISCOVERY_SCAN_PATHS_END -->
 
 <!-- ACTIVE_DOCTRINE_SURFACES_BEGIN -->
 - docs/crypto_core/agent_os_v2.md :: CANONICAL_AUTHORITY
@@ -877,6 +906,13 @@ is a separate authorized housekeeping decision, never a prerequisite for this co
 carry no role marker; they are executable, schema or configuration surfaces that the control plane
 depends on. Removing any one of them is a control-plane failure even if every doctrine surface is
 intact.
+
+`ORACLE_EXTERNAL_BOOTSTRAP_ANCHOR` — this registry is mutable, and the independent contract test is
+listed inside it, so deleting the test AND its registry entry together would leave a self-consistent
+control plane with no oracle. The anchor closes that circle from outside: the required CI job carries
+a dedicated enabled step that proves the oracle file exists, the validator holds that path as a
+literal constant independent of this registry, and the validator requires both the file and the CI
+step. Removing the registry entry therefore does not remove the requirement.
 
 <!-- REQUIRED_CONTROL_PLANE_ARTIFACTS_BEGIN -->
 - scripts/crypto_core/validate_agent_os_v2.py
@@ -968,7 +1004,24 @@ names plus the three literal pin forms in section 15, and claims nothing beyond 
 - OPENAI_AGENTIC_CAPACITY :: PROVIDER_CAPACITY
 - CLAUDE_CAPACITY :: PROVIDER_CAPACITY
 - CAPACITY_ROUTING_MODE :: PROVIDER_CAPACITY
+- CAPABILITY_MODE :: RUNTIME_MODEL_STATE
+- HOST_SETTING_RAW :: RUNTIME_MODEL_STATE
+- MODEL_EVIDENCE_SOURCE :: RUNTIME_MODEL_STATE
+- NEXT_SAFE_ACTION :: NEXT_ACTION_STATE
 <!-- VOLATILE_STATE_FIELDS_END -->
+
+`MAX_EFFORT_FAMILY_TRIGGERS` is the per-family legality table for `max`. Each row names the class,
+the task intents that may reach `max` inside that class, and the trigger that must be named for the
+escalation to be legal. A class listed in `MAX_EFFORT_CLASSES` must appear here exactly once, and the
+intents in a row must be a subset of the intents that class actually routes in section 3. Format:
+`- <CLASS> :: <INTENT>[,<INTENT>] :: <named trigger>`.
+
+<!-- MAX_EFFORT_FAMILY_TRIGGERS_BEGIN -->
+- T3B :: IMPLEMENTATION,REPAIR :: named capability-critical implementation or repair trigger
+- T3D :: ARCHITECTURE :: named central capability-critical architecture reasoning problem
+- T3E :: PROMPT_ARCHITECTURE :: named critical prompt-architecture reasoning problem
+- T4 :: CLASS_C_CROSS_CONTRACT :: named controller-gated single critical protected reasoning problem
+<!-- MAX_EFFORT_FAMILY_TRIGGERS_END -->
 
 `PROOF_PAIRED_MANIFEST_FIELDS` is the exact set of ephemeral-manifest fields that MUST be
 proof-paired: a concrete value with `PROVEN`, or exactly `null` with `UNKNOWN`. A value without its
@@ -994,11 +1047,19 @@ a session narrative would be ceremony, not proof.
 - openai_agentic_capacity
 - claude_capacity
 - capacity_routing_mode
+- next_safe_action
 <!-- PROOF_PAIRED_MANIFEST_FIELDS_END -->
 
 `RETIRED_CONTROL_PLANE_PATHS` is the exact set of obsolete control-plane paths that must NOT exist in
 the working tree. They encoded a Copilot-era execution model, scheduler/deployment/live-shaped skill
 names and a competing prompt regime, none of which is active.
+
+The final seven entries are the remaining GitHub host auto-discovery and manual-selection surfaces:
+two agent files and one skill file that a host would load automatically, and four prompt files a
+person could still select. They carried competing mutation, sizing and loop behavior, plus stale
+semantics such as live-scaled entry and minimal-diff sizing. They were retired rather than
+neutralized with wrappers, because `HOST_DISCOVERY_BEATS_REGISTRY_ASSUMPTION` means a wrapper on a
+discoverable path is still discoverable behavior.
 
 <!-- RETIRED_CONTROL_PLANE_PATHS_BEGIN -->
 - .github/agents/crypto-core-engineer.agent.md
@@ -1044,6 +1105,13 @@ names and a competing prompt regime, none of which is active.
 - docs/crypto_core/CLAUDE_COLLABORATION_AND_PROJECT_GUIDE.md
 - docs/crypto_core/COPILOT_CUSTOM_AGENT_CRYPTO_THROUGHPUT_COMMANDER.md
 - docs/crypto_core/COPILOT_HIGH_THROUGHPUT_OPERATING_PROTOCOL.md
+- .github/agents/forensic-debugger.agent.md
+- .github/agents/prd-compliance-auditor.agent.md
+- .github/prompts/edge-discovery.prompt.md
+- .github/prompts/edge-validation.prompt.md
+- .github/prompts/forensic-debug.prompt.md
+- .github/prompts/safe-patch.prompt.md
+- .github/skills/repo-hygiene-ci-guardian/SKILL.md
 <!-- RETIRED_CONTROL_PLANE_PATHS_END -->
 
 ## 21. Non-claims

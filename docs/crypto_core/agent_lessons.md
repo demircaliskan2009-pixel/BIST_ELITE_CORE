@@ -107,6 +107,28 @@ GENERALIZABLE: yes|no - <why>
 - **A blocker keeps its identity across renames.** Restating a blocker in different words, or opening a
   nominally new but equivalently scoped phase, does not reset its repair counter and does not grant a
   fresh repair budget.
+- **A restriction that belongs to one case must never be written as a restriction on the mechanism.**
+  A rule scoped to one task family, restated as a rule about the effort level itself, silently made
+  three documented escalation branches unreachable. Scope the restriction where it belongs and make
+  the per-case table the authority.
+- **What a host DISCOVERS beats what a registry DECLARES.** A registry decides authority; it does not
+  decide what gets loaded. A file in a conventional auto-discovery directory is loaded whatever the
+  registry says, so "unregistered therefore inert" is false. Such a path must be registered with a
+  safe role or absent, and a wrapper on a discoverable path is still discoverable.
+- **An oracle cannot be its own only anchor.** When the independent check is itself listed in the
+  mutable registry it validates, deleting both together leaves a self-consistent system with nothing
+  checking it. Anchor the requirement from outside the registry.
+- **A lexical co-occurrence check is not an enforcement gate.** Accepting a command because its path
+  appears somewhere admits an echoed command, an appended fallback, a comment and a disabled job -
+  each contains the path and enforces nothing. Require one dedicated step whose executable content is
+  exactly the command, rather than trying to understand shell.
+- **A shared depth counter cannot parse typed regions.** With one counter an opener of one type can be
+  closed by a closer of another, leaving the rest of a file silently exempt. Carry the exact type on a
+  stack and require the closer to match.
+- **Topology is not semantics.** Proving that an evidence companion EXISTS does not prove the pair
+  means anything: a value with UNKNOWN evidence, a null with PROVEN, or a continuation mode chosen
+  while the capacity it depends on was never proven all satisfy a structural check and are all false.
+  Enforce the relation, not the shape.
 
 <!-- HISTORICAL_RECORD_BEGIN -->
 

@@ -92,9 +92,14 @@ honestly in the handoff, or `UNKNOWN`; never guess one, and never write one into
 
 Effort is chosen per task from the work itself, per canonical section 3.2 — `low` for mechanical
 reads, `medium` for bounded implementation and focused review, `high` for normal serious coding and
-ordinary architecture, `xhigh` for heavy coherent implementation and complex repair, `max` only on a
-named capability-critical trigger. Not by file count, not because the project matters, and not
-because a previous audit failed. De-escalate as soon as the remaining work gets simpler.
+ordinary architecture, `xhigh` for heavy coherent implementation and complex repair. Not by file
+count, not because the project matters, and not because a previous audit failed. De-escalate as soon
+as the remaining work gets simpler.
+
+`max` legality is PER FAMILY, never a property of the effort: which intent may reach it, and which
+trigger must be named, is decided by `MAX_EFFORT_FAMILY_TRIGGERS` in canonical section 20. Stating a
+one-family restriction as a universal one is what previously made the documented architecture,
+prompt-architecture and protected-audit `max` branches unreachable.
 
 ## Controller intake
 

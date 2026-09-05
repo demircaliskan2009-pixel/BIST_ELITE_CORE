@@ -28,7 +28,9 @@
     "head_sha_evidence",
     "head_tree",
     "head_tree_evidence",
+    "model_runtime",
     "next_safe_action",
+    "next_safe_action_evidence",
     "open_pr_count",
     "open_pr_count_evidence",
     "openai_agentic_capacity",
@@ -97,7 +99,10 @@
     "model_runtime": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Runtime-proof block (agent_os_v2.md section 4). Optional so a manifest compiled by a host that exposes no runtime metadata stays valid instead of forcing an invented value. It carries its own evidence class in model_evidence_source rather than a separate _evidence companion. Ultra is recorded in capability_mode ONLY and is never written into an effort field, and host_setting_raw stores the operator UI choice verbatim without inventing an API mapping.",
+      "required": [
+        "model_evidence_source"
+      ],
+      "description": "Runtime-proof block (agent_os_v2.md section 4). ALWAYS present, because a manifest that omits it entirely could silently satisfy a task claiming runtime proof. A host that exposes no runtime metadata says so with model_evidence_source UNKNOWN and null actual values - absence is never the same statement as UNKNOWN. It carries its own evidence class rather than a separate _evidence companion, and the class constrains what may be populated: RUNTIME_TELEMETRY requires model_actual; USER_ATTESTED_UI_SELECTION requires an attested actual or host selector and stays labelled an attestation; CONFIGURATION_EVIDENCE_ONLY, UNKNOWN and CONTRADICTED prove no execution and must leave model_actual and observed_effort null. Ultra is recorded in capability_mode ONLY and is never written into an effort field, and host_setting_raw stores the operator UI choice verbatim without inventing an API mapping.",
       "properties": {
         "model_id": {
           "type": [
@@ -157,11 +162,6 @@
           ]
         }
       }
-    },
-    "next_safe_action": {
-      "type": "string",
-      "minLength": 1,
-      "description": "Exactly one concrete next action."
     },
     "branch": {
       "anyOf": [
@@ -474,9 +474,24 @@
           "type": "null"
         }
       ],
-      "description": "Routing mode selected by USAGE_AWARE_CAPACITY_ROUTER_V1 (agent_os_v2.md section 10.2)."
+      "description": "Routing mode selected by USAGE_AWARE_CAPACITY_ROUTER_V1 (agent_os_v2.md section 10.2). It must be consistent with the two proven capacity values; an unproven capacity leaves this null."
     },
     "capacity_routing_mode_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "next_safe_action": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Exactly one concrete next action. It is a live decision, not static metadata, so it is proof-paired: an action nobody has proven is UNKNOWN rather than a plausible suggestion."
+    },
+    "next_safe_action_evidence": {
       "$ref": "#/$defs/evidence_status"
     }
   },
@@ -1099,6 +1114,39 @@
         ],
         "properties": {
           "capacity_routing_mode": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "next_safe_action_evidence"
+        ],
+        "properties": {
+          "next_safe_action_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "next_safe_action"
+        ],
+        "properties": {
+          "next_safe_action": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "next_safe_action"
+        ],
+        "properties": {
+          "next_safe_action": {
             "type": "null"
           }
         }

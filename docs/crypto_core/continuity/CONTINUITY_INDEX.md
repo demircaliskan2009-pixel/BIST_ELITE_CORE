@@ -108,6 +108,7 @@ Anything in this list that appears in a durable surface is a defect, and the dur
 - current authorization state
 - current model and effort runtime evidence
 - current provider capacity readings and the selected capacity routing mode
+- the current next safe action — a live decision, proof-paired like any other current fact
 
 These live only in `STATE_MANIFEST_V1` and `CURRENT_HANDOFF_V2`, which are compiled per session from
 live proof and are not committed as doctrine.
@@ -126,3 +127,7 @@ live proof and are not committed as doctrine.
   guessed instead of recorded as `UNKNOWN`.
 - One exhausted provider being treated as a project stop, or an available provider being treated as
   satisfying a gate that required a different one.
+- A routing mode chosen while the capacity it depends on is still `UNKNOWN`. An unproven capacity
+  leaves the mode null; it never becomes a guessed continuation.
+- A runtime-proof block omitted entirely rather than declaring `UNKNOWN`. Absence is not a quieter
+  way of saying unproven — it is an unstated claim.

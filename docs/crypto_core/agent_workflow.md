@@ -245,6 +245,12 @@ git status --short --branch
 gh pr list --repo demircaliskan2009-pixel/BIST_ELITE_CORE --state open --json number,title,headRefName,baseRefName,url   # expect []
 ```
 
+The required CI job carries the control-plane gate as ONE dedicated step whose command is exactly
+`python scripts/crypto_core/validate_agent_os_v2.py`, plus one dedicated step that proves the
+independent contract-oracle file exists. Both stay enabled and both propagate their exit status: a
+prefix, an appended fallback, a piped or otherwise masked status, a commented step, or a disabled job
+means the gate is not enforced no matter what the step is called.
+
 The full-suite log is UTF-16 and may not carry the `N passed` line; the authoritative success signal
 is `PYTEST_EXIT=0`. Full crypto_core tests run ONLY via `run_full_tests_logged.ps1`, never a bare full
 pytest; targeted runs go through `run_logged_command.ps1`; commands run one at a time; staging is

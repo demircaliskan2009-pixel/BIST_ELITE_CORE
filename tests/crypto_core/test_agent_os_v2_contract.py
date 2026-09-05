@@ -163,6 +163,10 @@ ORACLE_VOLATILE_STATE_FIELDS = {
     "OPENAI_AGENTIC_CAPACITY",
     "CLAUDE_CAPACITY",
     "CAPACITY_ROUTING_MODE",
+    "CAPABILITY_MODE",
+    "HOST_SETTING_RAW",
+    "MODEL_EVIDENCE_SOURCE",
+    "NEXT_SAFE_ACTION",
 }
 
 ORACLE_PROOF_PAIRED_MANIFEST_FIELDS = [
@@ -181,6 +185,7 @@ ORACLE_PROOF_PAIRED_MANIFEST_FIELDS = [
     "openai_agentic_capacity",
     "claude_capacity",
     "capacity_routing_mode",
+    "next_safe_action",
 ]
 
 ORACLE_PROVIDER_CAPACITY_STATES = ["NORMAL", "CONSERVE", "CRITICAL", "EXHAUSTED", "UNKNOWN"]
@@ -194,10 +199,43 @@ ORACLE_CAPACITY_ROUTING_MODES = [
     "BOTH_EXHAUSTED_STOP",
 ]
 
+# The seven GitHub host surfaces retired in the final consolidated repair. Held literally because
+# registry membership does not control host discovery: a host loads these whatever a registry says.
+ORACLE_FINAL_RETIRED_HOST_PATHS = {
+    ".github/agents/forensic-debugger.agent.md",
+    ".github/agents/prd-compliance-auditor.agent.md",
+    ".github/prompts/edge-discovery.prompt.md",
+    ".github/prompts/edge-validation.prompt.md",
+    ".github/prompts/forensic-debug.prompt.md",
+    ".github/prompts/safe-patch.prompt.md",
+    ".github/skills/repo-hygiene-ci-guardian/SKILL.md",
+}
+
+ORACLE_HOST_DISCOVERY_GLOBS = [
+    ".github/agents/**/*.agent.md",
+    ".github/skills/**/SKILL.md",
+    ".github/prompts/*.prompt.md",
+]
+
+# `max` legality is PER FAMILY. Written out literally so a relapse to a single-family restriction
+# cannot be hidden by editing the canonical table alone.
+ORACLE_MAX_EFFORT_FAMILY_INTENTS = {
+    "T3B": {"IMPLEMENTATION", "REPAIR"},
+    "T3D": {"ARCHITECTURE"},
+    "T3E": {"PROMPT_ARCHITECTURE"},
+    "T4": {"CLASS_C_CROSS_CONTRACT"},
+}
+
+# The exact command shapes the required CI job must run, and the oracle path anchored outside the
+# mutable artifact registry.
+ORACLE_CI_VALIDATOR_COMMAND = "python scripts/crypto_core/validate_agent_os_v2.py"
+ORACLE_CI_ANCHOR_COMMAND = "test -f tests/crypto_core/test_agent_os_v2_contract.py"
+ORACLE_BOOTSTRAP_PATH = "tests/crypto_core/test_agent_os_v2_contract.py"
+
 ORACLE_FRONTIER_LANE = "GPT-6 Astra"
 ORACLE_FRONTIER_MODEL_ID = "gpt-6-astra"
 
-ORACLE_RETIRED_PATH_COUNT = 43
+ORACLE_RETIRED_PATH_COUNT = 50
 
 # Surfaces that must never be reachable as control-plane doctrine: product, legacy and protected runtime.
 ORACLE_FORBIDDEN_REGISTRY_PREFIXES = ("src/", "tests/services/", "tests/brain/", ".github/hooks/")
@@ -793,7 +831,7 @@ def test_unterminated_exempt_region_fails_closed(sandbox: Path) -> None:
 def test_orphan_region_end_marker_is_rejected(sandbox: Path) -> None:
     text = read(sandbox, "CLAUDE.md")
     write(sandbox, "CLAUDE.md", text + "\n<!-- HISTORICAL_RECORD_END -->\n")
-    assert_rejects(sandbox, "HISTORICAL_RECORD_END without BEGIN")
+    assert_rejects(sandbox, "HISTORICAL_RECORD_END without a matching BEGIN")
 
 
 # ---------------------------------------------------------------------------
@@ -972,7 +1010,7 @@ def test_validator_runs_in_the_required_ci_job(sandbox: Path) -> None:
         "      - name: Agent OS control-plane contract\n        run: python scripts/crypto_core/validate_agent_os_v2.py\n\n",
         "",
     )
-    assert_rejects(sandbox, "no enabled step in the 'tests' job executes")
+    assert_rejects(sandbox, "control-plane validator gate not enforced")
 
 
 def test_ci_job_detection_is_structural_not_positional(sandbox: Path) -> None:
@@ -990,7 +1028,7 @@ def test_ci_job_detection_is_structural_not_positional(sandbox: Path) -> None:
         1,
     )
     write(sandbox, ".github/workflows/ci.yml", text)
-    assert_rejects(sandbox, "no enabled step in the 'tests' job executes")
+    assert_rejects(sandbox, "control-plane validator gate not enforced")
 
 
 # ---------------------------------------------------------------------------
@@ -1286,13 +1324,27 @@ def test_ci_gate_requires_an_executable_step(sandbox: Path, label: str, replacem
     patch(sandbox, ".github/workflows/ci.yml", _REAL_CI_STEP, replacement)
     found = failures(sandbox)
     assert found, "the CI hard gate was defeated by: {}".format(label)
-    assert any("no enabled step in the 'tests' job executes" in item for item in found), (
+    assert any("control-plane validator gate not enforced" in item for item in found), (
         "wrong rejection reason for {}: {}".format(label, found)
     )
 
 
-def test_ci_gate_accepts_the_real_step_in_a_block_scalar(sandbox: Path) -> None:
-    """A legitimate multi-line run block must still satisfy the gate."""
+def test_ci_gate_accepts_a_commented_block_scalar_of_exactly_the_command(sandbox: Path) -> None:
+    """Comments are legal inside the block; a second executable line is not."""
+    patch(
+        sandbox,
+        ".github/workflows/ci.yml",
+        _REAL_CI_STEP,
+        "      - name: Agent OS control-plane contract\n"
+        "        run: |\n"
+        "          # the control-plane contract is a hard gate\n"
+        "          python scripts/crypto_core/validate_agent_os_v2.py\n\n",
+    )
+    assert failures(sandbox) == []
+
+
+def test_ci_gate_rejects_an_extra_command_in_the_block(sandbox: Path) -> None:
+    """Exactness is the mechanism: anything beyond the command reopens the wrapper bypass."""
     patch(
         sandbox,
         ".github/workflows/ci.yml",
@@ -1300,10 +1352,9 @@ def test_ci_gate_accepts_the_real_step_in_a_block_scalar(sandbox: Path) -> None:
         "      - name: Agent OS control-plane contract\n"
         "        run: |\n"
         "          set -euo pipefail\n"
-        "          # the control-plane contract is a hard gate\n"
         "          python scripts/crypto_core/validate_agent_os_v2.py\n\n",
     )
-    assert failures(sandbox) == []
+    assert_rejects(sandbox, "control-plane validator gate not enforced")
 
 
 # ---------------------------------------------------------------------------
@@ -1494,3 +1545,421 @@ def test_prepared_work_is_not_execution_authority() -> None:
     assert "WORK_PREPARED_NOT_AUTHORIZED" in flat
     assert "prepared, not reviewable" in flat or "PREPARED_NOT_REVIEWABLE_YET" in flat
     assert "re-prove ancestry, base and dependencies BEFORE opening a PR" in flat
+
+
+# ---------------------------------------------------------------------------
+# P2-01  `max` legality is PER FAMILY, never a property of the effort itself
+# ---------------------------------------------------------------------------
+
+
+def _max_family_rows() -> list[str]:
+    rows = validator.parse_registry(
+        (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig"), "MAX_EFFORT_FAMILY_TRIGGERS"
+    )
+    assert rows is not None
+    return rows
+
+
+def test_max_effort_family_table_matches_the_oracle() -> None:
+    parsed = {}
+    for row in _max_family_rows():
+        parts = [p.strip() for p in row.split("::")]
+        assert len(parts) == 3 and parts[2], row
+        parsed[parts[0]] = {i.strip() for i in parts[1].split(",") if i.strip()}
+    assert parsed == ORACLE_MAX_EFFORT_FAMILY_INTENTS
+    assert set(parsed) == ORACLE_MAX_EFFORT_CLASSES
+
+
+@pytest.mark.parametrize(
+    ("task_class", "task_intent", "legal"),
+    [
+        ("T3B", "IMPLEMENTATION", True),
+        ("T3B", "REPAIR", True),
+        ("T3B", "ARCHITECTURE", False),
+        ("T3B", "REVIEW", False),
+        ("T3B", "PROMPT_ARCHITECTURE", False),
+        ("T3D", "ARCHITECTURE", True),
+        ("T3D", "IMPLEMENTATION", False),
+        ("T3E", "PROMPT_ARCHITECTURE", True),
+        ("T4", "CLASS_C_CROSS_CONTRACT", True),
+        ("T3A", "IMPLEMENTATION", False),
+        ("T3C", "REVIEW", False),
+    ],
+)
+def test_max_effort_legality_is_decided_per_family(task_class: str, task_intent: str, legal: bool) -> None:
+    """The defect made the documented T3D/T3E/T4 max branches unreachable; these prove they are not."""
+    assert validator.max_effort_is_legal(_max_family_rows(), task_class, task_intent) is legal
+
+
+def test_dropping_a_family_from_the_max_table_is_rejected(sandbox: Path) -> None:
+    patch(
+        sandbox,
+        CANONICAL,
+        "- T3D :: ARCHITECTURE :: named central capability-critical architecture reasoning problem\n",
+        "",
+    )
+    assert_rejects(sandbox, "MAX_EFFORT_CLASSES declares")
+
+
+def test_mutation_only_family_cannot_reach_max_through_a_read_only_intent(sandbox: Path) -> None:
+    patch(sandbox, CANONICAL, "- T3B :: IMPLEMENTATION,REPAIR ::", "- T3B :: IMPLEMENTATION,REPAIR,REVIEW ::")
+    assert_rejects(sandbox, "T3B may not reach max")
+
+
+@pytest.mark.parametrize(
+    "injected",
+    [
+        "Effort note: max is only legal in T3B.",
+        "Remember that max only exists in T3B.",
+        "Escalation to max only in T3B, under the T3B contract.",
+    ],
+)
+def test_restating_max_as_a_single_family_restriction_is_rejected(sandbox: Path, injected: str) -> None:
+    write(sandbox, "CLAUDE.md", injected + "\n\n" + read(sandbox, "CLAUDE.md"))
+    assert_rejects(sandbox, "max restricted globally")
+
+
+# ---------------------------------------------------------------------------
+# P2-02  Host discovery beats registry assumption
+# ---------------------------------------------------------------------------
+
+
+def test_host_discovery_globs_match_the_oracle() -> None:
+    globs = validator.parse_registry(
+        (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig"), "HOST_DISCOVERY_SCAN_PATHS"
+    )
+    assert globs == ORACLE_HOST_DISCOVERY_GLOBS
+
+
+@pytest.mark.parametrize("rel", sorted(ORACLE_FINAL_RETIRED_HOST_PATHS))
+def test_final_legacy_host_surfaces_are_absent(rel: str) -> None:
+    """Held literally: these must be gone from the tree, not merely unregistered."""
+    assert not (REPO_ROOT / rel).exists(), "legacy host surface still present: {}".format(rel)
+
+
+def test_every_declared_host_discovery_location_is_empty() -> None:
+    for pattern in ORACLE_HOST_DISCOVERY_GLOBS:
+        found = sorted(p.relative_to(REPO_ROOT).as_posix() for p in REPO_ROOT.glob(pattern) if p.is_file())
+        assert found == [], "host auto-discovery location is not empty: {} -> {}".format(pattern, found)
+
+
+@pytest.mark.parametrize(
+    "rel",
+    [
+        ".github/agents/revived.agent.md",
+        ".github/skills/revived-skill/SKILL.md",
+        ".github/prompts/revived.prompt.md",
+    ],
+)
+def test_a_new_auto_discovered_surface_is_rejected(sandbox: Path, rel: str) -> None:
+    """Registry membership decides authority; it does not decide what a host loads."""
+    target = sandbox / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("# revived host surface\n", encoding="utf-8", newline="\n")
+    assert_rejects(sandbox, "host auto-discovery surface present but not registered")
+
+
+def test_retired_registry_contains_the_final_seven() -> None:
+    retired = validator.parse_registry(
+        (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig"), "RETIRED_CONTROL_PLANE_PATHS"
+    )
+    assert retired is not None
+    assert ORACLE_FINAL_RETIRED_HOST_PATHS <= set(retired)
+    assert len(retired) == ORACLE_RETIRED_PATH_COUNT
+
+
+# ---------------------------------------------------------------------------
+# P2-03  The oracle cannot be its own only anchor
+# ---------------------------------------------------------------------------
+
+
+def test_oracle_bootstrap_path_is_a_literal_outside_the_registry() -> None:
+    source = VALIDATOR_PATH.read_text(encoding="utf-8")
+    assert 'BOOTSTRAP_ORACLE_PATH = "{}"'.format(ORACLE_BOOTSTRAP_PATH) in source
+
+
+def test_deleting_the_oracle_and_its_registry_entry_together_still_fails(sandbox: Path) -> None:
+    """The exact reported hole: co-deletion previously left a self-consistent control plane."""
+    patch(sandbox, CANONICAL, "- {}\n".format(ORACLE_BOOTSTRAP_PATH), "")
+    (sandbox / ORACLE_BOOTSTRAP_PATH).unlink()
+    assert_rejects(sandbox, "independent contract oracle missing")
+
+
+def test_removing_the_ci_anchor_as_well_still_fails(sandbox: Path) -> None:
+    patch(sandbox, CANONICAL, "- {}\n".format(ORACLE_BOOTSTRAP_PATH), "")
+    (sandbox / ORACLE_BOOTSTRAP_PATH).unlink()
+    patch(
+        sandbox,
+        ".github/workflows/ci.yml",
+        "      - name: Agent OS contract oracle anchor\n        run: {}\n\n".format(ORACLE_CI_ANCHOR_COMMAND),
+        "",
+    )
+    found = failures(sandbox)
+    assert any("independent contract oracle missing" in f for f in found)
+    assert any("bootstrap anchor" in f for f in found)
+
+
+def test_removing_only_the_ci_anchor_is_rejected(sandbox: Path) -> None:
+    patch(
+        sandbox,
+        ".github/workflows/ci.yml",
+        "      - name: Agent OS contract oracle anchor\n        run: {}\n\n".format(ORACLE_CI_ANCHOR_COMMAND),
+        "",
+    )
+    assert_rejects(sandbox, "independent-oracle bootstrap anchor not enforced")
+
+
+# ---------------------------------------------------------------------------
+# P2-04  Complete ephemeral inventory + typed exemption regions
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("rel", ["CLAUDE.md", "AGENTS.md", "docs/crypto_core/agent_workflow.md"])
+def test_next_safe_action_assignment_is_rejected(sandbox: Path, rel: str) -> None:
+    """The reported gap: a next action pinned into durable doctrine passed the scan."""
+    write(sandbox, rel, "NEXT_SAFE_ACTION: MERGE_PR\n\n" + read(sandbox, rel))
+    assert_rejects(sandbox, "volatile state assigned in a durable surface: NEXT_SAFE_ACTION")
+
+
+@pytest.mark.parametrize(
+    "injected",
+    ["CAPABILITY_MODE: Ultra", "HOST_SETTING_RAW: Extra High", "MODEL_EVIDENCE_SOURCE: RUNTIME_TELEMETRY"],
+)
+def test_runtime_model_state_assignment_is_rejected(sandbox: Path, injected: str) -> None:
+    write(sandbox, "CLAUDE.md", injected + "\n\n" + read(sandbox, "CLAUDE.md"))
+    assert_rejects(sandbox, "volatile state assigned in a durable surface")
+
+
+def test_crossed_exemption_regions_cannot_hide_a_pin(sandbox: Path) -> None:
+    """A shared depth counter would let one region type close another and exempt the remainder."""
+    crossed = (
+        "<!-- HISTORICAL_RECORD_BEGIN -->\n"
+        "<!-- EXAMPLE_ONLY_BEGIN -->\n"
+        "<!-- HISTORICAL_RECORD_END -->\n"
+        "CURRENT_CI_STATE=GREEN\n"
+        "<!-- EXAMPLE_ONLY_END -->\n\n"
+    )
+    write(sandbox, "CLAUDE.md", crossed + read(sandbox, "CLAUDE.md"))
+    found = failures(sandbox)
+    assert any("crossed exemption regions" in f or "nested inside an open" in f for f in found)
+
+
+def test_reverse_crossed_exemption_regions_are_rejected(sandbox: Path) -> None:
+    crossed = (
+        "<!-- EXAMPLE_ONLY_BEGIN -->\n"
+        "<!-- HISTORICAL_RECORD_BEGIN -->\n"
+        "<!-- EXAMPLE_ONLY_END -->\n"
+        "CURRENT_CI_STATE=GREEN\n"
+        "<!-- HISTORICAL_RECORD_END -->\n\n"
+    )
+    write(sandbox, "CLAUDE.md", crossed + read(sandbox, "CLAUDE.md"))
+    found = failures(sandbox)
+    assert any("crossed exemption regions" in f or "nested inside an open" in f for f in found)
+
+
+def test_typed_stack_reports_the_exact_region_type() -> None:
+    lines = [
+        "<!-- HISTORICAL_RECORD_BEGIN -->",
+        "<!-- EXAMPLE_ONLY_END -->",
+        "text",
+    ]
+    found, active = validator.exemption_scan("fixture", lines)
+    assert any("crossed exemption regions" in f for f in found)
+    assert ("HISTORICAL_RECORD" in " ".join(found)) and ("EXAMPLE_ONLY" in " ".join(found))
+    # The crossed pair is reported, and the trailing line stays ACTIVE rather than being exempted by
+    # the mismatched closer - which is the whole point of typing the stack.
+    assert [text for _lineno, text in active] == ["text"]
+
+
+def test_wellformed_historical_region_still_exempts() -> None:
+    lines = [
+        "active line",
+        "<!-- HISTORICAL_RECORD_BEGIN -->",
+        "CURRENT_CI_STATE=GREEN",
+        "<!-- HISTORICAL_RECORD_END -->",
+        "another active line",
+    ]
+    found, active = validator.exemption_scan("fixture", lines)
+    assert found == []
+    assert [text for _lineno, text in active] == ["active line", "another active line"]
+
+
+# ---------------------------------------------------------------------------
+# P2-05  Manifest evidence SEMANTICS, not just topology
+# ---------------------------------------------------------------------------
+
+
+def _example() -> dict:
+    return json.loads(
+        (REPO_ROOT / "docs/crypto_core/continuity/state_manifest.example.json").read_text(encoding="utf-8-sig")
+    )
+
+
+def test_committed_example_satisfies_the_relation_checker() -> None:
+    """The fixture is validated by the same deterministic checker, never by prose inspection."""
+    assert validator.manifest_relation_failures("example", _example(), ORACLE_PROOF_PAIRED_MANIFEST_FIELDS) == []
+
+
+@pytest.mark.parametrize(
+    ("mutation", "needle"),
+    [
+        ({"ci_state": "GREEN", "ci_state_evidence": "UNKNOWN"}, "carries a value while"),
+        ({"head_tree": None, "head_tree_evidence": "PROVEN"}, "is null while"),
+        ({"next_safe_action": "MERGE", "next_safe_action_evidence": "UNKNOWN"}, "carries a value while"),
+        ({"pr_state": "OPEN", "pr_state_evidence": "UNKNOWN"}, "carries a value while"),
+    ],
+)
+def test_manifest_evidence_inversion_is_rejected(mutation: dict, needle: str) -> None:
+    instance = _example()
+    instance.update(mutation)
+    found = validator.manifest_relation_failures("fixture", instance, ORACLE_PROOF_PAIRED_MANIFEST_FIELDS)
+    assert any(needle in f for f in found), found
+
+
+def test_missing_runtime_proof_block_is_rejected() -> None:
+    """Absence must never be a quieter way of saying UNKNOWN."""
+    instance = _example()
+    instance.pop("model_runtime")
+    found = validator.manifest_relation_failures("fixture", instance, ORACLE_PROOF_PAIRED_MANIFEST_FIELDS)
+    assert any("model_runtime is missing" in f for f in found)
+
+
+@pytest.mark.parametrize(
+    ("source", "mutation", "should_fail"),
+    [
+        ("CONFIGURATION_EVIDENCE_ONLY", {"model_actual": "claude-opus-5"}, True),
+        ("CONFIGURATION_EVIDENCE_ONLY", {"observed_effort": "xhigh"}, True),
+        ("CONFIGURATION_EVIDENCE_ONLY", {}, False),
+        ("UNKNOWN", {"model_actual": "claude-opus-5"}, True),
+        ("CONTRADICTED", {"model_actual": "claude-opus-5"}, True),
+        ("RUNTIME_TELEMETRY", {}, True),
+        ("RUNTIME_TELEMETRY", {"model_actual": "claude-opus-5"}, False),
+        ("USER_ATTESTED_UI_SELECTION", {"model_actual": None, "host_setting_raw": None}, True),
+        ("USER_ATTESTED_UI_SELECTION", {"host_setting_raw": "Extra High"}, False),
+    ],
+)
+def test_runtime_evidence_class_constrains_what_may_be_populated(source, mutation, should_fail) -> None:
+    instance = _example()
+    instance["model_runtime"]["model_evidence_source"] = source
+    instance["model_runtime"].update(mutation)
+    found = validator.manifest_relation_failures("fixture", instance, ORACLE_PROOF_PAIRED_MANIFEST_FIELDS)
+    runtime_failures = [f for f in found if "model_" in f or "must not populate" in f]
+    assert bool(runtime_failures) is should_fail, found
+
+
+@pytest.mark.parametrize(
+    ("openai", "claude", "mode", "legal"),
+    [
+        ("EXHAUSTED", "NORMAL", "CLAUDE_CONTINUITY", True),
+        ("EXHAUSTED", "CRITICAL", "CLAUDE_CONTINUITY", True),
+        ("NORMAL", "NORMAL", "CLAUDE_CONTINUITY", False),
+        ("EXHAUSTED", "EXHAUSTED", "CLAUDE_CONTINUITY", False),
+        ("NORMAL", "EXHAUSTED", "OPENAI_CONTINUITY", True),
+        ("EXHAUSTED", "EXHAUSTED", "OPENAI_CONTINUITY", False),
+        ("EXHAUSTED", "EXHAUSTED", "BOTH_EXHAUSTED_STOP", True),
+        ("EXHAUSTED", "NORMAL", "BOTH_EXHAUSTED_STOP", False),
+        ("NORMAL", "NORMAL", "QUALITY_OPTIMAL", True),
+        ("CONSERVE", "NORMAL", "QUALITY_OPTIMAL", False),
+        ("CONSERVE", "NORMAL", "CLAUDE_FIRST_CONSERVATION", True),
+        ("NORMAL", "CONSERVE", "OPENAI_FIRST_CONSERVATION", True),
+        ("NORMAL", "NORMAL", "CLAUDE_FIRST_CONSERVATION", False),
+    ],
+)
+def test_capacity_routing_mode_must_match_the_proven_capacities(openai, claude, mode, legal) -> None:
+    instance = _example()
+    instance.update(
+        {
+            "openai_agentic_capacity": openai,
+            "openai_agentic_capacity_evidence": "PROVEN",
+            "claude_capacity": claude,
+            "claude_capacity_evidence": "PROVEN",
+            "capacity_routing_mode": mode,
+            "capacity_routing_mode_evidence": "PROVEN",
+        }
+    )
+    found = validator.manifest_relation_failures("fixture", instance, ORACLE_PROOF_PAIRED_MANIFEST_FIELDS)
+    capacity_failures = [f for f in found if "capacity_routing_mode" in f]
+    assert bool(capacity_failures) is (not legal), found
+
+
+def test_unknown_capacity_can_never_become_a_guessed_continuation_mode() -> None:
+    """The reported inversion: a continuation mode chosen while the capacity it needs was unproven."""
+    instance = _example()
+    instance.update({"claude_capacity": None, "claude_capacity_evidence": "UNKNOWN"})
+    found = validator.manifest_relation_failures("fixture", instance, ORACLE_PROOF_PAIRED_MANIFEST_FIELDS)
+    assert any("provider capacity is" in f and "UNKNOWN" in f for f in found), found
+
+
+def test_manifest_never_carries_merge_authority_through_the_relation_checker() -> None:
+    instance = _example()
+    instance["authorization"]["merge_authorized"] = True
+    found = validator.manifest_relation_failures("fixture", instance, ORACLE_PROOF_PAIRED_MANIFEST_FIELDS)
+    assert any("merge_authorized must be false" in f for f in found)
+
+
+# ---------------------------------------------------------------------------
+# P2-06  The CI gate must be one exact, enabled, fail-propagating step
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "replacement"),
+    [
+        (
+            "echo prefix",
+            "      - name: Agent OS control-plane contract\n        run: echo python scripts/crypto_core/validate_agent_os_v2.py\n\n",
+        ),
+        (
+            "or true",
+            "      - name: Agent OS control-plane contract\n        run: python scripts/crypto_core/validate_agent_os_v2.py || true\n\n",
+        ),
+        (
+            "semicolon true",
+            "      - name: Agent OS control-plane contract\n        run: python scripts/crypto_core/validate_agent_os_v2.py ; true\n\n",
+        ),
+        (
+            "or exit zero",
+            "      - name: Agent OS control-plane contract\n        run: python scripts/crypto_core/validate_agent_os_v2.py || exit 0\n\n",
+        ),
+        (
+            "piped to cat",
+            "      - name: Agent OS control-plane contract\n        run: python scripts/crypto_core/validate_agent_os_v2.py | cat\n\n",
+        ),
+        (
+            "continue on error",
+            "      - name: Agent OS control-plane contract\n        continue-on-error: true\n        run: python scripts/crypto_core/validate_agent_os_v2.py\n\n",
+        ),
+    ],
+)
+def test_ci_gate_rejects_every_status_masking_shape(sandbox: Path, label: str, replacement: str) -> None:
+    """Every shape the audit reproduced: the path is present, the gate enforces nothing."""
+    patch(sandbox, ".github/workflows/ci.yml", _REAL_CI_STEP, replacement)
+    found = failures(sandbox)
+    assert found, "CI gate defeated by: {}".format(label)
+    assert any("control-plane validator gate not enforced" in f for f in found), found
+
+
+def test_job_level_if_false_disables_every_exact_step(sandbox: Path) -> None:
+    text = read(sandbox, ".github/workflows/ci.yml")
+    write(
+        sandbox,
+        ".github/workflows/ci.yml",
+        text.replace("  tests:\n    name: tests\n", "  tests:\n    name: tests\n    if: false\n", 1),
+    )
+    assert_rejects(sandbox, "required 'tests' job is disabled")
+
+
+def test_job_level_continue_on_error_is_rejected(sandbox: Path) -> None:
+    text = read(sandbox, ".github/workflows/ci.yml")
+    write(
+        sandbox,
+        ".github/workflows/ci.yml",
+        text.replace("  tests:\n    name: tests\n", "  tests:\n    name: tests\n    continue-on-error: true\n", 1),
+    )
+    assert_rejects(sandbox, "cannot fail")
+
+
+def test_required_ci_commands_match_the_oracle() -> None:
+    text = (REPO_ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8-sig")
+    assert "        run: {}\n".format(ORACLE_CI_VALIDATOR_COMMAND) in text
+    assert "        run: {}\n".format(ORACLE_CI_ANCHOR_COMMAND) in text
