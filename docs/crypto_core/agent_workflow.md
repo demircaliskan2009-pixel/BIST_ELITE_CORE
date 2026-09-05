@@ -1,197 +1,236 @@
-# crypto_core Agent Workflow v5.3
+# crypto_core Agent Workflow — Model-Agnostic Companion
 
-> Canonical, executable operating protocol for `crypto_core` inside `demircaliskan2009-pixel/BIST_ELITE_CORE`.
-> Companions (durable rails, not re-pasted into prompts): `AGENTS.md`,
-> `.codex/skills/crypto-core-max-safe/SKILL.md`, `CLAUDE.md` / `CLAUDE.local.md`,
-> `docs/crypto_core/agent_lessons.md` (evidence-backed lessons), and
-> `docs/crypto_core/agent_prompts/token_efficiency_v2.md` (prompt lanes). **Canonical doctrine precedence**
-> for active work: `AGENTS.md` + this file + `.codex/skills/crypto-core-max-safe/SKILL.md` (then `CLAUDE.md`).
-> Anything under `.github/prompts`, `.github/skills`, `.github/instructions`, `.cursor/rules`, or other legacy
-> surfaces is **overridden by this canonical doctrine** wherever they conflict (see §18). On any apparent
-> conflict the **stricter safety rule wins**. This document contains **no secrets, credentials, API keys,
-> exchange credentials, or live-trading instructions**, and instructs no real order flow.
+<!-- CONTROL_PLANE_ROLE: WORKFLOW_COMPANION -->
+<!-- CONTROL_PLANE_AUTHORITY_REF: docs/crypto_core/agent_os_v2.md -->
+
+> **What this document is.** The executable lifecycle mechanics for `crypto_core` inside
+> `demircaliskan2009-pixel/BIST_ELITE_CORE`: git and PR lifecycle, validation mechanics, CI polling,
+> post-merge mechanics, evidence and report mechanics, stop conditions, and the generic
+> implementation / repair / review lifecycle.
+>
+> **What this document is NOT.** It is deliberately MODEL-AGNOSTIC. It owns no active model-to-task
+> routing, no task-family ownership, no effort selection, no merge authority and no PR-size authority,
+> and it names no model as a lifecycle step. Those all live in the canonical control plane,
+> `docs/crypto_core/agent_os_v2.md`, which is the single active authority. Where this companion and
+> the canonical control plane appear to differ, the canonical control plane wins; between two safety
+> rules the stricter wins.
+>
+> MERGE_AUTHORITY_REF: canonical section 2.1. PR_SIZING_AUTHORITY_REF: canonical section 2.2.
+> TASK_FAMILY_AUTHORITY_REF: canonical section 3. EFFORT_AUTHORITY_REF: canonical section 3.2.
+>
+> This document contains no secrets, credentials, API keys, exchange credentials or live-trading
+> instructions, and it instructs no real order flow.
 
 ## 1. Purpose
 
-Persist one command-level, auditable workflow so every Claude / Codex / ChatGPT turn does the **maximum
-safe bounded work per prompt** while preserving the crypto_core standard: **paper-first, deterministic,
-fail-closed, audit-first, derivatives-first, governance-first, risk-bounded**. Active scope is
-`src/crypto_core`, `tests/crypto_core`, `scripts/crypto_core`, `docs/crypto_core` only. BIST is historical
-context — never implemented here.
+Persist one command-level, auditable workflow so every turn does the maximum safe work its
+authorization allows, while preserving the crypto_core standard: paper-first, deterministic,
+fail-closed, audit-first, derivatives-first, governance-first, risk-bounded. Active scope is
+`src/crypto_core`, `tests/crypto_core`, `scripts/crypto_core` and `docs/crypto_core` only. BIST is
+historical context and is never implemented here.
 
-## 2. Model / Tool Roles (active GPT-5.6 routing)
+## 2. Roles by function
 
-Role summary only. The single `AUTHORITATIVE_ROUTING_MATRIX` (class → lane → model id → effort) is section
-24.3; effort/thinking selection is section 24.12. On any conflict, section 24 wins.
+Roles here are FUNCTIONS, not models. Which runtime performs a function is decided only by the
+canonical routing matrix, and it may change without this document changing.
 
-| Role | Responsibility |
+| Function | Responsibility |
 |---|---|
-| **ChatGPT controller** | Sequence owner, final evidence comparison, verdict, next prompt, and exact per-PR merge authorization. |
-| **GPT-5.6 Luna** | T0 mechanical git/gh state, CI polling, metadata, thread status, and postverify runner. No broad design or feature implementation. |
-| **GPT-5.6 Terra** | T1/T2 bounded Codex docs/code work, small P1/P2 repair, and fresh-context pinned-head audit. |
-| **GPT-5.6 Sol** | Scarce T4 cross-artifact trust, governance/safety, SM-5/SM-6, readiness/Deribit provenance design/audit. `xhigh` default; `max` only controller-gated. |
-| **Claude Opus 5** (`claude-opus-5`) | Large local implementation/refactor, broad bounded reads, review/architecture/prompt design, and long validation loops when Codex usage should be preserved. Effort per section 24.12. |
-| **Claude Sonnet 5** (`claude-sonnet-5`) | Default Claude lane for T0/T1 status, polling and governed mechanical closeout (low) and T2 bounded docs/config/tests/routine repair (medium). Runtime-proven only. |
-| **Codex Pursue Goal** | Bounded single-goal terminal loop for preflight, sync, CI/status, closeout, and explicitly authorized merge/postverify. |
-| **GitHub connector / gh** | Source-of-truth final PR state and merge-readiness gate. Read-only unless an action is explicitly authorized. |
-| **Deep Research** | External/current-fact advisory only. Never executor, merge authority, or safety-gate waiver. |
+| **Controller** | Sequence owner. Live state proof, evidence comparison, task classification, prompt compilation, conflict resolution, merge-READINESS judgement, and exactly one next action. Read-only first. Never a merge-authority origin. |
+| **Implementer** | The single repository writer for one authorized slice. Proves local state, patches only the allowed files, validates, publishes one PR, hands off, and stops at the gate. |
+| **Independent reviewer** | Fresh-context, pinned-head adversarial review producing P1/P2/P3 findings with exact source evidence and zero mutation. Never the same context that implemented the work. |
+| **Mechanics** | Bounded status, polling, metadata, and already-authorized execution. No semantic readiness or design judgement. |
+| **Research** | External and current facts only. Read-only and advisory. Never an executor, never merge authority, never a gate waiver. |
+| **Human** | The sole origin of per-PR merge authorization, and the owner of every governance threshold. |
+| **Terminal, `git`, `gh`, connector** | Source of truth for state. An editor extension is a helper, never authority. |
 
-Every serious prompt/report must state `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`,
-`REASONING_ACTUAL`, `EXACT_MODEL_REQUIRED`, and fallback. Exact-model mismatch means STOP_WITH_PROOF.
-Otherwise declare the actual runtime and never claim unavailable-model quality. Model strength is never proof.
+An implementation context never satisfies its own independent review. Current valid P1/P2 threads
+block. Outdated threads do not block code, but any resolution needs explicit guarded closeout
+authority, and a human thread is never self-resolved.
 
-### 2a. Codex Pursue Goal - scope
+## 3. Hard rules
 
-Use Pursue Goal only for a bounded single objective with terminal `PASS`, `FAIL`, or `BLOCKED`: repo/branch
-sync, preflight, CI/status snapshots, review-thread disposition planning, PR closeout, and explicitly
-authorized merge/postverify. Do not use it for broad repo pursuit, complex design, digest/provenance
-architecture, ambiguous slicing, or unscoped multi-file implementation/repair.
-
-### 2b. Independent audit rule
-
-A Terra implementation cannot self-satisfy the independent audit gate in the same context. Implementation
-and audit are separate fresh-context, pinned-head tasks. Current valid P1/P2 threads block. Outdated threads
-do not block code, but any resolution needs explicit guarded closeout; human threads are never self-resolved.
-## 3. Hard Rules
-
-- crypto_core only; **no BIST implementation leakage** (BIST is historical context).
-- **One open PR at a time.** Verify live (`gh pr list --state open`) at the start of every task.
-- **No direct push to `main`.** No force-push. No branch deletion unless the authorized command says so.
-- **Standard merge only** (no squash/rebase). **No merge without explicit human authorization naming the PR and the exact command.**
-- **CI `pending` / `queued` / `in_progress` / `no checks reported` is NOT_READY** — keep polling to terminal, or report a bounded-timeout snapshot. Never treat a startup window as green.
-- **CI not registered (no run created for a fresh head): diagnose before re-triggering.** Prove it from `gh run list` / commit `check-runs` and classify (`ACTIONS_DELAY_OR_GITHUB_INFRA` vs trigger/path/ref issue). At most **one** empty re-trigger commit (`chore(crypto-core): retrigger …`), and **only** with explicit user/controller authorization. Never loop no-op commits.
-- **Branch naming:** feature slices → `feature/<crypto-core-scope>-prN`; setup/docs → `chore/<crypto-core-scope>-prN`; repair stays on the **same branch** for the same PR. (Older `product/*` naming is superseded.)
-- **Setup/doctrine changes are never mixed into a feature PR.** Feature PRs touch `src/`/`tests/` product code; setup PRs touch docs/config only (`AGENTS.md`, `docs/crypto_core/**`, `.codex`, `.vscode`, `.cursor`, `.github` docs, `scripts/crypto_core` audit tooling). See §17.
-- **Codex review is asynchronous** and is a **separate gate** — an implementation/repair turn ends at terminal CI + report; it does not block waiting for review.
-- Every repo-state claim must be **git/gh/test-verifiable** (never from memory). Unproven → mark `UNKNOWN`.
-- **Same-branch repair only** for valid in-scope P1/P2; stop on unsafe scope expansion.
-- No live/private API, real orders, order routing, scheduler, auto-loop, connector/readiness, runtime/orchestrator, or shadow/live unless **explicitly scoped and separately designed**.
-- No hidden IO/env/random/wall-clock/threading/subprocess in product code unless explicitly scoped.
-- No `gh pr review --approve` (self-approval) ever.
-- **Digest-boundary rule (recurring P1 class):** any consumer of a digest-carrying object must recompute the upstream digest via the **public serializer** (remove the self-digest field, canonical JSON `sort_keys=True, separators=(",",":"), ensure_ascii=True, allow_nan=False`, SHA-256) and **reject mismatch before READY/ADMITTED/ACCEPTED**. A matching id is never sufficient; a forged/non-serializable upstream must hit the `*_mismatch` path, never a raw `TypeError`. Tests must include a tampered-field case.
+- crypto_core only; no BIST implementation leakage.
+- **One open PR at a time.** Verify it live (`gh pr list --state open`) at the start of every task.
+- **One repository writer at a time.** No concurrent patching, no second branch and no worktree
+  writer for the same objective.
+- **No direct push to `main`.** No force-push, no rebase, no squash, no history rewriting. No branch
+  deletion unless the authorized command says so.
+- **Standard merge only**, and only under the canonical merge-authority rule. No merge without
+  explicit human authorization naming the PR and the exact command, for that exact head.
+- **CI `pending` / `queued` / `in_progress` / `no checks reported` is NOT_READY.** Poll to a terminal
+  state, or report a bounded-timeout snapshot. A startup window is never green.
+- **CI not registered for a fresh head: diagnose before re-triggering.** Prove it from `gh run list`
+  or the commit check-runs and classify infrastructure delay against a trigger, path or ref problem.
+  At most ONE empty re-trigger commit, and only with explicit authorization. Never loop no-op commits.
+- **Branch naming:** feature slices `feature/<crypto-core-scope>-prN`; setup and docs
+  `chore/<crypto-core-scope>-prN`. A repair for the same PR stays on the SAME branch.
+- **Setup and doctrine changes are never mixed into a feature PR.** Feature PRs touch product code;
+  setup PRs touch docs, configuration and setup tooling.
+- **Independent review is asynchronous** and is a separate gate. An implementation or repair turn ends
+  at terminal CI plus its report; it does not block waiting for review.
+- Every repository claim is `git`, `gh` or test verifiable. Never from memory. Unproven is `UNKNOWN`.
+- **Same-branch repair only** for a valid in-scope P1/P2. Stop on unsafe scope expansion.
+- No live or private API, real orders, order routing, scheduler, auto-loop, connector or readiness
+  transition, runtime or orchestrator surface, or shadow and live execution unless explicitly scoped
+  and separately designed.
+- No hidden IO, environment access, randomness, wall-clock or threading in product code unless
+  explicitly scoped.
+- No self-approval, ever.
+- **Digest-boundary rule (recurring P1 class):** a consumer of a digest-carrying object recomputes the
+  upstream digest through the PUBLIC serializer — self-digest field removed, canonical JSON with
+  `sort_keys=True`, `separators=(",",":")`, `ensure_ascii=True`, `allow_nan=False`, SHA-256 — and
+  rejects a mismatch BEFORE any READY, ADMITTED or ACCEPTED transition. A matching id is never
+  sufficient. Forged or non-serializable input must reach the explicit mismatch path, never a raw
+  `TypeError`. Tests must include a tampered-field case.
 
 ### Dependabot collision prevention
 
-- Scheduled Dependabot version-update PRs are disabled for all currently configured ecosystems using
-  `open-pull-requests-limit: 0`.
-- This does not disable Dependabot alerts or security-update PRs.
-- Normal dependency version updates are admitted only through a dedicated controller-selected maintenance
-  slice.
-- Dependency maintenance requires zero pre-existing open PRs and follows normal topic-branch, validation,
-  audit and explicit merge-authorization gates.
-- Scheduled version updates must not be temporarily re-enabled while an active crypto_core PR exists.
-- An automatically generated security-update PR is treated as an externally generated urgent input requiring
-  controller triage.
-- A security-update PR does not silently waive one-open-PR and does not authorize concurrent implementation.
-- No dependency update is performed by this governance PR.
-- No security finding is being dismissed or ignored.
+- Scheduled version-update PRs are disabled for all configured ecosystems with
+  `open-pull-requests-limit: 0`. This does NOT disable alerts or security-update PRs.
+- Ordinary dependency updates are admitted only through a dedicated maintenance slice with zero
+  pre-existing open PRs, following normal branch, validation, review and authorization gates.
+- Scheduled version updates are never temporarily re-enabled while an active crypto_core PR exists.
+- An automatically generated security-update PR is an externally generated urgent input requiring
+  triage. It never silently waives one-open-PR and never authorizes concurrent implementation, and no
+  security finding is dismissed by this rule.
 
-## 4. Standard PR Lifecycle
+## 4. Standard PR lifecycle
 
-1. ChatGPT selects one bounded slice → one Claude implementation prompt (pinned expected `main` HEAD, "open PRs: none").
-2. Claude executes the **Implementation Loop** (§5) → opens one PR → polls CI to terminal → reports. No merge.
-3. Codex performs adversarial P1/P2 review **asynchronously** (§8).
-4. ChatGPT verifies live GitHub state and issues a repair / merge / next prompt (§9).
-5. Claude runs the **Repair Loop** (§6) on the same branch if instructed.
-6. Claude runs the **Closeout/Merge Loop** (§7) **only** from an explicit closeout authorization.
-7. Claude runs **Post-Merge Verification** (§12) and stops. ChatGPT selects the next slice (§15).
+1. The controller selects one coherent semantic slice, sized by the canonical PR-sizing rule, and
+   compiles one implementation prompt with the pinned expected base and the proven open-PR state.
+2. The implementer runs the implementation loop (section 5), opens one PR, polls CI to terminal, and
+   reports. No merge.
+3. Independent review runs asynchronously (section 8).
+4. The controller verifies live state and issues a repair, a merge-readiness verdict, or the next
+   prompt (section 9).
+5. The implementer runs the repair loop (section 6) on the same branch when instructed.
+6. The closeout loop (section 7) runs ONLY from an explicit closeout authorization.
+7. Post-merge verification (section 12) runs, then the next slice is selected (section 15).
 
-## 5. Claude Implementation Loop
+## 5. Implementation loop
 
 ```
-# precheck on updated main — for base / SHA proof ONLY; main is never edited or committed on
+# precheck on updated main - for base and SHA proof ONLY; main is never edited or committed on
 git fetch origin
 git switch main
 git pull --ff-only origin main
 git rev-parse HEAD                         # MUST equal the prompt's expected SHA
-git status --short --branch                # MUST be clean + in sync
+git status --short --branch                # MUST be clean and in sync
 gh pr list --repo demircaliskan2009-pixel/BIST_ELITE_CORE --state open --json number,title,headRefName,baseRefName,url   # MUST be []
 
-# create + switch to a topic branch BEFORE any patch/commit/push (never edit/commit on main)
-git switch -c <topic-branch>               # feature/<crypto-core-scope>-prN (feature) or chore/<crypto-core-scope>-prN (setup/docs)
+# create and switch to a topic branch BEFORE any patch, commit or push
+git switch -c <topic-branch>               # feature/<crypto-core-scope>-prN or chore/<crypto-core-scope>-prN
 git status --short --branch                # confirm: on the topic branch, clean
 # patch only after this point
 ```
 
-**Branch invariant (implementation mode — always holds):**
-- `main` is checked out **only** for precheck / base-SHA proof — never edited, never committed on.
-- Claude **creates and switches to a topic branch** (`git switch -c <topic-branch>`) before the first edit.
-- **All commits and pushes happen on the topic branch**; never `git commit` on `main`, never push to `origin/main`.
-- The PR is opened **from the topic branch into `main`** (`gh pr create --base main --head <topic-branch>`).
+**Branch invariant (always holds).** `main` is checked out ONLY for precheck and base-SHA proof —
+never edited, never committed on. The topic branch is created before the first edit. All commits and
+pushes happen on the topic branch. The PR is opened from the topic branch into `main`
+(`gh pr create --base main --head <topic-branch>`).
 
-Then (all on the **topic branch**): bounded read (named files only, no broad scan) → design → smallest
-additive patch (enforce allowed-files + max-changed-files) → self-audit (scope / digest re-proof /
-provenance / strict-Decimal / fail-closed / no hidden IO / paper-safety triple) → targeted tests →
-relevant suite → **full helper after meaningful changes** → `git diff --check` → scoped `git add <paths>` →
-commit (on the topic branch) → push (the topic branch) → `gh pr create --base main --head <topic-branch>` →
-**poll CI to terminal** (§ CI rule in §3) → inspect threads that exist (§8) → report (§10). **No merge.**
+Then, all on the topic branch: bounded read of the named files → design → the patch that closes the
+authorized semantic contract within the exact allowed files → self-check (scope, digest re-proof,
+provenance, strict decimal arithmetic, fail-closed behavior, no hidden IO, paper-safety) → targeted
+tests → the relevant suite → the logged full suite when the change warrants it → `git diff --check` →
+scoped `git add <exact paths>` → commit → push → `gh pr create` → poll CI to terminal → inspect the
+review threads that exist → report. **No merge.**
 
-## 6. Claude Repair Loop
+The self-check above is implementation QA. It is never an independent audit and is labelled
+`SELF_AUDIT_ONLY_NOT_INDEPENDENT` wherever it is reported.
 
-- Precheck first (branch + `HEAD == expected SHA` + clean tree + exactly one open PR + changed files ⊆ scope).
-- Pin PR number and expected head; repair **only the named blockers**, **same branch only**, bounded to named files.
-- **Test-only by default**; touch production only if a **new failing test proves a real defect**, and only inside the named module. If test-only, prove `git diff <prev> HEAD -- src/` is **empty**.
-- Re-validate fully (targeted → relevant suite → full helper `PYTEST_EXIT=0` → `git diff --check`) → scoped add → commit → push same branch → **re-poll CI to terminal** → report. **No merge.**
+## 6. Repair loop
 
-## 7. Claude Closeout / Merge Loop
+- Precheck first: branch, `HEAD` equals the expected SHA, clean tree, exactly one open PR, changed
+  files inside scope.
+- Pin the PR number and the expected head. Repair ONLY the named blockers, on the SAME branch, bounded
+  to the named files.
+- Test-only by default. Touch production code only when a new failing test proves a real defect, and
+  only inside the named module. If the repair is test-only, prove `git diff <prev> HEAD -- src/` is
+  empty.
+- Re-validate fully — targeted, then the relevant suite, then the logged full suite with
+  `PYTEST_EXIT=0`, then `git diff --check` — scoped add, commit, push the same branch, re-poll CI to
+  terminal, report. **No merge.**
+- One consolidated repair per audit cycle, then one whole-contract reaudit. A remaining genuine P1/P2
+  after that is `FIXED_POINT_NOT_REACHED` and the contract freezes (canonical section 13).
 
-Run **only** from an explicit closeout prompt that names the PR and the exact authorized command.
+## 7. Closeout loop
 
-- Re-prove freshly (no memory): `HEAD == authorized SHA`; `state == OPEN`; `mergeable == MERGEABLE`;
-  `mergeStateStatus == CLEAN`; changed files == expected set; CI terminal green/skip; exactly one open PR;
-  zero unresolved valid review threads.
-- Resolve **only** review threads explicitly named in the closeout prompt, and **only after** proving the
-  fix exists in source at the current HEAD (line-cited). Never self-resolve otherwise.
+Runs ONLY from an explicit closeout authorization that names the PR and the exact authorized command.
+
+- Re-prove freshly, from no memory: `HEAD` equals the authorized SHA; `state == OPEN`;
+  `mergeable == MERGEABLE`; `mergeStateStatus == CLEAN`; changed files equal the expected set; CI
+  terminal green or an accepted skip; exactly one open PR; zero unresolved valid review threads.
+- Resolve ONLY the review threads the closeout authorization names, and only after proving the fix
+  exists in source at the current HEAD with a line citation. Never self-resolve otherwise, and never
+  resolve a human thread.
 - Merge with the exact authorized command (standard `--merge`, `--delete-branch=false`).
-- **On 502/timeout/empty output: do NOT blind-retry.** Verify first:
-  `gh pr view <#> --json state,mergedAt,mergeCommit,mergedBy,headRefOid` and `git rev-parse origin/main`.
-  If `MERGED` → continue to §12. Else report `MERGE_TRANSIENT_NOT_MERGED` and stop.
-- If the PR is **already MERGED** before the merge command (stale prompt) → no-op, verify main contains the merge commit, continue to §12.
+- **On a transient API error, timeout or empty output: do NOT blind-retry.** Verify first with
+  `gh pr view <#> --json state,mergedAt,mergeCommit,mergedBy,headRefOid` and
+  `git rev-parse origin/main`. If merged, continue to section 12. Otherwise report
+  `MERGE_TRANSIENT_NOT_MERGED` and stop.
+- If the PR is already merged before the merge command (a stale authorization), do nothing, verify
+  `main` contains the merge commit, and continue to section 12.
 
-## 8. Codex Review Protocol
+An authorization is consumed by the merge it authorized. A new head or a new PR needs a new one.
 
-- Codex runs **asynchronously** after a push; findings may not exist when Claude's turn ends. Claude inspects threads that exist at terminal CI and reports `0 threads (review may post later)` if none.
-- Inspect via GraphQL: `reviewThreads(first:n){ nodes{ id isResolved isOutdated path line comments } }` + `reviews`.
-- Codex emits the report in §10. ChatGPT relays valid findings (with thread IDs) as a dedicated Claude repair prompt; Claude does not wait in-turn for review.
+## 8. Independent review protocol
 
-## 9. ChatGPT Controller Gate
+- Review runs asynchronously after a push; findings may not exist when the implementation turn ends.
+  The implementer inspects the threads that exist at terminal CI and reports "0 threads (review may
+  post later)" when there are none.
+- Inspect via GraphQL: `reviewThreads(first:n){ nodes{ id isResolved isOutdated path line comments } }`
+  plus `reviews`.
+- The review emits the report format in section 10. The controller relays valid findings, with thread
+  ids, as a dedicated repair prompt. The implementer does not wait in-turn for review.
+- The review collects the COMPLETE current blocker set for the whole contract before any repair
+  begins; it does not stop at the first finding (canonical section 13).
 
-ChatGPT independently re-verifies live GitHub state (head SHA, files, checks `name=conclusion`, threads,
-open-PR rule) before any verdict, and issues exactly one next prompt. Merge authorization must name the PR
-and the exact standard-merge command. ChatGPT emits the verdict format in §10.
+## 9. Controller gate
 
-## 10. Required Report Formats
+The controller independently re-verifies live state — head SHA, changed files, checks as
+`name=conclusion`, threads, and the one-open-PR rule — before any verdict, and issues exactly one next
+prompt. A merge-readiness verdict is not a merge authorization: the authorization itself comes from
+the human, names the PR and the exact command, and is bound to that exact head.
 
-**Claude (every task) — fixed fields, all repo claims git/gh/test-verifiable:**
+## 10. Required report formats
+
+**Implementer (every task)** — fixed fields, every repository claim `git`, `gh` or test verifiable:
+
 ```
 RESULT / PR / HEAD_SHA / BRANCH / FILES_CHANGED / COMMITS / VALIDATION / CHECKS /
 REVIEW_THREADS / SCOPE_CONFIRMATION / FINAL_GIT_STATUS / BLOCKERS / NEXT_SAFE_ACTION
 ```
-The **last** element of every Claude task message is a single self-contained, copy-paste **ChatGPT handoff
-code block** (repo; PR number/state; branch/head SHA/base SHA; files changed; commits; checks; review
-threads; validation commands+results; open-PR state; exact `gh`/`git` verification commands). No full logs
-(failure tails only); no uncited state.
 
-**Codex (review):**
+The LAST element of every implementer message is a single self-contained, copy-paste controller
+handoff code block: repo; PR number and state; branch, head SHA, base SHA; files changed; commits;
+checks; review threads; validation commands and results; open-PR state; and the exact `gh` and `git`
+commands that verify every claim. No full success logs — failure tails only. No uncited state.
+
+**Independent review:**
+
 ```
 VERDICT / P1_BLOCKERS / P2_BLOCKERS / NON_BLOCKING_NOTES / MERGE_READINESS / REQUIRED_REPAIRS_IF_ANY
 ```
 
-**ChatGPT (controller verdict):**
+**Controller verdict:**
+
 ```
 VERDICT / PROOF / REASON / NEXT_PROMPT
 ```
 
-## 11. Merge Gate
+## 11. Merge gate
 
-Merge only if **all** are true (each freshly proven):
-HEAD == authorized SHA · PR `state == OPEN` · `headRefOid == authorized SHA` · changed files == expected
-set · exactly one open PR (this one) · CI checks terminal **green or accepted skip only** (no
-pending/queued/in_progress/no-checks) · zero unresolved valid review threads · working tree clean · any
-test-only repair proven to have no `src/` change · no forbidden-scope surface (§16) · no protected-contract
-weakening · explicit human authorization with PR + exact command. Any miss → stop with proof, do not merge.
+Merge only when ALL of these are true, each freshly proven: `HEAD` equals the authorized SHA; the PR
+is `OPEN`; `headRefOid` equals the authorized SHA; the changed files equal the expected set; exactly
+one open PR and it is this one; CI checks are terminal green or an accepted skip, with no pending,
+queued, in-progress or missing checks; zero unresolved valid review threads; the working tree is
+clean; any test-only repair is proven to have no product-code change; no forbidden-scope surface
+(section 16); no protected-contract weakening; and explicit human authorization naming the PR and the
+exact command. Any miss stops with proof and does not merge.
 
-## 12. Post-Merge Verification (exact commands)
+## 12. Post-merge verification (exact commands)
 
 ```
 git switch main
@@ -199,123 +238,114 @@ git pull --ff-only origin main
 git rev-parse HEAD                                                   # == merge commit SHA
 python -m ruff check  src/crypto_core tests/crypto_core scripts/crypto_core
 python -m ruff format --check src/crypto_core tests/crypto_core scripts/crypto_core
+python scripts/crypto_core/validate_agent_os_v2.py
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/crypto_core/run_full_tests_logged.ps1   # require PYTEST_EXIT=0
 git diff --check
 git status --short --branch
 gh pr list --repo demircaliskan2009-pixel/BIST_ELITE_CORE --state open --json number,title,headRefName,baseRefName,url   # expect []
 ```
-The full-suite log is UTF-16 and may not carry the `N passed` line; the authoritative success signal is
-**`PYTEST_EXIT=0`**. Full crypto_core tests run **only** via `run_full_tests_logged.ps1` (never bare full
-pytest); targeted runs via `scripts/crypto_core/run_logged_command.ps1`; commands one at a time; scoped
-`git add` only.
 
-## 13. Stop Conditions (hard — stop with proof, no mutation)
+The full-suite log is UTF-16 and may not carry the `N passed` line; the authoritative success signal
+is `PYTEST_EXIT=0`. Full crypto_core tests run ONLY via `run_full_tests_logged.ps1`, never a bare full
+pytest; targeted runs go through `run_logged_command.ps1`; commands run one at a time; staging is
+scoped to exact paths.
 
-Wrong repo · non-crypto_core scope · unexpected PR/head (HEAD ≠ expected SHA) · more than one open PR when
-creating a PR · dirty overlapping files not owned by the task · requested repair outside allowed files ·
-live/private/order/scheduler/connector/runtime/shadow/live leakage · hidden IO/env/random/subprocess not
-scoped · failing required validation / full helper · unresolved valid review thread at the merge gate ·
-pending CI at the merge gate · direct main push · force push · self-approval · merge without exact human
-authorization · external/current fact required (→ `DEEP_RESEARCH_REQUIRED`).
+## 13. Stop conditions (hard — stop with proof, no mutation)
 
-## 14. Warning-Not-Stop Conditions (proceed, but note)
+Wrong repository · non-crypto_core scope · unexpected PR or head (`HEAD` not equal to the expected
+SHA) · more than one open PR when creating a PR · dirty overlapping files the task does not own ·
+a requested repair outside the allowed files · live, private, order, scheduler, connector, runtime,
+shadow or live leakage · hidden IO, environment, randomness or subprocess not scoped · a failing
+required validation or full-suite helper · an unresolved valid review thread at the merge gate ·
+pending CI at the merge gate · a direct `main` push · a force-push · self-approval · a merge without
+exact human authorization · an external or current fact required · the required runtime identity
+cannot be proven, a fallback occurred, or the proof is contradicted · the protected frontier lane is
+required but unavailable.
 
-Transient `gh`/API 502/timeout (verify state once, continue) · CI `no checks reported` immediately after
-push (startup window — keep polling) · `gh pr checks` non-zero exit while checks pending (not a failure) ·
-`mergeStateStatus: BLOCKED` solely from unresolved threads on an otherwise green PR (expected pre-merge) ·
-ruff auto-reformat of your own new files / `F401` (format-then-check, continue) · unrelated dirty files not
-owned by the task (do not stage/revert; report and scope around) · UTF-16 full-suite log (rely on
-`PYTEST_EXIT`).
+## 14. Warning-not-stop conditions (proceed, but note)
 
-## 15. Next-Slice Selection Rule
+A transient API error or timeout — verify state once and continue · CI reporting no checks
+immediately after a push, which is the startup window, so keep polling · a non-zero exit from
+`gh pr checks` while checks are pending, which is not a failure · `mergeStateStatus: BLOCKED` caused
+solely by unresolved threads on an otherwise green PR, which is expected pre-merge · a formatter
+reformatting your own new files, or an unused-import finding — format, then check, then continue ·
+unrelated dirty files the task does not own — do not stage or revert them; report and scope around ·
+the UTF-16 full-suite log, where `PYTEST_EXIT` is authoritative.
 
-ChatGPT selects exactly one bounded slice that maximizes edge-to-money product value along the chain
-`StrategySpec → LBR → PIT/DataRequirement → DecisionLedger → EvidenceStore → BacktestAdmission → Replay →
-PaperSleeve → Promotion → Allocator → ExecutionSim`, with: one coherent theme · bounded named files ·
-independent-safe · testable · current repo/PR state proven · no hard-gate violation · paper-first (no
-live/order/scheduler stage). Prefer the smallest additive change that unlocks the next bridge; one open PR
-only. Current integration-first slice sequence (paper-trading DONE definitions + next-PR order +
-overengineering guardrails) is the addendum `docs/crypto_core/paper_trading_phase_map.md` (PRDV4 remains
-the authority).
+## 15. Next-slice selection rule
 
-## 16. Forbidden Scope
+The controller selects exactly one coherent semantic slice that maximizes edge-to-money product value
+along the chain `StrategySpec → LBR → PIT/DataRequirement → DecisionLedger → EvidenceStore →
+BacktestAdmission → Replay → PaperSleeve → Promotion → Allocator → ExecutionSim`, with: one coherent
+theme; bounded named files; independent-safe boundaries; testability; proven current state; no
+hard-gate violation; and paper-first staging with no live, order or scheduler stage.
 
-Forbidden unless explicitly authorized and separately designed: live/private API; credentials/secrets/API
-keys; real orders; order routing; scheduler; auto-loop; connector/readiness; runtime/orchestrator;
-shadow/live execution; fills; PnL; positions; venue/order-id surface; persistence/file/network/env IO added
-to product code; backtest/replay engine unless that is the objective; EvidenceStore/persistence unless that
-is the objective; **any BIST behavior**. This document and any future prompt must never include account
-tokens, credentials, exchange keys, private local machine configuration, or live-trading/real-order
+The slice is sized by semantic closure (canonical section 2.2) — the largest change that closes one
+coherent contract together with its dependency closure, negative cases, permanent tests, validation
+and rollback. It is never sized by file count, and it is never split merely to make a PR look small.
+One open PR only. The integration-first slice sequence and its guardrails live in the addendum
+`docs/crypto_core/paper_trading_phase_map.md`; PRDV4 remains the product authority.
+
+## 16. Forbidden scope
+
+Forbidden unless explicitly authorized and separately designed: live or private API; credentials,
+secrets or API keys; real orders; order routing; scheduler; auto-loop; connector or readiness
+transition; runtime or orchestrator surface; shadow or live execution; fills; PnL; positions; venue
+or order-id surface; persistence, file, network or environment IO added to product code; a backtest or
+replay engine unless that is the objective; an evidence store or persistence layer unless that is the
+objective; and any BIST behavior. No document and no future prompt may include account tokens,
+credentials, exchange keys, private local machine configuration, or live-trading and real-order
 instructions.
 
-## 17. Controlled Self-Improvement Loop
+## 17. Controlled self-improvement loop
 
-Lessons are persisted, not improvised. Full procedure + the running ledger live in
+Lessons are persisted, not improvised. The full procedure and the running ledger live in
 `docs/crypto_core/agent_lessons.md`. Summary:
 
-- Each real **P1/P2** (Codex finding, CI failure, post-merge defect) emits a `LESSON_CANDIDATE` in the
-  ChatGPT handoff block, citing `PR #<n>` + `commit <sha>` + the failure mode / asserting test.
-- ChatGPT **triages** durability/generalizability/proof; transient branch/CI/commit state is never a lesson.
-- Accepted lessons are added to `agent_lessons.md` **only in a separate setup PR** (`chore/<scope>-prN`),
-  never mixed into a feature PR.
-- **No lesson may weaken a safety gate (§3, §16).** No automatic self-modification during feature PRs. Stale
-  or conflicting instructions are removed or repointed to canonical doctrine.
+- Each real P1/P2 — a review finding, a CI failure, or a post-merge defect — emits a
+  `LESSON_CANDIDATE` in the handoff block, citing the PR, the commit and the failure mode or the
+  asserting test.
+- The controller triages durability, generalizability and proof. Transient branch, CI or commit state
+  is never a durable lesson.
+- Accepted lessons are added to the ledger ONLY in a separate setup PR, never mixed into a feature PR.
+- No lesson may weaken a safety gate (sections 3 and 16). No automatic self-modification during a
+  feature PR. Stale or conflicting instructions are removed or repointed to canonical doctrine.
 
-## 18. Doctrine Precedence & Legacy Surfaces
+## 18. Doctrine precedence and legacy surfaces
 
-Active-work doctrine precedence: **`AGENTS.md` → this file → `.codex/skills/crypto-core-max-safe/SKILL.md`
-→ `CLAUDE.md`** (+ untracked local `CLAUDE.local.md`), with `docs/crypto_core/agent_lessons.md` as the
-lessons companion. On conflict the **stricter safety rule wins**.
+Active doctrine precedence is defined in the canonical control plane, which also holds the exact
+registry of every active surface, every host adapter and every retired path. This companion is
+subordinate to it.
 
-Legacy / secondary surfaces — `.github/prompts/*`, `.github/skills/*`, `.github/instructions/*`,
-`.github/agents/*`, `.cursor/rules/*`, and any BIST/PRDV3 material — are **historical or assistant-specific
-and are overridden by the canonical doctrine above wherever they conflict**. In particular, legacy names that
-imply scheduler/deployment/live/order-routing surfaces do **not** authorize any such behavior in crypto_core
-(paper-first, no scheduler/auto-loop, no live/order routing — §3, §16). MCP is opt-in/manual and **none** is
-enabled by default (`.vscode/mcp.json` declares no servers); any future server must be pinned, read-only/local,
-and explicitly approved. Terminal/git/`gh`/pytest/ruff are the source of truth; editor extensions are helpers
-(`.vscode/extensions.json` lists recommendations only and installs/uninstalls nothing).
+A path that is not registered as an active doctrine surface carries NO active authority, whatever it
+says about itself. Legacy material under `.github/prompts`, `.github/skills`, `.github/instructions`,
+`.github/agents`, `.cursor/rules`, and any BIST or PRDV3 content is historical or assistant-specific
+and is overridden by canonical doctrine wherever it conflicts. In particular, a legacy name that
+implies a scheduler, deployment, live or order-routing surface authorizes no such behavior here:
+crypto_core is paper-first, with no scheduler, no auto-loop and no live or order routing.
 
-## 19. Deep Research & GitHub Connector Protocol
+MCP is opt-in and manual, and none is enabled by default (`.vscode/mcp.json` declares no servers). Any
+future server must be pinned, read-only or local, and explicitly approved. The terminal, `git`, `gh`,
+pytest and the linter are the source of truth; editor extensions are helpers
+(`.vscode/extensions.json` lists recommendations only and installs nothing).
 
-Deep Research is the **external / current-fact + architecture-benchmark** tool; full protocol in
-`docs/crypto_core/deep_research_protocol.md`. Summary (the doc binds on conflict):
+## 19. Research protocol pointer
 
-- **Use for:** exchange/API/Deribit docs, rate limits, fee/funding/margin/liquidation behavior;
-  legal/regulatory/custody/security facts; competitor/benchmark research (Freqtrade, Hummingbot,
-  OctoBot, Jesse, institutional patterns — lessons only, no blind copy); academic/microstructure /
-  safe-execution / readiness-gate research; PRD/roadmap alignment vs external benchmarks;
-  overengineering detection (artifact proliferation vs end-to-end wiring); defining paper-trading DONE
-  / shadow DONE / live-readiness gates.
-- **Do NOT use for:** local repo state, CI polling, PR merge/readiness source-of-truth, local
-  implementation repair, routine unit-test/ruff debugging, branch hygiene, replacing Codex P1/P2
-  review, or replacing the GitHub-connector final gate.
-- **Combined repo+external review (connector chat):** cite both external sources and repo evidence;
-  label every statement as exactly one of `REPO_EVIDENCE` / `EXTERNAL_EVIDENCE` / `INFERENCE` /
-  `UNKNOWN`; never infer live repo state without GitHub evidence; **Deep Research is strictly read-only
-  — it never mutates repo/GitHub state (branch/file/commit/push/PR/comment/thread-resolve/workflow-rerun/
-  merge/auto-merge), even when the underlying work is authorized**; connector repo evidence is read-only
-  research input only; distinguish official docs/papers from weak sources; output bounded PR-level
-  recommendations, not vague strategy.
-- **Routing:** ChatGPT decides whether Deep Research is needed; Claude does not call it but may
-  **recommend** it (`DEEP_RESEARCH_REQUIRED` + the exact question) when blocked by a current/external
-  fact; Codex stays adversarial repo audit; Codex Pursue Goal stays the terminal `gh`/CI loop; the
-  GitHub connector stays the source-of-truth state gate; Deep Research is research/advisory, **never an
-  executor lane and not merge authority** — any authorized mutation is routed by the controller to
-  Claude/`gh`, the GitHub connector, or Codex, never executed by Deep Research.
-- **Triggers:** `DEEP_RESEARCH_REQUIRED` for exchange/API/funding/fees/limits/microstructure/
-  custody/regulation/security, Deribit/readiness/live/shadow decisions, PRD/roadmap-vs-external-
-  benchmark questions, overengineering-vs-underbuilding decisions, top-bot/framework comparison, and
-  defining paper/shadow/live DONE gates. `DEEP_RESEARCH_NOT_REQUIRED` for pure local implementation,
-  tests/ruff/CI, PR/check/thread status, repo-only state, and already-documented internal doctrine.
-- **Output contract:** `RESULT / VERDICT / SOURCE_QUALITY / REPO_EVIDENCE / EXTERNAL_EVIDENCE /
-  WHAT_IS_PROVEN / WHAT_IS_INFERRED / WHAT_IS_UNKNOWN / OVERENGINEERING_AUDIT / PRD_ALIGNMENT /
-  NEXT_PR_RECOMMENDATIONS / RISKS_TO_AVOID / DEEP_RESEARCH_FOLLOWUP_NEEDED`.
-- **Misuse prevention (hard):** Deep Research must never justify skipping tests/CI/audit, authorize
-  live/private API/order routing or any §16 forbidden surface, weaken a §3 fail-closed gate, replace
-  explicit per-PR merge authorization, or produce broad PRD rewrites unless the controller asks.
-  External best practices that conflict with repo safety doctrine are **proposals only** — the stricter
-  safety rule wins.
+External and current facts are governed by canonical section 8, with the full protocol in
+`docs/crypto_core/deep_research_protocol.md`. Two mechanics matter for this workflow: research is
+strictly read-only and never mutates repository or GitHub state even when the underlying work is
+authorized; and a research result never justifies skipping a test, a CI gate, an independent audit or
+an explicit human merge authorization. External best practice that conflicts with repository safety
+doctrine is a proposal only — the stricter safety rule wins.
+
+---
+
+Everything below this line is a dated HISTORICAL RECORD of superseded operating regimes, preserved
+verbatim as evidence. It is bounded by explicit structural markers and is NOT active routing, NOT
+current state and NOT current authority. It is never read as an instruction, and it is never
+rewritten to name different tooling than it originally named.
+
+<!-- HISTORICAL_RECORD_BEGIN -->
 
 ## 20. HISTORICAL / SUPERSEDED BY GPT-5.6 ROUTING DOCTRINE - Fable 5 era
 
@@ -1329,3 +1359,5 @@ templates were reworded to match. Twenty-nine deterministic routing cases pass, 
 proving an Agent-OS architecture decision stays T3D/max, a model-routing prompt stays T3E/max, a named
 capability-critical implementation reaches T3B/max, and an authorized merge stays T1/low with no T0 overlap.
 No routing architecture, task-intent family or Codex doctrine changed; docs only, two files.*
+
+<!-- HISTORICAL_RECORD_END -->

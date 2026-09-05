@@ -1,0 +1,64 @@
+{
+  "$comment": "EXAMPLE_ONLY - an illustrative STATE_MANIFEST_V1 instance, not current repository state. Every hash, number and name below is a fabricated placeholder. Never read this file as proof of anything; compile a real manifest from live git/gh output instead. This fixture deliberately shows one PROVEN field group and one UNKNOWN field group so the proof-pairing rule is visible: pr_number is null because pr_number_evidence is UNKNOWN, while open_pr_count is an integer because open_pr_count_evidence is PROVEN.",
+  "schema": "STATE_MANIFEST_V1",
+  "repo": "example-owner/EXAMPLE_REPO",
+  "compiled_at_evidence": "EXAMPLE_ONLY placeholder. A real manifest records the exact commands run, e.g. 'git rev-parse HEAD', 'git rev-parse HEAD^{tree}', 'gh pr list --state open --json number'.",
+  "branch": "chore/example-scope-pr1",
+  "branch_evidence": "PROVEN",
+  "base_sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+  "base_sha_evidence": "PROVEN",
+  "base_tree": "0f1e2d3c4b5a69788796a5b4c3d2e1f001234567",
+  "head_sha": "b2c3d4e5f60718293a4b5c6d7e8f90123456789a",
+  "head_sha_evidence": "PROVEN",
+  "head_tree": "1e2d3c4b5a69788796a5b4c3d2e1f00123456789",
+  "pr_number": null,
+  "pr_number_evidence": "UNKNOWN",
+  "pr_state": null,
+  "open_pr_count": 0,
+  "open_pr_count_evidence": "PROVEN",
+  "ci_state": null,
+  "review_threads_unresolved": null,
+  "task_boundary": "EXAMPLE_SEMANTIC_BOUNDARY_V1",
+  "authorization": {
+    "mutation_scope": "EXAMPLE_ONLY: the exact ALLOWED_FILES set named by the task prompt.",
+    "merge_authorized": false,
+    "notes": "merge_authorized is structurally always false here. Merge authority is HUMAN_ONLY_PER_PR and is granted by the human per PR and per head at the moment of merge; it is never carried in state."
+  },
+  "completed_gates": [
+    {
+      "gate": "targeted_pytest",
+      "evidence_key": "head=b2c3d4e5f60718293a4b5c6d7e8f90123456789a|paths=tests/crypto_core/test_example.py|cmd=python -m pytest -q -W error|env=py3.11-linux|id=EXAMPLE-1",
+      "result": "PASS"
+    },
+    {
+      "gate": "full_suite_logged",
+      "evidence_key": "head=b2c3d4e5f60718293a4b5c6d7e8f90123456789a|paths=tests/crypto_core|cmd=run_full_tests_logged.ps1|env=py3.12-win|id=EXAMPLE-2",
+      "result": "UNKNOWN"
+    }
+  ],
+  "blockers": [
+    {
+      "id": "EXAMPLE_BLOCKER_STABLE_ID_V1",
+      "severity": "P2",
+      "state": "OPEN",
+      "repair_count": 0
+    }
+  ],
+  "invalidations": [
+    "EXAMPLE_ONLY: the full_suite_logged gate above is UNKNOWN because the toolchain differs from the one that produced the targeted run, so its evidence key does not match."
+  ],
+  "model_runtime": {
+    "model_id": "example-model-id",
+    "model_requested": "example-model-id",
+    "model_actual": "example-model-id",
+    "requested_effort": "xhigh",
+    "observed_effort": "xhigh",
+    "capability_mode": null,
+    "host_setting_raw": "EXAMPLE_ONLY: the raw host selector string, copied verbatim and never normalized.",
+    "environment": "EXAMPLE_ONLY: the execution environment name.",
+    "client_version": "EXAMPLE_ONLY: the client version string.",
+    "model_evidence_source": "CONFIGURATION_EVIDENCE_ONLY",
+    "model_fallback": null
+  },
+  "next_safe_action": "EXAMPLE_ONLY: exactly one concrete next action, stated once."
+}

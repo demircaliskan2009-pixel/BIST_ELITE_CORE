@@ -5,59 +5,67 @@ description: Compact execution checklist for crypto_core implementation/audit lo
 
 # Crypto Core Token-Efficient Loop
 
-Full doctrine: `docs/crypto_core/token_efficiency_playbook.md` and `agent_workflow.md` section 24
-(`CRYPTO_CORE_AGENT_OS_V1`). Token saving is subordinate to correctness; no gate may be skipped to save
-tokens. Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2).
+<!-- CONTROL_PLANE_ROLE: CLAUDE_ADAPTER -->
+<!-- CONTROL_PLANE_AUTHORITY_REF: docs/crypto_core/agent_os_v2.md -->
+
+This is the CLAUDE host adapter loop. It compresses procedure only. It defines no routing, no task
+family, no effort selection, no PR sizing and no merge authority — all of those live in
+`docs/crypto_core/agent_os_v2.md`. Execute the lane selected by canonical routing; never reclassify
+your own family and never pick your own canonical effort. Token saving is subordinate to correctness:
+no gate may be skipped to save tokens.
+
+MERGE_AUTHORITY_REF: canonical section 2.1. PR_SIZING_AUTHORITY_REF: canonical section 2.2.
+TASK_FAMILY_AUTHORITY_REF: canonical section 3. EFFORT_AUTHORITY_REF: canonical section 3.2.
 
 ## Loop
 
-1. Intake the controller packet first (CONTROLLER_TO_IMPLEMENTER: pinned state, exact read set, allowed
-   files, invariants, protected-risk class, validation ladder, stops). Do NOT repeat broad GitHub discovery
-   the controller already proved.
-2. Classify against the single authoritative routing matrix (`agent_workflow.md` §24.3): T0 mechanical
-   (Sonnet 5 low / Luna); T1 read-only, fast-bounded and governed closeout (Sonnet 5 low / Luna / Terra);
-   T2 bounded implementation (Sonnet 5 medium / Terra); T3A complex implementation (Opus 5 xhigh, default
-   heavy local) ; T3B capability-critical (Opus 5 max, explicit trigger only); T3C review (Opus 5
-   medium/high/xhigh by breadth); T3D architecture and T3E prompt architecture (Opus 5 high/xhigh); T4 Sol
-   cross-contract; XR controller-orchestrated Deep Research; controller/connector final evidence gate.
-   Effort selection: §24.12. Prove `MODEL_ACTUAL` and `MODEL_EFFORT_ACTUAL` from session runtime evidence
-   before mutating — an unresolved alias is not proof; mismatch or fallback is `STOP_WITH_PROOF`.
-3. Prove LOCAL state once with `git`/`gh`: HEAD, clean tree, open PRs, and checks when relevant — local
-   proof stays Claude's own responsibility even with a controller packet.
-4. Read the named set; use symbol search before full files; build one source surface map.
-5. Patch only named files, preserving paper-only, fail-closed, and digest-boundary rules.
-6. Validate one command at a time: scoped Ruff/format, targeted tests, logged full suite when required,
-   then `git diff --check`.
-7. Publish with scoped `git add`, one PR, and bounded CI snapshots. Pending is `NOT_READY`.
-8. End with an IMPLEMENTER_TO_CONTROLLER handoff (`AGENT_OS_HANDOFF_V1`): actual model/reasoning, setup
-   fields (`SETUP_REQUESTED`/`SETUP_ACTUAL`/`SETUP_FILES_READ`/`SETUP_GAPS`), exact scope, validation,
-   PR/CI evidence, no self-audit claim, exactly one next safe action.
+0. **Cold start.** With no controller packet, bootstrap read-only per canonical section 15.1:
+   `AGENTS.md` → `docs/crypto_core/agent_os_v2.md` → this adapter →
+   `docs/crypto_core/continuity/CONTINUITY_INDEX.md` → the current ephemeral manifest/handoff. Then
+   re-prove repo, branch, base, head, tree, worktree and open-PR state, and compile an ephemeral
+   state manifest (`docs/crypto_core/continuity/state_manifest.schema.json`). Never trust cached
+   volatile state.
+1. **Intake.** Consume the controller packet first: pinned state, exact read set, allowed files,
+   invariants, protected-risk class, validation ladder, stop conditions. Do not repeat broad remote
+   discovery the controller already proved.
+2. **Prove runtime identity.** Before any mutation, prove and report the model and effort fields with
+   an honest evidence class (canonical section 4.2). An unresolved alias is not proof. A mismatch, a
+   fallback, or contradictory runtime proof is `STOP_WITH_PROOF` before mutation.
+3. **Prove local state.** Once, with `git`/`gh`: HEAD, clean tree, open PRs, and checks when
+   relevant. Local proof stays this session's own responsibility even with a controller packet.
+4. **Read.** The named set only. Symbol search before whole files. Build one source-surface map.
+5. **Patch.** Only the exact allowed files, preserving paper-only, fail-closed and digest-boundary
+   rules. `ALLOWED_FILES` is an authorization boundary, not a sizing ceiling — needing a path outside
+   it is a stop-and-rescope, never a reason to shrink a coherent contract.
+6. **Validate.** One command at a time: scoped lint and format, targeted tests, the logged full suite
+   when required, `python scripts/crypto_core/validate_agent_os_v2.py` for any control-plane change,
+   then `git diff --check`. Run each deterministic gate once per unchanged evidence key; targeted
+   first during development, the full ladder once on the final candidate bytes.
+7. **Publish.** Scoped `git add` of exact paths, one commit, one PR, bounded CI snapshots. Pending is
+   `NOT_READY`.
+8. **Hand off.** End with the implementer-to-controller packet: actual model and effort with evidence
+   class, setup fields (`SETUP_REQUESTED` / `SETUP_ACTUAL` / `SETUP_FILES_READ` / `SETUP_GAPS`), exact
+   scope, validation, PR and CI evidence, no self-audit claim, and exactly one next safe action.
 
 ## Boundaries
 
-- Claude Fable 5 = `INACTIVE_EXPIRED_RETIRED` (workflow §24.10) — not an active lane, fallback, or
-  dependency. Former surge work routes to Opus 5 (broad-but-bounded T3) or Sonnet 5 / Terra (bounded T2);
-  former read-only challenge/full-repo audit routes to the ChatGPT read-only-first controller
-  (`CONTROLLER_READONLY_FIRST_POLICY`) or Codex Sol for protected Class-C. Archived Fable material in
-  `fable_exit_contract_index.md` is HISTORICAL/ARCHIVAL only.
-- Claude Opus 5 (`claude-opus-5`) owns broad local implementation, long loops, review, architecture and
-  complex prompt design; runtime-proven Claude Sonnet 5 (`claude-sonnet-5`) is the DEFAULT lane for status,
-  polling, governed closeout, small/medium bounded slices, docs/tests and mechanical code (fallback: Terra
-  bounded / Opus 5 broad). Claude Opus 4.8 is `SUPERSEDED_BY_OPUS_5` — historical evidence only.
-- Effort: Opus 5 `xhigh` is the normal coding default; `max` only on an explicit T3B trigger, never for
-  polling, closeout, formatting, routine tests, simple docs or one-line repair. Keep adaptive thinking
-  enabled — never `thinking: disabled` on a T3 lane or with `xhigh`/`max`.
-- Subagents default 0 (max 2 read-only, genuinely independent substantial tracks only). Run each
-  deterministic gate once per unchanged head; no generic re-verification loops. Deliver exactly the
-  authorized scope — report and stop instead of widening. `ultracode`, if exposed, is an orchestration mode,
-  never an effort level and never a default.
-- No Claude session self-satisfies independent review; Class-C protected work (digest/provenance, SM-5/SM-6,
-  Stage-4, readiness, finance arithmetic, trust transitions) always gets a fresh pinned-head Codex audit.
-- Sol is scarce and never used for mechanics. Luna never performs broad design or feature implementation.
-- External/current facts route to controller-orchestrated Deep Research (read-only, advisory) — never local
-  web research, never a gate waiver.
-- Codex Pursue Goal is a bounded terminal preflight/sync/CI/status/closeout/authorized-postverify loop only.
 - One repository writer at a time; one open PR; maximum safe work per prompt, then stop at the gate.
-- No BIST, live/order/capital/readiness surface, direct main push, non-standard merge, or unproven claim.
-- ChatGPT is the read-only-first controller-auditor (`CONTROLLER_READONLY_FIRST_POLICY`) for non-Class-C
-  work; it never replaces local tests or the Class-C Sol audit. Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED`.
+- Subagents default 0, maximum 2 read-only for genuinely independent substantial tracks, no
+  recursion, only the primary session mutates. A same-model self-review is
+  `SELF_AUDIT_ONLY_NOT_INDEPENDENT`.
+- No Claude session satisfies an independent audit. Protected Class-C work always gets a fresh-context
+  audit from the protected frontier lane (canonical sections 3.3 and 12), and an unavailable frontier
+  lane is `ASTRA_REQUIRED_BUT_UNAVAILABLE` — never a silent downgrade.
+- External or current facts route to the controller, never to local web research, and never as a gate
+  waiver.
+- No BIST, live, order, capital or readiness surface; no direct `main` push; no non-standard merge;
+  no unproven claim.
+- Stop rather than continue when the context budget would make correctness uncertain, validation
+  turns ambiguous, a failure needs unrelated repair, scope would widen, an authorization gate is
+  reached, or provenance is unclear.
+
+## Report shape
+
+`RESULT` / `FILES_CHANGED` / `VALIDATION` / `NEXT_SAFE_ACTION`, plus state proof, blockers and the
+handoff packet. Failure tails only — never full success logs, never repeated doctrine, never an
+uncited repository claim.

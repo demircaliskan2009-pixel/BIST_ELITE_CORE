@@ -48,6 +48,9 @@ jobs:
           fi
           python -m pip install ruff
 
+      - name: Agent OS control-plane contract
+        run: python scripts/crypto_core/validate_agent_os_v2.py
+
       - name: Ruff lint
         run: ruff check src/crypto_core tests/crypto_core scripts/crypto_core --output-format=github
 

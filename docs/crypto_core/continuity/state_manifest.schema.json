@@ -1,0 +1,319 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crypto-core.local/schemas/state_manifest_v1.json",
+  "title": "STATE_MANIFEST_V1",
+  "description": "Ephemeral per-session state manifest for crypto_core (CONTEXT_CONTINUITY_PROTOCOL_V2 layer 3, docs/crypto_core/agent_os_v2.md section 15). Compiled from live proof at the start of a session. NEVER committed as durable doctrine and never read as current truth by a later session. Every live-state field is proof-paired: a value is present only when its evidence field says PROVEN, and is exactly null when the evidence field says UNKNOWN. A missing value or a missing evidence field is invalid. UNKNOWN is a first-class, expected outcome - it is never replaced by a plausible guess.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "repo",
+    "compiled_at_evidence",
+    "branch",
+    "branch_evidence",
+    "base_sha",
+    "base_sha_evidence",
+    "head_sha",
+    "head_sha_evidence",
+    "pr_number",
+    "pr_number_evidence",
+    "open_pr_count",
+    "open_pr_count_evidence",
+    "task_boundary",
+    "authorization",
+    "blockers",
+    "next_safe_action"
+  ],
+  "properties": {
+    "$comment": {
+      "type": "string",
+      "description": "Optional documentation field. A committed fixture that is illustrative rather than real state MUST declare EXAMPLE_ONLY here."
+    },
+    "schema": {
+      "const": "STATE_MANIFEST_V1"
+    },
+    "repo": {
+      "type": "string",
+      "minLength": 1,
+      "description": "owner/name of the repository this manifest describes."
+    },
+    "compiled_at_evidence": {
+      "type": "string",
+      "minLength": 1,
+      "description": "How this manifest was compiled, e.g. the exact git/gh commands run. Free text, but it must describe real executed proof, never an assumption."
+    },
+    "branch": {
+      "type": ["string", "null"]
+    },
+    "branch_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "base_sha": {
+      "$ref": "#/$defs/nullable_sha"
+    },
+    "base_sha_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "base_tree": {
+      "$ref": "#/$defs/nullable_sha"
+    },
+    "head_sha": {
+      "$ref": "#/$defs/nullable_sha"
+    },
+    "head_sha_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "head_tree": {
+      "$ref": "#/$defs/nullable_sha"
+    },
+    "pr_number": {
+      "type": ["integer", "null"],
+      "minimum": 1
+    },
+    "pr_number_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "pr_state": {
+      "type": ["string", "null"],
+      "enum": ["OPEN", "CLOSED", "MERGED", "DRAFT", null]
+    },
+    "open_pr_count": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "open_pr_count_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "ci_state": {
+      "type": ["string", "null"],
+      "enum": ["GREEN", "FAILING", "PENDING", "NO_CHECKS", null],
+      "description": "PENDING, NO_CHECKS and null all mean NOT_READY. Only GREEN is a terminal pass."
+    },
+    "review_threads_unresolved": {
+      "type": ["integer", "null"],
+      "minimum": 0
+    },
+    "task_boundary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The SEMANTIC_BOUNDARY of the work this session is authorized to do."
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["mutation_scope", "merge_authorized"],
+      "properties": {
+        "mutation_scope": {
+          "type": "string",
+          "description": "Exact authorized mutation scope, or NONE."
+        },
+        "merge_authorized": {
+          "const": false,
+          "description": "A manifest never records merge authority. MERGE_AUTHORITY_SOURCE is HUMAN_ONLY_PER_PR and lives only in docs/crypto_core/agent_os_v2.md section 2.1; an authorization is granted per PR and per head by the human at the moment of merge, and is never carried in durable or ephemeral state."
+        },
+        "notes": {
+          "type": "string"
+        }
+      }
+    },
+    "completed_gates": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["gate", "evidence_key", "result"],
+        "properties": {
+          "gate": {
+            "type": "string",
+            "minLength": 1
+          },
+          "evidence_key": {
+            "type": "string",
+            "minLength": 1,
+            "description": "VALIDATION_BUDGET reuse key: head/tree + relevant path set + command/config + environment/toolchain + evidence id. A gate may be reused only while this key is unchanged."
+          },
+          "result": {
+            "type": "string",
+            "enum": ["PASS", "FAIL", "UNKNOWN"]
+          }
+        }
+      }
+    },
+    "blockers": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["id", "severity", "state", "repair_count"],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Stable blocker identity. It survives renaming and re-phasing; renaming a blocker never resets repair_count (agent_os_v2.md section 13)."
+          },
+          "severity": {
+            "type": "string",
+            "enum": ["P1", "P2", "P3"]
+          },
+          "state": {
+            "type": "string",
+            "enum": ["OPEN", "REPAIRED_PENDING_REAUDIT", "CLOSED", "FIXED_POINT_NOT_REACHED"]
+          },
+          "repair_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "invalidations": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Facts that stopped being true during this session and must not be reused."
+    },
+    "model_runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Additive runtime-proof block (agent_os_v2.md section 4). Optional so that a manifest compiled by a host that exposes no runtime metadata stays valid instead of forcing an invented value. Ultra is recorded in capability_mode ONLY and is never written into an effort field.",
+      "properties": {
+        "model_id": {
+          "type": ["string", "null"]
+        },
+        "model_requested": {
+          "type": ["string", "null"]
+        },
+        "model_actual": {
+          "type": ["string", "null"]
+        },
+        "requested_effort": {
+          "$ref": "#/$defs/nullable_effort"
+        },
+        "observed_effort": {
+          "$ref": "#/$defs/nullable_effort"
+        },
+        "capability_mode": {
+          "type": ["string", "null"]
+        },
+        "host_setting_raw": {
+          "type": ["string", "null"]
+        },
+        "environment": {
+          "type": ["string", "null"]
+        },
+        "client_version": {
+          "type": ["string", "null"]
+        },
+        "model_evidence_source": {
+          "$ref": "#/$defs/model_evidence_class"
+        },
+        "model_fallback": {
+          "type": ["string", "null"]
+        }
+      }
+    },
+    "next_safe_action": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Exactly one concrete next action."
+    }
+  },
+  "$defs": {
+    "evidence_status": {
+      "type": "string",
+      "enum": ["PROVEN", "UNKNOWN"]
+    },
+    "model_evidence_class": {
+      "type": "string",
+      "enum": [
+        "RUNTIME_TELEMETRY",
+        "USER_ATTESTED_UI_SELECTION",
+        "CONFIGURATION_EVIDENCE_ONLY",
+        "UNKNOWN",
+        "CONTRADICTED"
+      ]
+    },
+    "nullable_effort": {
+      "type": ["string", "null"],
+      "enum": ["low", "medium", "high", "xhigh", "max", null],
+      "description": "The reasoning-effort enum is exactly low|medium|high|xhigh|max. Ultra is not a member."
+    },
+    "nullable_sha": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{40}$"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": ["branch_evidence"],
+        "properties": {"branch_evidence": {"const": "PROVEN"}}
+      },
+      "then": {
+        "required": ["branch"],
+        "properties": {"branch": {"type": "string", "minLength": 1}}
+      },
+      "else": {
+        "required": ["branch"],
+        "properties": {"branch": {"type": "null"}}
+      }
+    },
+    {
+      "if": {
+        "required": ["base_sha_evidence"],
+        "properties": {"base_sha_evidence": {"const": "PROVEN"}}
+      },
+      "then": {
+        "required": ["base_sha"],
+        "properties": {"base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}
+      },
+      "else": {
+        "required": ["base_sha"],
+        "properties": {"base_sha": {"type": "null"}}
+      }
+    },
+    {
+      "if": {
+        "required": ["head_sha_evidence"],
+        "properties": {"head_sha_evidence": {"const": "PROVEN"}}
+      },
+      "then": {
+        "required": ["head_sha"],
+        "properties": {"head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}
+      },
+      "else": {
+        "required": ["head_sha"],
+        "properties": {"head_sha": {"type": "null"}}
+      }
+    },
+    {
+      "if": {
+        "required": ["pr_number_evidence"],
+        "properties": {"pr_number_evidence": {"const": "PROVEN"}}
+      },
+      "then": {
+        "required": ["pr_number"],
+        "properties": {"pr_number": {"type": "integer", "minimum": 1}}
+      },
+      "else": {
+        "required": ["pr_number"],
+        "properties": {"pr_number": {"type": "null"}}
+      }
+    },
+    {
+      "if": {
+        "required": ["open_pr_count_evidence"],
+        "properties": {"open_pr_count_evidence": {"const": "PROVEN"}}
+      },
+      "then": {
+        "required": ["open_pr_count"],
+        "properties": {"open_pr_count": {"type": "integer", "minimum": 0}}
+      },
+      "else": {
+        "required": ["open_pr_count"],
+        "properties": {"open_pr_count": {"type": "null"}}
+      }
+    }
+  ]
+}
