@@ -113,10 +113,28 @@ independently verified, and no session satisfies its own independent audit.
 
 ## Live state
 
-This file pins no current head, no tree hash, no PR number, no open-PR count, no CI result and no
-current blocker. Every one of those is re-proven from live evidence at the start of every task and
-lives only in the ephemeral state manifest and the current handoff, never here. This constraint is
-enforced by the durable-surface scan in `scripts/crypto_core/validate_agent_os_v2.py`.
+This file pins no current head, no tree hash, no branch, no PR number or state, no open-PR count, no
+CI or security-scan result, no review-thread state, no blocker, no completed-gate state, no
+authorization state, no runtime identity and no provider capacity reading. Every one of those is
+re-proven from live evidence at the start of every task and lives only in the ephemeral state
+manifest and the current handoff, never here.
+
+What enforces that is finite and stated exactly: the durable-surface scan in
+`scripts/crypto_core/validate_agent_os_v2.py` rejects a commit or tree hash token, a `PR #<n>` pin, a
+`main @ <hash>` pin, and an ASSIGNMENT to any field registered in `VOLATILE_STATE_FIELDS` in the
+canonical control plane. A durable surface may NAME a live-state field to explain it; it may never
+give one a value. Live state written as ordinary prose is not caught by that scan and is the
+independent semantic audit's responsibility — this file claims nothing more.
+
+## Capacity
+
+The capacity of one provider does not decide whether the project moves. When one authorized provider
+is exhausted and another has usable capacity, routing and scheduling change and dependency-safe work
+continues; a genuine stop requires every authorized provider to be exhausted, or every valuable safe
+task to be blocked on a real gate. Exhaustion never waives a gate, never downgrades a protected
+independent audit and never substitutes a cheaper lane for a required one. Capacity readings are
+ephemeral: they live in the state manifest and the handoff with explicit proof, `UNKNOWN` is a valid
+reading, and a guess never is. The routing rules are in the canonical control plane, section 10.
 
 ## Self-improvement
 

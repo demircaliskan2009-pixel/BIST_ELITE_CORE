@@ -107,6 +107,7 @@ Anything in this list that appears in a durable surface is a defect, and the dur
 - the current active blocker and the current next slice
 - current authorization state
 - current model and effort runtime evidence
+- current provider capacity readings and the selected capacity routing mode
 
 These live only in `STATE_MANIFEST_V1` and `CURRENT_HANDOFF_V2`, which are compiled per session from
 live proof and are not committed as doctrine.
@@ -121,3 +122,7 @@ live proof and are not committed as doctrine.
 - A snapshot of the repository taken elsewhere being read as current GitHub state — it never is.
 - A missing fact being filled with a plausible value instead of `UNKNOWN`.
 - A historical routing record being read as current routing authority.
+- A provider capacity reading being carried forward from an earlier session instead of re-proven, or
+  guessed instead of recorded as `UNKNOWN`.
+- One exhausted provider being treated as a project stop, or an available provider being treated as
+  satisfying a gate that required a different one.

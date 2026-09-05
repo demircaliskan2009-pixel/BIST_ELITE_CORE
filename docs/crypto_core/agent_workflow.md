@@ -286,6 +286,26 @@ and rollback. It is never sized by file count, and it is never split merely to m
 One open PR only. The integration-first slice sequence and its guardrails live in the addendum
 `docs/crypto_core/paper_trading_phase_map.md`; PRDV4 remains the product authority.
 
+### 15.1 Waiting on an unavailable gate
+
+A frozen head waiting only on a gate that cannot currently run is not a reason to idle, and not a
+reason to churn. The mechanics, all binding together:
+
+- The frozen head is immutable while waiting, and is never mutated merely to look busy.
+- No merge without its required gate.
+- One repository writer and one open PR remain absolute. A second PR is NOT opened while the frozen
+  PR is open.
+- Genuinely dependency-safe next work MAY be implemented on a prepared implementation branch, with
+  its base and provenance recorded, when the pending verdict cannot make that work semantically
+  invalid. Such a branch is prepared, not reviewable, until the preceding PR or gate resolves.
+- On resolution, re-prove ancestry, base and dependencies before opening a PR for prepared work. If
+  the preceding work was rejected or changed materially, the prepared work is stale and is never
+  silently promoted.
+- Never manufacture work to appear busy. An empty queue is an honest answer, and so is a genuine
+  stop.
+
+The full policy, including which lane picks up the continued work, is canonical section 10.4.
+
 ## 16. Forbidden scope
 
 Forbidden unless explicitly authorized and separately designed: live or private API; credentials,

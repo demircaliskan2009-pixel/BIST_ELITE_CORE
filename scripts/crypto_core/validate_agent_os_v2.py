@@ -13,7 +13,11 @@ STRUCTURE and BOUNDED LEXICAL CONTRACTS over the control-plane surfaces register
 * singularity and exact value of the canonical authority declarations;
 * the machine-readable ``ROUTE:`` routing table and its internal consistency;
 * the fixed marker blocks (effort enum, prompt-compiler fields, evidence classes, Work contract);
-* the durable-surface volatile-state scan over the exact declared set;
+* the durable-surface volatile-state scan over the exact declared set - three literal pin forms
+  plus an ASSIGNMENT to any field in the ``VOLATILE_STATE_FIELDS`` registry, and nothing else;
+* the ephemeral-manifest proof-pairing contract against the ``PROOF_PAIRED_MANIFEST_FIELDS``
+  registry, in both directions so schema and registry cannot drift apart;
+* an EXECUTABLE validator invocation inside the required CI job, not a mention of its path;
 * the model-agnostic scan over the exact declared set;
 * legacy retirement and CI wiring.
 
@@ -180,6 +184,33 @@ MODEL_TOKENS_CASE_INSENSITIVE = (
 MODEL_TOKENS_CASE_SENSITIVE = ("Sol", "Terra", "Luna", "Astra", "Ultra")
 MODEL_FAMILY_RE = re.compile(r"\bGPT-\d", re.IGNORECASE)
 
+PROVIDER_CAPACITY_STATES = ("NORMAL", "CONSERVE", "CRITICAL", "EXHAUSTED", "UNKNOWN")
+
+CAPACITY_ROUTING_MODES = (
+    "QUALITY_OPTIMAL",
+    "CLAUDE_FIRST_CONSERVATION",
+    "OPENAI_FIRST_CONSERVATION",
+    "CLAUDE_CONTINUITY",
+    "OPENAI_CONTINUITY",
+    "BOTH_EXHAUSTED_STOP",
+)
+
+# A provider ratio may be stated as a planning SLO. It may never be encoded as an enforced constraint.
+# This list is deliberately EXACT and CLOSED: it catches the machine-readable field forms, and English
+# paraphrase is the semantic auditor's job by design.
+PROHIBITED_RATIO_TOKENS = (
+    "PROVIDER_RATIO:",
+    "PROVIDER_RATIO=",
+    "RATIO_INVARIANT",
+    "REQUIRED_CLAUDE_RATIO",
+    "MIN_CLAUDE_RATIO",
+    "MAX_OPENAI_RATIO",
+    "CLAUDE_OPENAI_RATIO",
+    "ENFORCED_PROVIDER_RATIO",
+)
+
+VALIDATOR_REL = "scripts/crypto_core/validate_agent_os_v2.py"
+
 # Volatile current-state patterns forbidden in the ACTIVE region of a DURABLE surface.
 # The hex rule requires both a digit and a hex letter so ordinary words and plain numbers cannot
 # false-positive; a real commit hash effectively always satisfies it.
@@ -220,6 +251,22 @@ REQUIRED_CANONICAL_TOKENS = (
     "MODEL_CAPABILITY_REFRESH_GATE",
     "GITHUB_CONNECTOR_POLICY",
     "CLOSED_FROZEN",
+    "DURABLE_STATE_CLAIM_BOUNDARY",
+    "TASK_SPECIFIC_EFFORT_SELECTION",
+    "LOWEST_SAFE_HOST_SETTING",
+    "PROVIDER_CAPACITY_CONTINUATION_MODE_V1",
+    "PROVIDER_EXHAUSTION_IS_NOT_PROJECT_STOP",
+    "USAGE_AWARE_CAPACITY_ROUTER_V1",
+    "OPENAI_SHARED_AGENTIC_POOL",
+    "NONPROTECTED_PROVIDER_BIAS",
+    "WORK_ENVIRONMENT_VALUE",
+    "SHARED_OPENAI_POOL_COST",
+    "AUDIT_WAIT_CONTINUATION",
+    "PREPARED_NOT_REVIEWABLE_YET",
+    "STALE_INVALIDATED",
+    "CAPACITY_STOP",
+    "Work is not a separate free provider",
+    "There is no enforced provider ratio anywhere in this control plane.",
 )
 
 REQUIRED_CONTINUITY_INDEX_TOKENS = (
@@ -235,6 +282,10 @@ BLOCK_REQUIRED_ARTIFACTS = "REQUIRED_CONTROL_PLANE_ARTIFACTS"
 BLOCK_DURABLE_SURFACES = "DURABLE_SURFACES"
 BLOCK_MODEL_AGNOSTIC = "MODEL_AGNOSTIC_SURFACES"
 BLOCK_RETIRED_PATHS = "RETIRED_CONTROL_PLANE_PATHS"
+BLOCK_VOLATILE_FIELDS = "VOLATILE_STATE_FIELDS"
+BLOCK_PROOF_PAIRED = "PROOF_PAIRED_MANIFEST_FIELDS"
+BLOCK_CAPACITY_STATES = "PROVIDER_CAPACITY_STATES"
+BLOCK_ROUTING_MODES = "CAPACITY_ROUTING_MODES"
 BLOCK_ROUTING_MATRIX = "ROLE_ROUTING_MATRIX"
 BLOCK_EFFORT_ENUM = "REASONING_EFFORT_ENUM"
 BLOCK_PROMPT_FIELDS = "PROMPT_COMPILER_V2_1_FIELDS"
@@ -377,15 +428,26 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
     durable = parse_registry(canonical_text, BLOCK_DURABLE_SURFACES)
     agnostic = parse_registry(canonical_text, BLOCK_MODEL_AGNOSTIC)
     retired = parse_registry(canonical_text, BLOCK_RETIRED_PATHS)
+    volatile_pairs = parse_surface_registry(canonical_text, BLOCK_VOLATILE_FIELDS)
+    proof_paired = parse_registry(canonical_text, BLOCK_PROOF_PAIRED)
     for label, value in (
         (BLOCK_REQUIRED_ARTIFACTS, artifacts),
         (BLOCK_DURABLE_SURFACES, durable),
         (BLOCK_MODEL_AGNOSTIC, agnostic),
         (BLOCK_RETIRED_PATHS, retired),
+        (BLOCK_VOLATILE_FIELDS, volatile_pairs),
+        (BLOCK_PROOF_PAIRED, proof_paired),
     ):
         if value is None:
             failures.append(f"{CANONICAL}: {label} block missing or malformed")
-    if artifacts is None or durable is None or agnostic is None or retired is None:
+    if (
+        artifacts is None
+        or durable is None
+        or agnostic is None
+        or retired is None
+        or volatile_pairs is None
+        or proof_paired is None
+    ):
         return None
 
     surface_paths = [p for p, _ in surfaces]
@@ -395,6 +457,8 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
         (BLOCK_DURABLE_SURFACES, durable),
         (BLOCK_MODEL_AGNOSTIC, agnostic),
         (BLOCK_RETIRED_PATHS, retired),
+        (BLOCK_VOLATILE_FIELDS, [f for f, _c in volatile_pairs]),
+        (BLOCK_PROOF_PAIRED, proof_paired),
     ):
         if not values:
             failures.append(f"{CANONICAL}: {label} registry is empty")
@@ -416,6 +480,8 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
         "durable": durable,
         "agnostic": agnostic,
         "retired": retired,
+        "volatile_fields": [f for f, _c in volatile_pairs],
+        "proof_paired": proof_paired,
     }
 
 
@@ -619,6 +685,8 @@ def _check_fixed_blocks(ctx: dict[str, object], failures: list[str]) -> None:
         (BLOCK_PROMPT_FIELDS, list(PROMPT_COMPILER_FIELDS)),
         (BLOCK_EVIDENCE_CLASSES, list(MODEL_EVIDENCE_CLASSES)),
         (BLOCK_WORK_CONTRACT, list(WORK_RETURN_CONTRACT)),
+        (BLOCK_CAPACITY_STATES, list(PROVIDER_CAPACITY_STATES)),
+        (BLOCK_ROUTING_MODES, list(CAPACITY_ROUTING_MODES)),
     ):
         found = block_lines(canonical_text, name)
         if found is None:
@@ -646,10 +714,16 @@ def _check_single_prompt_template(root: Path, ctx: dict[str, object], failures: 
         )
 
 
+def _normalize_ws(text: str) -> str:
+    """Collapse runs of whitespace so a required phrase survives markdown line wrapping."""
+    return " ".join(text.split())
+
+
 def _check_required_tokens(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
     canonical_text: str = ctx["canonical_text"]  # type: ignore[assignment]
+    canonical_flat = _normalize_ws(canonical_text)
     for token in REQUIRED_CANONICAL_TOKENS:
-        if token not in canonical_text:
+        if _normalize_ws(token) not in canonical_flat:
             failures.append(f"{CANONICAL}: required contract token missing: {token}")
 
     index_path = "docs/crypto_core/continuity/CONTINUITY_INDEX.md"
@@ -674,8 +748,26 @@ def _check_marker_regions(root: Path, ctx: dict[str, object], failures: list[str
         failures.extend(marker_region_failures(path, text.splitlines()))
 
 
+def volatile_assignment_re(field: str) -> re.Pattern[str]:
+    """Match an ASSIGNMENT to a live-state field, but never a mere mention of its name.
+
+    A durable surface may NAME a field to explain it, and may register it with the `` :: ``
+    separator. It may not write ``FIELD: value`` or ``FIELD=value``. The negative lookahead after the
+    colon is what keeps the registry block itself legal, and optional trailing backticks or asterisks
+    let the rule survive ordinary markdown emphasis around the field name.
+    """
+    return re.compile(r"\b" + re.escape(field) + r"\b[`*]*\s*(?::(?!:)|=)\s*\S", re.IGNORECASE)
+
+
 def _check_durable_surfaces(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
-    """Scan exactly the declared DURABLE_SURFACES set for volatile current state."""
+    """Scan exactly the declared DURABLE_SURFACES set for volatile current state.
+
+    Enforced, and claimed, are exactly four things: a commit or tree hash token, a ``PR #n`` pin, a
+    ``main @ hash`` pin, and an assignment to a field registered in ``VOLATILE_STATE_FIELDS``.
+    Arbitrary English that conveys current state without any of those forms is NOT detected here and
+    is the independent semantic audit's responsibility - see agent_os_v2.md section 15.
+    """
+    field_patterns = [(field, volatile_assignment_re(field)) for field in ctx["volatile_fields"]]  # type: ignore[union-attr]
     for path in ctx["durable"]:  # type: ignore[union-attr]
         text = read_text(root, path)
         if text is None:
@@ -689,6 +781,12 @@ def _check_durable_surfaces(root: Path, ctx: dict[str, object], failures: list[s
                 failures.append(f"{path}:{lineno}: volatile open-PR count pinned in a durable surface")
             if MAIN_AT_RE.search(line):
                 failures.append(f"{path}:{lineno}: volatile main head pinned in a durable surface")
+            for field, pattern in field_patterns:
+                if pattern.search(line):
+                    failures.append(
+                        f"{path}:{lineno}: volatile state assigned in a durable surface: {field} "
+                        f"(durable doctrine may name a live-state field, never assign it)"
+                    )
 
 
 def _check_model_agnostic(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
@@ -730,9 +828,58 @@ def _check_prohibited_sizing(root: Path, ctx: dict[str, object], failures: list[
                     )
 
 
-def _check_continuity_fixtures(root: Path, failures: list[str]) -> None:
+def _check_capacity_contract(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
+    """Provider capacity is a routing input, never a durable pin and never an enforced ratio.
+
+    Capacity stays out of durable doctrine because its fields are registered volatile-state fields,
+    which the durable scan already rejects on assignment. What this check adds is the other half: the
+    vocabulary must admit UNKNOWN rather than force a fabricated reading, the continuity and stop
+    modes must exist, and a provider ratio may be stated as a planning SLO but never encoded as a
+    constraint an agent could be routed to satisfy.
+    """
+    surfaces: list[tuple[str, str]] = ctx["surfaces"]  # type: ignore[assignment]
+    for path, _role in surfaces:
+        text = read_text(root, path)
+        if text is None:
+            continue
+        for lineno, line in active_lines(text.splitlines()):
+            for token in PROHIBITED_RATIO_TOKENS:
+                if token in line:
+                    failures.append(
+                        f"{path}:{lineno}: provider ratio encoded as an enforced constraint: {token} "
+                        f"(a ratio is a planning SLO only, never a routing or correctness invariant)"
+                    )
+
+    canonical_text: str = ctx["canonical_text"]  # type: ignore[assignment]
+    states = block_lines(canonical_text, BLOCK_CAPACITY_STATES) or []
+    if "UNKNOWN" not in states:
+        failures.append(f"{CANONICAL}: provider capacity must admit UNKNOWN rather than a fabricated value")
+    modes = block_lines(canonical_text, BLOCK_ROUTING_MODES) or []
+    for required_mode in ("CLAUDE_CONTINUITY", "OPENAI_CONTINUITY", "BOTH_EXHAUSTED_STOP"):
+        if required_mode not in modes:
+            failures.append(f"{CANONICAL}: capacity routing mode missing: {required_mode}")
+
+    volatile_fields = {f.upper() for f in ctx["volatile_fields"]}  # type: ignore[union-attr]
+    for capacity_field in ("OPENAI_AGENTIC_CAPACITY", "CLAUDE_CAPACITY", "CAPACITY_ROUTING_MODE"):
+        if capacity_field not in volatile_fields:
+            failures.append(
+                f"{CANONICAL}: {capacity_field} must be registered in {BLOCK_VOLATILE_FIELDS} so a "
+                f"capacity reading can never be pinned into durable doctrine"
+            )
+
+
+def _check_continuity_fixtures(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
+    """Prove the manifest schema implements EXACTLY the registered proof-paired field set.
+
+    The check runs in BOTH directions. Every registered field must have a value property, an
+    ``_evidence`` companion, both in ``required``, and a conditional branch keyed on the companion.
+    Every conditional branch in the schema must correspond to a registered field. That is what stops
+    the registry and the schema drifting apart, which is the defect this replaced: a description that
+    promised universal proof pairing while several live fields carried no companion at all.
+    """
     schema_path = "docs/crypto_core/continuity/state_manifest.schema.json"
     example_path = "docs/crypto_core/continuity/state_manifest.example.json"
+    registered: list[str] = list(ctx["proof_paired"])  # type: ignore[arg-type]
 
     schema_raw = read_text(root, schema_path)
     if schema_raw is not None:
@@ -743,12 +890,48 @@ def _check_continuity_fixtures(root: Path, failures: list[str]) -> None:
         else:
             if schema.get("title") != "STATE_MANIFEST_V1":
                 failures.append(f"{schema_path}: title must be STATE_MANIFEST_V1")
-            required = schema.get("required") or []
-            for field in ("open_pr_count", "open_pr_count_evidence"):
-                if field not in required:
-                    failures.append(f"{schema_path}: {field} must be a required field")
-            effort_enum = ((schema.get("$defs") or {}).get("nullable_effort") or {}).get("enum") or []
-            if "ultra" in [str(v).lower() for v in effort_enum if v is not None]:
+
+            properties = schema.get("properties") or {}
+            required = set(schema.get("required") or [])
+            for field in registered:
+                evidence = f"{field}_evidence"
+                if field not in properties:
+                    failures.append(f"{schema_path}: registered proof-paired field has no property: {field}")
+                if evidence not in properties:
+                    failures.append(f"{schema_path}: registered proof-paired field has no companion: {evidence}")
+                elif (properties[evidence] or {}).get("$ref") != "#/$defs/evidence_status":
+                    failures.append(f"{schema_path}: {evidence} must reference the evidence_status enum")
+                for name in (field, evidence):
+                    if name not in required:
+                        failures.append(f"{schema_path}: {name} must be a required field")
+
+            branch_fields = set()
+            for branch in schema.get("allOf") or []:
+                keyed = list(((branch.get("if") or {}).get("properties") or {}).keys())
+                if len(keyed) != 1 or not keyed[0].endswith("_evidence"):
+                    failures.append(f"{schema_path}: proof-pair branch must key on exactly one _evidence field")
+                    continue
+                field = keyed[0][: -len("_evidence")]
+                branch_fields.add(field)
+                then_props = (branch.get("then") or {}).get("properties") or {}
+                else_props = (branch.get("else") or {}).get("properties") or {}
+                if field not in then_props:
+                    failures.append(f"{schema_path}: PROVEN branch for {field} does not constrain the value")
+                if (else_props.get(field) or {}).get("type") != "null":
+                    failures.append(f"{schema_path}: UNKNOWN branch for {field} must require exactly null")
+
+            missing = sorted(set(registered) - branch_fields)
+            extra = sorted(branch_fields - set(registered))
+            for field in missing:
+                failures.append(f"{schema_path}: no proof-pair constraint for registered field: {field}")
+            for field in extra:
+                failures.append(f"{schema_path}: proof-pair constraint for unregistered field: {field}")
+
+            effort = (schema.get("$defs") or {}).get("nullable_effort") or {}
+            effort_values: list[object] = list(effort.get("enum") or [])
+            for variant in effort.get("anyOf") or []:
+                effort_values.extend(variant.get("enum") or [])
+            if "ultra" in [str(v).lower() for v in effort_values if v is not None]:
                 failures.append(f"{schema_path}: Ultra must not appear in the reasoning-effort enum")
 
     example_raw = read_text(root, example_path)
@@ -762,14 +945,8 @@ def _check_continuity_fixtures(root: Path, failures: list[str]) -> None:
             return
         if example.get("schema") != "STATE_MANIFEST_V1":
             failures.append(f"{example_path}: schema field must be STATE_MANIFEST_V1")
-        for value_field, evidence_field in (
-            ("branch", "branch_evidence"),
-            ("base_sha", "base_sha_evidence"),
-            ("head_sha", "head_sha_evidence"),
-            ("pr_number", "pr_number_evidence"),
-            ("open_pr_count", "open_pr_count_evidence"),
-        ):
-            failures.extend(proof_pair_failures(example_path, example, value_field, evidence_field))
+        for field in registered:
+            failures.extend(proof_pair_failures(example_path, example, field, f"{field}_evidence"))
         authorization = example.get("authorization") or {}
         if authorization.get("merge_authorized") is not False:
             failures.append(
@@ -804,23 +981,12 @@ def proof_pair_failures(label: str, instance: dict, value_field: str, evidence_f
     return failures
 
 
-def _check_ci_wiring(root: Path, failures: list[str]) -> None:
-    """The validator must run inside the required CI job.
-
-    The job name is read from the YAML mapping structure (``jobs:`` then a two-space job key), not
-    from a prose heading, so renaming a comment or reordering steps cannot silently skip the gate.
-    """
-    ci_path = ".github/workflows/ci.yml"
-    text = read_text(root, ci_path)
-    if text is None:
-        failures.append(f"{ci_path}: missing")
-        return
-
-    lines = text.splitlines()
+def _workflow_job_bodies(lines: list[str]) -> dict[str, list[str]]:
+    """Split a workflow into {job name: body lines} using the YAML mapping shape, not prose."""
     job_key_re = re.compile(r"^  ([A-Za-z0-9_-]+):\s*$")
     in_jobs = False
     current_job: str | None = None
-    job_bodies: dict[str, list[str]] = {}
+    bodies: dict[str, list[str]] = {}
     for line in lines:
         if re.match(r"^jobs:\s*$", line):
             in_jobs = True
@@ -834,17 +1000,132 @@ def _check_ci_wiring(root: Path, failures: list[str]) -> None:
         match = job_key_re.match(line)
         if match:
             current_job = match.group(1)
-            job_bodies[current_job] = []
+            bodies[current_job] = []
             continue
         if current_job is not None:
-            job_bodies[current_job].append(line)
+            bodies[current_job].append(line)
+    return bodies
 
+
+def _job_steps(job_lines: list[str]) -> list[list[str]]:
+    """Split a job body into its ``steps:`` sequence items."""
+    steps_indent: int | None = None
+    start = 0
+    for i, line in enumerate(job_lines):
+        match = re.match(r"^(\s*)steps:\s*$", line)
+        if match:
+            steps_indent = len(match.group(1))
+            start = i + 1
+            break
+    if steps_indent is None:
+        return []
+
+    steps: list[list[str]] = []
+    current: list[str] | None = None
+    item_re = re.compile(r"^(\s*)- ")
+    for line in job_lines[start:]:
+        if not line.strip():
+            if current is not None:
+                current.append(line)
+            continue
+        indent = len(line) - len(line.lstrip())
+        if indent <= steps_indent:
+            break
+        match = item_re.match(line)
+        if match and len(match.group(1)) == indent:
+            if current is not None:
+                steps.append(current)
+            current = [line]
+        elif current is not None:
+            current.append(line)
+    if current is not None:
+        steps.append(current)
+    return steps
+
+
+def _step_key(step_lines: list[str], key: str) -> tuple[str | None, list[str] | None]:
+    """Return (inline value, block-scalar lines) for a top-level key of one step.
+
+    A commented-out line is never a key: ``# run: ...`` does not match the key pattern, so a disabled
+    step cannot satisfy a key requirement. Returns (None, None) when the key is absent.
+    """
+    dash = re.match(r"^(\s*)- (.*)$", step_lines[0])
+    if dash is None:
+        return (None, None)
+    key_indent = len(dash.group(1)) + 2
+    normalized = [" " * key_indent + dash.group(2)] + list(step_lines[1:])
+
+    key_re = re.compile(r"^\s*([A-Za-z0-9_-]+):\s*(.*)$")
+    for i, line in enumerate(normalized):
+        if not line.strip():
+            continue
+        if len(line) - len(line.lstrip()) != key_indent:
+            continue
+        match = key_re.match(line)
+        if match is None or match.group(1) != key:
+            continue
+        value = match.group(2).strip()
+        if value in ("|", ">", "|-", ">-", "|+", ">+"):
+            body: list[str] = []
+            for nxt in normalized[i + 1 :]:
+                if not nxt.strip():
+                    body.append("")
+                    continue
+                if len(nxt) - len(nxt.lstrip()) <= key_indent:
+                    break
+                body.append(nxt.strip())
+            return (None, body)
+        return (value, None)
+    return (None, None)
+
+
+def _step_is_disabled(step_lines: list[str]) -> bool:
+    inline, _block = _step_key(step_lines, "if")
+    if inline is None:
+        return False
+    return inline.strip().lower().replace(" ", "") in ("false", "${{false}}")
+
+
+def _check_ci_wiring(root: Path, failures: list[str]) -> None:
+    """Prove an EXECUTABLE validator invocation inside the required CI job.
+
+    A substring match over the job body is not enough: a YAML comment, a shell comment inside a
+    ``run:`` block, or an ``if: false`` step all contain the path while executing nothing. The gate
+    therefore has to be found as a real command line inside an enabled step.
+    """
+    ci_path = ".github/workflows/ci.yml"
+    text = read_text(root, ci_path)
+    if text is None:
+        failures.append(f"{ci_path}: missing")
+        return
+
+    job_bodies = _workflow_job_bodies(text.splitlines())
     if "tests" not in job_bodies:
         failures.append(f"{ci_path}: required job 'tests' not found in the jobs mapping")
         return
-    body = "\n".join(job_bodies["tests"])
-    if "scripts/crypto_core/validate_agent_os_v2.py" not in body:
-        failures.append(f"{ci_path}: the 'tests' job does not run scripts/crypto_core/validate_agent_os_v2.py")
+
+    steps = _job_steps(job_bodies["tests"])
+    if not steps:
+        failures.append(f"{ci_path}: the 'tests' job declares no steps")
+        return
+
+    for step in steps:
+        if _step_is_disabled(step):
+            continue
+        inline, block = _step_key(step, "run")
+        commands = [inline] if inline else list(block or [])
+        for command in commands:
+            stripped = (command or "").strip()
+            if not stripped or stripped.startswith("#"):
+                continue
+            if VALIDATOR_REL in stripped and "python" in stripped:
+                return
+
+    failures.append(
+        f"{ci_path}: no enabled step in the 'tests' job executes {VALIDATOR_REL}. "
+        f"A comment, a shell-commented line inside a run block, or an 'if: false' step does not "
+        f"satisfy the hard gate"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -870,7 +1151,8 @@ def collect_failures(root: Path) -> list[str]:
     _check_durable_surfaces(root, ctx, failures)
     _check_model_agnostic(root, ctx, failures)
     _check_prohibited_sizing(root, ctx, failures)
-    _check_continuity_fixtures(root, failures)
+    _check_capacity_contract(root, ctx, failures)
+    _check_continuity_fixtures(root, ctx, failures)
     _check_ci_wiring(root, failures)
     return failures
 

@@ -31,6 +31,11 @@ The controller decides whether research is needed, writes the research packet, a
 result. A research result never triggers implementation on its own: it flows back to the controller,
 which decides the next task through normal routing.
 
+The persistent-workspace lane draws on the SAME shared provider agentic pool as the bounded
+implementation lane and the protected frontier audit lane. It is not separate free capacity, so
+`WORK_ENVIRONMENT_VALUE` must justify `SHARED_OPENAI_POOL_COST` before it is opened, and when that
+pool is constrained or exhausted it is not dispatched as a workaround.
+
 Choose the cheapest lane that actually answers the question. A few straightforward official facts are
 answered by ordinary controller web research. The persistent-workspace lane is preferred only when
 multi-source synthesis, a persistent artifact, and browser or environment interaction together add

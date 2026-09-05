@@ -99,9 +99,29 @@ One strong prompt closes one entire coherent implementation contract, end to end
 - No semantic readiness judgement, no architecture decision, no design latitude.
 - Terminal states only: the answer is the proven state, or `UNKNOWN`.
 
+### 4.4a Host selector and capacity
+
+Two rules govern how heavy a frontier setting to ask for, and both are about honesty and capacity
+rather than taste.
+
+Record the operator UI choice VERBATIM as `HOST_SETTING_RAW`. Do not map a UI label onto the
+reasoning-effort enum unless that mapping is officially and provably established; where it is not,
+the effort field stays `UNKNOWN` rather than guessed.
+
+Ask for the LOWEST host reasoning level that safely proves the task (`LOWEST_SAFE_HOST_SETTING`,
+canonical section 4.4): a lower setting for a bounded read or narrow review; High or Extra High for
+serious broad review or architecture, chosen from actual complexity rather than from the subject
+sounding important; Extra High as the normal strong default for a protected whole-contract audit.
+Ultra only under canonical section 4.3, and never as the default for every protected audit — it
+spends shared pool capacity that later audits need.
+
 ### 4.5 Preparation profile (Work)
 
-- Read-only preparation, research and synthesis, under canonical section 7.
+- Read-only preparation, research and synthesis, under canonical section 7. Work draws on the SAME
+  shared provider pool as Codex and the protected frontier lane, so `WORK_ENVIRONMENT_VALUE` must
+  justify `SHARED_OPENAI_POOL_COST`: dispatch it for a persistent workspace, the cloud browser, large
+  source synthesis, artifact creation or multi-source current research — never for a simple status
+  question, a single-source question or a mechanical task.
 - Require the Work return contract verbatim, including the claim-to-source map and the explicit
   separation of verified, inferred and unknown.
 - State plainly in the prompt that a prepared packet is `WORK_PREPARED_NOT_AUTHORIZED`: it opens no

@@ -214,11 +214,24 @@ xhigh
 max
 <!-- REASONING_EFFORT_ENUM_END -->
 
-`low` — narrow mechanical or read-only classification. `medium` — focused bounded implementation or
-narrow review. `high` — nuanced review, ordinary architecture, moderate multi-step reasoning.
-`xhigh` — the normal heavy coding and agentic starting point, and the normal serious-analysis level
-for the frontier lane. `max` — capability-critical only, and only in a class listed by
-`MAX_EFFORT_CLASSES` (section 0), on a named family-specific trigger.
+`TASK_SPECIFIC_EFFORT_SELECTION` — effort is chosen per task from the work itself, never from the
+importance of the project and never from the size of the diff:
+
+- `low` — mechanical reads, bounded extraction, status-adjacent local work, narrow read-only
+  classification.
+- `medium` — bounded implementation, straightforward docs, config or tests, focused ordinary review.
+- `high` — normal serious coding, nontrivial review, ordinary architecture analysis, moderately
+  interacting invariants.
+- `xhigh` — heavy coherent implementation, complex repair, substantial cross-module work,
+  long-horizon implementation reasoning, major interacting invariants. This is the normal
+  serious-analysis level for the frontier lane.
+- `max` — named capability-critical IMPLEMENTATION or REPAIR only, under the T3B contract, and only
+  in a class listed by `MAX_EFFORT_CLASSES` (section 0).
+
+Do not choose effort by file count. Do not choose `xhigh` merely because the project is important.
+Do not choose `max` merely because a previous audit failed. Escalation requires a named reason
+recorded in the handoff. De-escalation is mandatory as soon as the REMAINING work becomes simpler:
+finish at the lowest level that still proves correctness, not at the level the task started in.
 
 Indiscriminate `max` is inefficient, not merely expensive: it lengthens reasoning and latency,
 multiplies tool calls and tokens, and invites scope exploration. Never `max` for status, polling,
@@ -298,6 +311,27 @@ investigation tracks exist; each track can be investigated read-only; the root a
 final synthesis; the expected quality or time benefit exceeds the coordination cost; and the runtime
 host actually exposes the mode. Default subagents are 0. Under Ultra the maximum is 2 read-only child
 tracks, with no child recursion and exactly one mutating agent.
+
+### 4.4 Host selector versus canonical effort
+
+A host UI selector is not the canonical effort, and the two are never conflated. The frontier host
+currently exposes labels such as Light, Medium, High, Extra High and Ultra. Record the actual
+operator choice VERBATIM in `HOST_SETTING_RAW`. Do NOT invent an API mapping between a UI label and
+the reasoning-effort enum unless one is officially and provably established; where no such mapping is
+proven, `HOST_SETTING_RAW` stands alone and the effort field stays `UNKNOWN` rather than guessed.
+
+`LOWEST_SAFE_HOST_SETTING` — select the lowest host reasoning level that safely proves the task:
+
+- bounded read or narrow review: a lower setting.
+- serious broad review or architecture: High or Extra High according to the actual complexity, not
+  according to the subject sounding important.
+- protected T4 whole-contract audit: Extra High / `xhigh` is the normal strong default. A stronger
+  orchestration mode is chosen only when it has specific expected value for that audit.
+- Ultra: only under section 4.3. Do NOT default every T4 audit to Ultra.
+
+This matters operationally, not just aesthetically: the frontier lane draws on the shared provider
+pool described in section 10.3, so over-selecting a heavier mode on routine work removes capacity
+from the protected audits that genuinely need it.
 
 ## 5. Prompt compiler
 
@@ -435,7 +469,7 @@ deterministic ladder once. Do NOT run the full suite after every edit. Do NOT re
 ceremony. A semantic failure is repaired, not rerun. An infrastructure failure may be retried only
 under a separate explicit justification and authorization.
 
-## 10. Throughput
+## 10. Throughput and provider capacity
 
 Progress is measured by semantic closure, not by PR count, file count or document count.
 
@@ -446,6 +480,130 @@ satisfy a throughput target, and never merge two unrelated contracts to satisfy 
 
 One repository writer at a time. One open PR at a time. No concurrent patching. No second branch and
 no worktree writer for the same objective.
+
+### 10.1 PROVIDER_CAPACITY_CONTINUATION_MODE_V1
+
+Canonical invariant:
+
+`PROVIDER_EXHAUSTION_IS_NOT_PROJECT_STOP`
+
+An exhausted provider changes ROUTING and SCHEDULING. It does not stop project development while
+another authorized provider has usable capacity and a real dependency-safe task exists. The converse
+error is equally forbidden: exhaustion never authorizes skipping a gate, downgrading a protected
+audit, or substituting a cheaper lane for a required one.
+
+Capacity is EPHEMERAL runtime state. Its permitted values are exactly:
+
+<!-- PROVIDER_CAPACITY_STATES_BEGIN -->
+NORMAL
+CONSERVE
+CRITICAL
+EXHAUSTED
+UNKNOWN
+<!-- PROVIDER_CAPACITY_STATES_END -->
+
+`UNKNOWN` is a first-class value. Never fabricate a capacity reading: with an unproven state, use the
+available host for the task if that host is itself proven, and preserve every required protected gate
+unchanged.
+
+An allowance, a reset time, a remaining percentage, a subscription tier or a quota number is NEVER
+written into durable doctrine. Those live only in the ephemeral state manifest and the current
+handoff, and the durable-surface scan (section 15) enforces that by rejecting an assignment to any
+capacity field listed in `VOLATILE_STATE_FIELDS`.
+
+### 10.2 USAGE_AWARE_CAPACITY_ROUTER_V1
+
+This is a decision rule, not a service. There is no scheduler, no daemon and no runtime router
+process; the controller applies it when routing a task.
+
+Routing modes:
+
+<!-- CAPACITY_ROUTING_MODES_BEGIN -->
+QUALITY_OPTIMAL
+CLAUDE_FIRST_CONSERVATION
+OPENAI_FIRST_CONSERVATION
+CLAUDE_CONTINUITY
+OPENAI_CONTINUITY
+BOTH_EXHAUSTED_STOP
+<!-- CAPACITY_ROUTING_MODES_END -->
+
+Selection:
+
+- OpenAI agentic capacity exhausted, Claude capacity available, so the mode is `CLAUDE_CONTINUITY`
+  and the project continues on nonprotected work.
+- Claude capacity exhausted, OpenAI agentic capacity available, so the mode is `OPENAI_CONTINUITY`
+  and the project continues on nonprotected work.
+- Both available, so route on capability, independence requirement, cost and remaining capacity:
+  `QUALITY_OPTIMAL` when neither side is constrained, and a conservation mode when one side is
+  `CONSERVE` or `CRITICAL`.
+- Both exhausted, so the mode is `BOTH_EXHAUSTED_STOP`, which is a genuine capacity stop
+  (section 10.5).
+
+A continuity mode changes WHICH lane does nonprotected work. It never changes which lane a protected
+gate requires (section 3.3), and it never converts an unavailable protected lane into a satisfied
+one.
+
+### 10.3 Shared provider pool and nonprotected bias
+
+`OPENAI_SHARED_AGENTIC_POOL` — Codex, the frontier audit lane and Work all consume the SAME OpenAI
+agentic capacity pool. Work is not a separate free provider, and treating it as one is a routing
+error. Every Work dispatch spends capacity that a protected audit may need later.
+
+`NONPROTECTED_PROVIDER_BIAS: CLAUDE_FIRST_WHERE_SAFE` — for nonprotected work that Claude can perform
+at the required quality, prefer Claude, so scarce shared frontier capacity is preserved for work that
+actually requires it. This is a CAPACITY and THROUGHPUT preference only. It never overrides task
+intent, audit independence, a protected Class-C requirement, safety or correctness.
+
+The resulting workload is expected to be materially Claude-heavy. As a rough planning SLO, roughly
+two to three times as much Claude work as OpenAI agentic work where safely routable. That figure is a
+capacity-balancing observation and nothing else: it is not a quota, not an invariant, not a
+correctness requirement, and not a target any task may be routed incorrectly to satisfy. There is no
+enforced provider ratio anywhere in this control plane.
+
+`WORK_ENVIRONMENT_VALUE` must justify `SHARED_OPENAI_POOL_COST`. Use Work when its environment
+provides material unique value: a persistent workspace, the cloud browser, large source synthesis,
+artifact creation, multi-source current research, or context-heavy preparation where persistence
+genuinely matters. Do NOT open Work for a simple status question, a simple repository read, a
+single-source question, a mechanical task, or anything the controller or a local lane can do
+efficiently at equal quality. When OpenAI capacity is `CONSERVE` or `CRITICAL`, Work becomes more
+selective; when it is `EXHAUSTED`, Work is not dispatched as a workaround at all.
+
+### 10.4 AUDIT_WAIT_CONTINUATION
+
+When one exact PR head is frozen waiting ONLY on a provider-specific gate that cannot currently run,
+capacity available elsewhere is used for real dependency-safe progress rather than for ceremony.
+
+Rules, all binding together:
+
+1. The frozen audited head is IMMUTABLE while waiting.
+2. No merge without its required gate.
+3. No mutation of the frozen PR merely to look busy.
+4. One repository writer remains absolute.
+5. One open PR remains the default.
+6. A second PR is NOT opened while the frozen PR is open.
+7. A genuinely dependency-safe next semantic closure MAY be implemented on a PREPARED
+   IMPLEMENTATION BRANCH when: the work cannot be made semantically invalid by the pending verdict;
+   its base and provenance are explicitly recorded; no second PR is opened; only one writer mutates;
+   and the work is real implementation rather than artifact theater.
+8. Such a branch is `PREPARED_NOT_REVIEWABLE_YET` until the preceding PR or gate resolves.
+9. On resolution, re-prove ancestry, base and dependencies BEFORE opening a PR for prepared work.
+10. If the preceding work is rejected or materially changes, dependent prepared work is
+    `STALE_INVALIDATED` and is never silently promoted.
+11. Truly independent base-safe implementation may continue where it is genuinely independent.
+12. Never create speculative work solely to appear busy. An empty queue is an honest answer.
+
+This capability applies only AFTER this control plane is itself accepted. While the setup PR is open,
+available capacity finishes the setup rather than starting product work early.
+
+### 10.5 CAPACITY_STOP
+
+A project-level capacity stop is legitimate only when either every authorized provider is
+`EXHAUSTED`, or all currently valuable safe work is genuinely blocked on a provider-specific, human,
+external or dependency gate and no dependency-safe implementation, repair, architecture or bounded
+task exists.
+
+Do not invent meaningless tasks to avoid a legitimate stop, and do not idle merely because the quota
+of one provider ended.
 
 ## 11. DAILY_BATCH_MANIFEST
 
@@ -554,11 +712,32 @@ Ephemeral state carries at least: base/head/tree; branch and PR; CI state; open-
 threads when relevant; the task boundary; completed evidence; authorization state; blockers; the next
 action; invalidations; and model/runtime evidence.
 
-Durable doctrine must NOT pin live current state. The durable-surface scan in
-`scripts/crypto_core/validate_agent_os_v2.py` enforces this over the exact `DURABLE_SURFACES`
-registry in section 20 — no more and no less. Structurally bounded `HISTORICAL_RECORD` regions and
-declared `EXAMPLE_ONLY` fixtures are the only exceptions, and they are marker-bounded rather than
-inferred from prose proximity.
+Durable doctrine must NOT pin live current state.
+
+`DURABLE_STATE_CLAIM_BOUNDARY` — the deterministic scan in
+`scripts/crypto_core/validate_agent_os_v2.py` runs over the exact `DURABLE_SURFACES` registry in
+section 20 and rejects exactly four things, no more and no less:
+
+1. a commit or tree hash token (7 to 40 hex characters containing at least one digit and at least
+   one hex letter);
+2. a `PR #<n>` pin;
+3. a `main @ <hash>` pin;
+4. an ASSIGNMENT to any field name in the `VOLATILE_STATE_FIELDS` registry in section 20 — that is,
+   the field name followed by a single `:` or an `=` and a value on the same line.
+
+Rule 4 is the general mechanism and rules 1 to 3 are literal-form shorthands for the two hardest
+cases. The distinction that makes rule 4 deterministic: durable doctrine may freely NAME a live-state
+field in order to explain it, and may list it in a registry with the ` :: ` separator, but may never
+ASSIGN it a value. Naming is documentation; assigning is a pin.
+
+What this scan does NOT do, and what no surface may claim it does: detect an arbitrary English
+sentence that conveys current state without using a registered field name or a literal pin form.
+"CI was green on the last run" is prose, and prose is the INDEPENDENT SEMANTIC AUDIT's
+responsibility, not the scanner's. The registry exists so the guarantee is finite and true rather
+than broad and false.
+
+Structurally bounded `HISTORICAL_RECORD` regions and declared `EXAMPLE_ONLY` fixtures are the only
+exemptions, and they are marker-bounded rather than inferred from prose proximity.
 
 ### 15.1 FRESH_CHAT_BOOTSTRAP
 
@@ -743,6 +922,80 @@ cannot assert task-family ownership per model. Model names remain legal inside s
 - docs/crypto_core_current_state.md
 <!-- MODEL_AGNOSTIC_SURFACES_END -->
 
+`VOLATILE_STATE_FIELDS` is the exact field vocabulary the durable-surface scan rejects when a durable
+surface ASSIGNS one a value (section 15). A durable surface may NAME any of these fields to explain
+them, and may list them here with the ` :: ` separator, but may never write `FIELD: value` or
+`FIELD=value` in an active region. This registry IS the guarantee: the scan enforces exactly these
+names plus the three literal pin forms in section 15, and claims nothing beyond them. Format:
+`- <FIELD> :: <CLASS>`.
+
+<!-- VOLATILE_STATE_FIELDS_BEGIN -->
+- CURRENT_BRANCH :: BRANCH_REF
+- BRANCH_REF :: BRANCH_REF
+- HEAD_REF :: BRANCH_REF
+- BASE_SHA :: COMMIT_IDENTITY
+- HEAD_SHA :: COMMIT_IDENTITY
+- MAIN_SHA :: COMMIT_IDENTITY
+- CURRENT_HEAD :: COMMIT_IDENTITY
+- MERGE_COMMIT :: COMMIT_IDENTITY
+- BASE_TREE :: TREE_IDENTITY
+- HEAD_TREE :: TREE_IDENTITY
+- CURRENT_TREE :: TREE_IDENTITY
+- PR_NUMBER :: PR_IDENTITY
+- PR_STATE :: PR_IDENTITY
+- CURRENT_PR :: PR_IDENTITY
+- OPEN_PR_COUNT :: OPEN_PR_STATE
+- CI_STATE :: CI_STATUS
+- CI_STATUS :: CI_STATUS
+- CURRENT_CI_STATE :: CI_STATUS
+- CHECKS_STATE :: CI_STATUS
+- CODEQL_STATE :: CI_STATUS
+- REVIEW_THREADS :: REVIEW_STATE
+- UNRESOLVED_THREADS :: REVIEW_STATE
+- REVIEW_THREADS_UNRESOLVED :: REVIEW_STATE
+- CURRENT_BLOCKER :: BLOCKER_STATE
+- ACTIVE_BLOCKER :: BLOCKER_STATE
+- BLOCKER_STATE :: BLOCKER_STATE
+- COMPLETED_GATES :: GATE_STATE
+- GATE_STATE :: GATE_STATE
+- MERGE_AUTHORIZED :: AUTHORIZATION_STATE
+- MERGE_AUTHORIZATION :: AUTHORIZATION_STATE
+- AUTHORIZATION_STATE :: AUTHORIZATION_STATE
+- MODEL_ACTUAL :: RUNTIME_MODEL_STATE
+- MODEL_EFFORT_ACTUAL :: RUNTIME_MODEL_STATE
+- OBSERVED_EFFORT :: RUNTIME_MODEL_STATE
+- MODEL_FALLBACK :: RUNTIME_MODEL_STATE
+- OPENAI_AGENTIC_CAPACITY :: PROVIDER_CAPACITY
+- CLAUDE_CAPACITY :: PROVIDER_CAPACITY
+- CAPACITY_ROUTING_MODE :: PROVIDER_CAPACITY
+<!-- VOLATILE_STATE_FIELDS_END -->
+
+`PROOF_PAIRED_MANIFEST_FIELDS` is the exact set of ephemeral-manifest fields that MUST be
+proof-paired: a concrete value with `PROVEN`, or exactly `null` with `UNKNOWN`. A value without its
+evidence field, a value contradicting its evidence field, or a missing half of the pair is invalid.
+`docs/crypto_core/continuity/state_manifest.schema.json` must implement exactly this set — no field
+here without a schema constraint, and no schema proof-pair constraint that is not registered here.
+Static descriptive metadata is deliberately NOT paired: an evidence field for a task boundary or for
+a session narrative would be ceremony, not proof.
+
+<!-- PROOF_PAIRED_MANIFEST_FIELDS_BEGIN -->
+- branch
+- base_sha
+- base_tree
+- head_sha
+- head_tree
+- pr_number
+- pr_state
+- open_pr_count
+- ci_state
+- review_threads_unresolved
+- completed_gates
+- blockers
+- openai_agentic_capacity
+- claude_capacity
+- capacity_routing_mode
+<!-- PROOF_PAIRED_MANIFEST_FIELDS_END -->
+
 `RETIRED_CONTROL_PLANE_PATHS` is the exact set of obsolete control-plane paths that must NOT exist in
 the working tree. They encoded a Copilot-era execution model, scheduler/deployment/live-shaped skill
 names and a competing prompt regime, none of which is active.
@@ -799,6 +1052,13 @@ This control plane does not claim, and no surface subordinate to it may claim: p
 edge; live readiness; capital safety; Stage-4 completion; machine-time provenance; readiness or
 connector promotion; that a deterministic validator understands arbitrary English; that any lane
 substitutes for the protected independent audit; or zero literal model-memory loss.
+
+It additionally does not claim: that provider capacity, quota or allowance is known without proof;
+that Work is a capacity pool separate from the rest of the OpenAI agentic pool; that any provider
+ratio is a correctness requirement rather than a planning observation; that an exhausted provider
+satisfies, waives or downgrades a gate that lane was required for; or that the durable-surface scan
+detects live state expressed as ordinary prose rather than as a registered field assignment or a
+literal pin form.
 
 <!-- HISTORICAL_RECORD_BEGIN -->
 ## 22. Historical record

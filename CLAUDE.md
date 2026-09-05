@@ -75,6 +75,27 @@ effort value and is never normalized to `max` (canonical section 4.3).
 - **Verification.** Run each deterministic gate once per unchanged evidence key. No generic
   re-verification loops and no ceremonial reruns.
 
+## Capacity and effort
+
+Claude is the preferred lane for NONPROTECTED work that it can do at the required quality
+(`NONPROTECTED_PROVIDER_BIAS: CLAUDE_FIRST_WHERE_SAFE`, canonical section 10.3). The reason is
+capacity, not superiority: Codex, the protected frontier audit lane and Work all draw on one shared
+OpenAI agentic pool, so spending that pool on work Claude can do safely removes capacity from the
+audits that genuinely require it. This preference never overrides task intent, audit independence, a
+protected Class-C requirement, safety or correctness, and there is no provider ratio to satisfy.
+
+When the shared OpenAI pool is exhausted and Claude capacity remains, the mode is
+`CLAUDE_CONTINUITY`: nonprotected work continues here. It does NOT mean a Claude session may satisfy
+a gate that requires the protected frontier lane — that specific gate waits, and only that gate
+(`ASTRA_REQUIRED_BUT_UNAVAILABLE`, canonical sections 3.3 and 10.1). Report the capacity reading
+honestly in the handoff, or `UNKNOWN`; never guess one, and never write one into a durable file.
+
+Effort is chosen per task from the work itself, per canonical section 3.2 — `low` for mechanical
+reads, `medium` for bounded implementation and focused review, `high` for normal serious coding and
+ordinary architecture, `xhigh` for heavy coherent implementation and complex repair, `max` only on a
+named capability-critical trigger. Not by file count, not because the project matters, and not
+because a previous audit failed. De-escalate as soon as the remaining work gets simpler.
+
 ## Controller intake
 
 Consume the controller packet first — pinned state, exact read set, symbol map, exact allowed files,

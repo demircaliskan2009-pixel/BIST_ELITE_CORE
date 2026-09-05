@@ -40,6 +40,19 @@ honest evidence class from section 4.2, plus `SETUP_REQUESTED` / `SETUP_ACTUAL` 
 `SETUP_GAPS`. A required exact-model mismatch stops. Never claim the quality of a model that did not
 run.
 
+## Shared pool discipline
+
+This host, the protected frontier audit lane and Work all consume the SAME provider agentic pool
+(`OPENAI_SHARED_AGENTIC_POOL`, canonical section 10.3). Work is not separate free capacity. Every
+dispatch here spends capacity a protected audit may need later, so nonprotected work that another
+authorized lane can do at equal quality is preferably routed there.
+
+That is a capacity preference only. It never overrides task intent, audit independence, a protected
+Class-C requirement, safety or correctness, and it never lets an exhausted pool satisfy, waive or
+downgrade a gate. When the pool is exhausted, the protected gate waits
+(`ASTRA_REQUIRED_BUT_UNAVAILABLE`) while nonprotected work continues elsewhere — the project does not
+stop (`PROVIDER_EXHAUSTION_IS_NOT_PROJECT_STOP`).
+
 ## Setup load contract
 
 Read, and prove you read: `AGENTS.md`, `docs/crypto_core/agent_os_v2.md`, this skill, the controller

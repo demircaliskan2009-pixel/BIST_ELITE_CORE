@@ -2,27 +2,46 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://crypto-core.local/schemas/state_manifest_v1.json",
   "title": "STATE_MANIFEST_V1",
-  "description": "Ephemeral per-session state manifest for crypto_core (CONTEXT_CONTINUITY_PROTOCOL_V2 layer 3, docs/crypto_core/agent_os_v2.md section 15). Compiled from live proof at the start of a session. NEVER committed as durable doctrine and never read as current truth by a later session. Every live-state field is proof-paired: a value is present only when its evidence field says PROVEN, and is exactly null when the evidence field says UNKNOWN. A missing value or a missing evidence field is invalid. UNKNOWN is a first-class, expected outcome - it is never replaced by a plausible guess.",
+  "description": "Ephemeral per-session state manifest for crypto_core (CONTEXT_CONTINUITY_PROTOCOL_V2 layer 3, docs/crypto_core/agent_os_v2.md section 15). Compiled from live proof at the start of a session. NEVER committed as durable doctrine and never read as current truth by a later session. Every field listed in the PROOF_PAIRED_MANIFEST_FIELDS registry (agent_os_v2.md section 20) is proof-paired: the value is present only when its _evidence companion says PROVEN, and is exactly null when the companion says UNKNOWN. A missing value, a missing companion, a value with UNKNOWN, or null with PROVEN are all invalid. Fields NOT in that registry are static or descriptive metadata and are deliberately not paired - the schema claims proof pairing for exactly the registered set and for nothing else. UNKNOWN is a first-class, expected outcome; it is never replaced by a plausible guess.",
   "type": "object",
   "additionalProperties": false,
   "required": [
-    "schema",
-    "repo",
-    "compiled_at_evidence",
-    "branch",
-    "branch_evidence",
+    "authorization",
     "base_sha",
     "base_sha_evidence",
+    "base_tree",
+    "base_tree_evidence",
+    "blockers",
+    "blockers_evidence",
+    "branch",
+    "branch_evidence",
+    "capacity_routing_mode",
+    "capacity_routing_mode_evidence",
+    "ci_state",
+    "ci_state_evidence",
+    "claude_capacity",
+    "claude_capacity_evidence",
+    "compiled_at_evidence",
+    "completed_gates",
+    "completed_gates_evidence",
     "head_sha",
     "head_sha_evidence",
-    "pr_number",
-    "pr_number_evidence",
+    "head_tree",
+    "head_tree_evidence",
+    "next_safe_action",
     "open_pr_count",
     "open_pr_count_evidence",
-    "task_boundary",
-    "authorization",
-    "blockers",
-    "next_safe_action"
+    "openai_agentic_capacity",
+    "openai_agentic_capacity_evidence",
+    "pr_number",
+    "pr_number_evidence",
+    "pr_state",
+    "pr_state_evidence",
+    "repo",
+    "review_threads_unresolved",
+    "review_threads_unresolved_evidence",
+    "schema",
+    "task_boundary"
   ],
   "properties": {
     "$comment": {
@@ -35,63 +54,12 @@
     "repo": {
       "type": "string",
       "minLength": 1,
-      "description": "owner/name of the repository this manifest describes."
+      "description": "owner/name of the repository."
     },
     "compiled_at_evidence": {
       "type": "string",
       "minLength": 1,
-      "description": "How this manifest was compiled, e.g. the exact git/gh commands run. Free text, but it must describe real executed proof, never an assumption."
-    },
-    "branch": {
-      "type": ["string", "null"]
-    },
-    "branch_evidence": {
-      "$ref": "#/$defs/evidence_status"
-    },
-    "base_sha": {
-      "$ref": "#/$defs/nullable_sha"
-    },
-    "base_sha_evidence": {
-      "$ref": "#/$defs/evidence_status"
-    },
-    "base_tree": {
-      "$ref": "#/$defs/nullable_sha"
-    },
-    "head_sha": {
-      "$ref": "#/$defs/nullable_sha"
-    },
-    "head_sha_evidence": {
-      "$ref": "#/$defs/evidence_status"
-    },
-    "head_tree": {
-      "$ref": "#/$defs/nullable_sha"
-    },
-    "pr_number": {
-      "type": ["integer", "null"],
-      "minimum": 1
-    },
-    "pr_number_evidence": {
-      "$ref": "#/$defs/evidence_status"
-    },
-    "pr_state": {
-      "type": ["string", "null"],
-      "enum": ["OPEN", "CLOSED", "MERGED", "DRAFT", null]
-    },
-    "open_pr_count": {
-      "type": ["integer", "null"],
-      "minimum": 0
-    },
-    "open_pr_count_evidence": {
-      "$ref": "#/$defs/evidence_status"
-    },
-    "ci_state": {
-      "type": ["string", "null"],
-      "enum": ["GREEN", "FAILING", "PENDING", "NO_CHECKS", null],
-      "description": "PENDING, NO_CHECKS and null all mean NOT_READY. Only GREEN is a terminal pass."
-    },
-    "review_threads_unresolved": {
-      "type": ["integer", "null"],
-      "minimum": 0
+      "description": "How this manifest was compiled, for example the exact git and gh commands run. Free text, but it must describe real executed proof, never an assumption."
     },
     "task_boundary": {
       "type": "string",
@@ -101,7 +69,10 @@
     "authorization": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["mutation_scope", "merge_authorized"],
+      "required": [
+        "mutation_scope",
+        "merge_authorized"
+      ],
       "properties": {
         "mutation_scope": {
           "type": "string",
@@ -116,76 +87,35 @@
         }
       }
     },
-    "completed_gates": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["gate", "evidence_key", "result"],
-        "properties": {
-          "gate": {
-            "type": "string",
-            "minLength": 1
-          },
-          "evidence_key": {
-            "type": "string",
-            "minLength": 1,
-            "description": "VALIDATION_BUDGET reuse key: head/tree + relevant path set + command/config + environment/toolchain + evidence id. A gate may be reused only while this key is unchanged."
-          },
-          "result": {
-            "type": "string",
-            "enum": ["PASS", "FAIL", "UNKNOWN"]
-          }
-        }
-      }
-    },
-    "blockers": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "additionalProperties": false,
-        "required": ["id", "severity", "state", "repair_count"],
-        "properties": {
-          "id": {
-            "type": "string",
-            "minLength": 1,
-            "description": "Stable blocker identity. It survives renaming and re-phasing; renaming a blocker never resets repair_count (agent_os_v2.md section 13)."
-          },
-          "severity": {
-            "type": "string",
-            "enum": ["P1", "P2", "P3"]
-          },
-          "state": {
-            "type": "string",
-            "enum": ["OPEN", "REPAIRED_PENDING_REAUDIT", "CLOSED", "FIXED_POINT_NOT_REACHED"]
-          },
-          "repair_count": {
-            "type": "integer",
-            "minimum": 0
-          }
-        }
-      }
-    },
     "invalidations": {
       "type": "array",
       "items": {
         "type": "string"
       },
-      "description": "Facts that stopped being true during this session and must not be reused."
+      "description": "Facts that stopped being true during this session and must not be reused. This is a session narrative rather than an external fact, so it is deliberately NOT proof-paired: pairing it would be ceremony, not proof."
     },
     "model_runtime": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Additive runtime-proof block (agent_os_v2.md section 4). Optional so that a manifest compiled by a host that exposes no runtime metadata stays valid instead of forcing an invented value. Ultra is recorded in capability_mode ONLY and is never written into an effort field.",
+      "description": "Runtime-proof block (agent_os_v2.md section 4). Optional so a manifest compiled by a host that exposes no runtime metadata stays valid instead of forcing an invented value. It carries its own evidence class in model_evidence_source rather than a separate _evidence companion. Ultra is recorded in capability_mode ONLY and is never written into an effort field, and host_setting_raw stores the operator UI choice verbatim without inventing an API mapping.",
       "properties": {
         "model_id": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "model_requested": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "model_actual": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "requested_effort": {
           "$ref": "#/$defs/nullable_effort"
@@ -194,22 +124,37 @@
           "$ref": "#/$defs/nullable_effort"
         },
         "capability_mode": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "host_setting_raw": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "environment": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "client_version": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         },
         "model_evidence_source": {
           "$ref": "#/$defs/model_evidence_class"
         },
         "model_fallback": {
-          "type": ["string", "null"]
+          "type": [
+            "string",
+            "null"
+          ]
         }
       }
     },
@@ -217,12 +162,331 @@
       "type": "string",
       "minLength": 1,
       "description": "Exactly one concrete next action."
+    },
+    "branch": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Current checked-out branch."
+    },
+    "branch_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "base_sha": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Base commit this work was cut from."
+    },
+    "base_sha_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "base_tree": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Tree of the base commit."
+    },
+    "base_tree_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "head_sha": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Current head commit."
+    },
+    "head_sha_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "head_tree": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Tree of the current head commit."
+    },
+    "head_tree_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "pr_number": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Current pull-request number."
+    },
+    "pr_number_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "pr_state": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "OPEN",
+            "CLOSED",
+            "MERGED",
+            "DRAFT"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Current PR state."
+    },
+    "pr_state_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "open_pr_count": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Live open-PR count for the repository."
+    },
+    "open_pr_count_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "ci_state": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "GREEN",
+            "FAILING",
+            "PENDING",
+            "NO_CHECKS"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Terminal CI verdict. PENDING and NO_CHECKS both mean NOT_READY; only GREEN is a pass."
+    },
+    "ci_state_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "review_threads_unresolved": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Count of currently unresolved review threads."
+    },
+    "review_threads_unresolved_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "completed_gates": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "gate",
+              "evidence_key",
+              "result"
+            ],
+            "properties": {
+              "gate": {
+                "type": "string",
+                "minLength": 1
+              },
+              "evidence_key": {
+                "type": "string",
+                "minLength": 1,
+                "description": "VALIDATION_BUDGET reuse key: head/tree + relevant path set + command/config + environment/toolchain + evidence id. A gate may be reused only while this key is unchanged."
+              },
+              "result": {
+                "type": "string",
+                "enum": [
+                  "PASS",
+                  "FAIL",
+                  "UNKNOWN"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Deterministic gates already proven at the current evidence key. An empty array means 'proven that none are complete', which is why it is proof-paired rather than merely optional."
+    },
+    "completed_gates_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "blockers": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "severity",
+              "state",
+              "repair_count"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Stable blocker identity. It survives renaming and re-phasing; renaming a blocker never resets repair_count (agent_os_v2.md section 13)."
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "P1",
+                  "P2",
+                  "P3"
+                ]
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "OPEN",
+                  "REPAIRED_PENDING_REAUDIT",
+                  "CLOSED",
+                  "FIXED_POINT_NOT_REACHED"
+                ]
+              },
+              "repair_count": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Current blocker set. An empty array means 'proven that none are open', not 'not checked'."
+    },
+    "blockers_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "openai_agentic_capacity": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "NORMAL",
+            "CONSERVE",
+            "CRITICAL",
+            "EXHAUSTED"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Shared OpenAI agentic pool state (Codex, the frontier audit lane and Work all draw on it). The conceptual UNKNOWN state is encoded structurally as null plus UNKNOWN evidence, never as a literal string, so a capacity fact has exactly one representation."
+    },
+    "openai_agentic_capacity_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "claude_capacity": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "NORMAL",
+            "CONSERVE",
+            "CRITICAL",
+            "EXHAUSTED"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Claude capacity state. UNKNOWN is encoded as null plus UNKNOWN evidence."
+    },
+    "claude_capacity_evidence": {
+      "$ref": "#/$defs/evidence_status"
+    },
+    "capacity_routing_mode": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "QUALITY_OPTIMAL",
+            "CLAUDE_FIRST_CONSERVATION",
+            "OPENAI_FIRST_CONSERVATION",
+            "CLAUDE_CONTINUITY",
+            "OPENAI_CONTINUITY",
+            "BOTH_EXHAUSTED_STOP"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Routing mode selected by USAGE_AWARE_CAPACITY_ROUTER_V1 (agent_os_v2.md section 10.2)."
+    },
+    "capacity_routing_mode_evidence": {
+      "$ref": "#/$defs/evidence_status"
     }
   },
   "$defs": {
     "evidence_status": {
       "type": "string",
-      "enum": ["PROVEN", "UNKNOWN"]
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
     },
     "model_evidence_class": {
       "type": "string",
@@ -235,84 +499,609 @@
       ]
     },
     "nullable_effort": {
-      "type": ["string", "null"],
-      "enum": ["low", "medium", "high", "xhigh", "max", null],
-      "description": "The reasoning-effort enum is exactly low|medium|high|xhigh|max. Ultra is not a member."
-    },
-    "nullable_sha": {
-      "type": ["string", "null"],
-      "pattern": "^[0-9a-f]{40}$"
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "The reasoning-effort enum is exactly low|medium|high|xhigh|max. Ultra is not a member; it is a capability mode recorded in capability_mode."
     }
   },
   "allOf": [
     {
       "if": {
-        "required": ["branch_evidence"],
-        "properties": {"branch_evidence": {"const": "PROVEN"}}
+        "required": [
+          "branch_evidence"
+        ],
+        "properties": {
+          "branch_evidence": {
+            "const": "PROVEN"
+          }
+        }
       },
       "then": {
-        "required": ["branch"],
-        "properties": {"branch": {"type": "string", "minLength": 1}}
+        "required": [
+          "branch"
+        ],
+        "properties": {
+          "branch": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
       },
       "else": {
-        "required": ["branch"],
-        "properties": {"branch": {"type": "null"}}
+        "required": [
+          "branch"
+        ],
+        "properties": {
+          "branch": {
+            "type": "null"
+          }
+        }
       }
     },
     {
       "if": {
-        "required": ["base_sha_evidence"],
-        "properties": {"base_sha_evidence": {"const": "PROVEN"}}
+        "required": [
+          "base_sha_evidence"
+        ],
+        "properties": {
+          "base_sha_evidence": {
+            "const": "PROVEN"
+          }
+        }
       },
       "then": {
-        "required": ["base_sha"],
-        "properties": {"base_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}
+        "required": [
+          "base_sha"
+        ],
+        "properties": {
+          "base_sha": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        }
       },
       "else": {
-        "required": ["base_sha"],
-        "properties": {"base_sha": {"type": "null"}}
+        "required": [
+          "base_sha"
+        ],
+        "properties": {
+          "base_sha": {
+            "type": "null"
+          }
+        }
       }
     },
     {
       "if": {
-        "required": ["head_sha_evidence"],
-        "properties": {"head_sha_evidence": {"const": "PROVEN"}}
+        "required": [
+          "base_tree_evidence"
+        ],
+        "properties": {
+          "base_tree_evidence": {
+            "const": "PROVEN"
+          }
+        }
       },
       "then": {
-        "required": ["head_sha"],
-        "properties": {"head_sha": {"type": "string", "pattern": "^[0-9a-f]{40}$"}}
+        "required": [
+          "base_tree"
+        ],
+        "properties": {
+          "base_tree": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        }
       },
       "else": {
-        "required": ["head_sha"],
-        "properties": {"head_sha": {"type": "null"}}
+        "required": [
+          "base_tree"
+        ],
+        "properties": {
+          "base_tree": {
+            "type": "null"
+          }
+        }
       }
     },
     {
       "if": {
-        "required": ["pr_number_evidence"],
-        "properties": {"pr_number_evidence": {"const": "PROVEN"}}
+        "required": [
+          "head_sha_evidence"
+        ],
+        "properties": {
+          "head_sha_evidence": {
+            "const": "PROVEN"
+          }
+        }
       },
       "then": {
-        "required": ["pr_number"],
-        "properties": {"pr_number": {"type": "integer", "minimum": 1}}
+        "required": [
+          "head_sha"
+        ],
+        "properties": {
+          "head_sha": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        }
       },
       "else": {
-        "required": ["pr_number"],
-        "properties": {"pr_number": {"type": "null"}}
+        "required": [
+          "head_sha"
+        ],
+        "properties": {
+          "head_sha": {
+            "type": "null"
+          }
+        }
       }
     },
     {
       "if": {
-        "required": ["open_pr_count_evidence"],
-        "properties": {"open_pr_count_evidence": {"const": "PROVEN"}}
+        "required": [
+          "head_tree_evidence"
+        ],
+        "properties": {
+          "head_tree_evidence": {
+            "const": "PROVEN"
+          }
+        }
       },
       "then": {
-        "required": ["open_pr_count"],
-        "properties": {"open_pr_count": {"type": "integer", "minimum": 0}}
+        "required": [
+          "head_tree"
+        ],
+        "properties": {
+          "head_tree": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{40}$"
+          }
+        }
       },
       "else": {
-        "required": ["open_pr_count"],
-        "properties": {"open_pr_count": {"type": "null"}}
+        "required": [
+          "head_tree"
+        ],
+        "properties": {
+          "head_tree": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "pr_number_evidence"
+        ],
+        "properties": {
+          "pr_number_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "pr_number"
+        ],
+        "properties": {
+          "pr_number": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "pr_number"
+        ],
+        "properties": {
+          "pr_number": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "pr_state_evidence"
+        ],
+        "properties": {
+          "pr_state_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "pr_state"
+        ],
+        "properties": {
+          "pr_state": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "CLOSED",
+              "MERGED",
+              "DRAFT"
+            ]
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "pr_state"
+        ],
+        "properties": {
+          "pr_state": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "open_pr_count_evidence"
+        ],
+        "properties": {
+          "open_pr_count_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "open_pr_count"
+        ],
+        "properties": {
+          "open_pr_count": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "open_pr_count"
+        ],
+        "properties": {
+          "open_pr_count": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "ci_state_evidence"
+        ],
+        "properties": {
+          "ci_state_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "ci_state"
+        ],
+        "properties": {
+          "ci_state": {
+            "type": "string",
+            "enum": [
+              "GREEN",
+              "FAILING",
+              "PENDING",
+              "NO_CHECKS"
+            ]
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "ci_state"
+        ],
+        "properties": {
+          "ci_state": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "review_threads_unresolved_evidence"
+        ],
+        "properties": {
+          "review_threads_unresolved_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "review_threads_unresolved"
+        ],
+        "properties": {
+          "review_threads_unresolved": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "review_threads_unresolved"
+        ],
+        "properties": {
+          "review_threads_unresolved": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "completed_gates_evidence"
+        ],
+        "properties": {
+          "completed_gates_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "completed_gates"
+        ],
+        "properties": {
+          "completed_gates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "gate",
+                "evidence_key",
+                "result"
+              ],
+              "properties": {
+                "gate": {
+                  "type": "string",
+                  "minLength": 1
+                },
+                "evidence_key": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "VALIDATION_BUDGET reuse key: head/tree + relevant path set + command/config + environment/toolchain + evidence id. A gate may be reused only while this key is unchanged."
+                },
+                "result": {
+                  "type": "string",
+                  "enum": [
+                    "PASS",
+                    "FAIL",
+                    "UNKNOWN"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "completed_gates"
+        ],
+        "properties": {
+          "completed_gates": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "blockers_evidence"
+        ],
+        "properties": {
+          "blockers_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "blockers"
+        ],
+        "properties": {
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "severity",
+                "state",
+                "repair_count"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "minLength": 1,
+                  "description": "Stable blocker identity. It survives renaming and re-phasing; renaming a blocker never resets repair_count (agent_os_v2.md section 13)."
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "P1",
+                    "P2",
+                    "P3"
+                  ]
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "OPEN",
+                    "REPAIRED_PENDING_REAUDIT",
+                    "CLOSED",
+                    "FIXED_POINT_NOT_REACHED"
+                  ]
+                },
+                "repair_count": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "blockers"
+        ],
+        "properties": {
+          "blockers": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "openai_agentic_capacity_evidence"
+        ],
+        "properties": {
+          "openai_agentic_capacity_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "openai_agentic_capacity"
+        ],
+        "properties": {
+          "openai_agentic_capacity": {
+            "type": "string",
+            "enum": [
+              "NORMAL",
+              "CONSERVE",
+              "CRITICAL",
+              "EXHAUSTED"
+            ]
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "openai_agentic_capacity"
+        ],
+        "properties": {
+          "openai_agentic_capacity": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "claude_capacity_evidence"
+        ],
+        "properties": {
+          "claude_capacity_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "claude_capacity"
+        ],
+        "properties": {
+          "claude_capacity": {
+            "type": "string",
+            "enum": [
+              "NORMAL",
+              "CONSERVE",
+              "CRITICAL",
+              "EXHAUSTED"
+            ]
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "claude_capacity"
+        ],
+        "properties": {
+          "claude_capacity": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "capacity_routing_mode_evidence"
+        ],
+        "properties": {
+          "capacity_routing_mode_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "capacity_routing_mode"
+        ],
+        "properties": {
+          "capacity_routing_mode": {
+            "type": "string",
+            "enum": [
+              "QUALITY_OPTIMAL",
+              "CLAUDE_FIRST_CONSERVATION",
+              "OPENAI_FIRST_CONSERVATION",
+              "CLAUDE_CONTINUITY",
+              "OPENAI_CONTINUITY",
+              "BOTH_EXHAUSTED_STOP"
+            ]
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "capacity_routing_mode"
+        ],
+        "properties": {
+          "capacity_routing_mode": {
+            "type": "null"
+          }
+        }
       }
     }
   ]

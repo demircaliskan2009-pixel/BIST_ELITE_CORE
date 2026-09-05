@@ -78,6 +78,27 @@ Temporary availability, quota and billing state for any vendor is transient oper
 recorded in a handoff for that task only. It never changes a durable role and is never written into
 this playbook.
 
+## 5a. Provider capacity economy
+
+Capacity is a routing input, not a licence. Three rules follow from the pools being shared and
+finite (canonical section 10):
+
+- The bounded Codex lane, the protected frontier audit lane and Work all draw on ONE provider pool.
+  Work is not separate free capacity, and treating it as such is the most expensive routing error
+  available. Prefer another authorized lane for nonprotected work of equal required quality, so the
+  shared pool stays available for protected audits.
+- Exhaustion of one provider changes routing and scheduling, never a gate. Nonprotected work
+  continues on the provider that still has capacity; a gate whose lane is unavailable waits, alone. A
+  genuine project stop needs every authorized provider exhausted, or every valuable safe task blocked
+  on a real gate.
+- A capacity reading is ephemeral and proof-bound. Record it in the handoff and the state manifest
+  with its evidence, use `UNKNOWN` when it is not proven, and never write an allowance, reset time,
+  percentage or quota number into a durable file.
+
+Ask for the lowest host setting and the lowest effort that safely prove the task. Over-selecting a
+heavier mode on routine work is not caution: it removes capacity from the work that genuinely needs
+it.
+
 ## 6. Prompt-count economy
 
 Few prompts, maximum completed safe work. One coherent contract is one implementation prompt, then an

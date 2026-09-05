@@ -49,6 +49,14 @@ TASK_FAMILY_AUTHORITY_REF: canonical section 3. EFFORT_AUTHORITY_REF: canonical 
 
 ## Boundaries
 
+- Capacity: prefer this lane for nonprotected work it can do at the required quality, because the
+  frontier audit lane, the bounded Codex lane and Work share one provider pool (canonical section
+  10.3). An exhausted provider changes routing, never a gate: with the shared pool exhausted the mode
+  is `CLAUDE_CONTINUITY` for nonprotected work, while a gate that requires the protected frontier
+  lane still waits. Record the capacity reading, or `UNKNOWN`, in the handoff; never guess it and
+  never write it into a durable file.
+- Effort is chosen per task from the work itself (canonical section 3.2), never from file count,
+  project importance or a previous audit failure. De-escalate when the remaining work gets simpler.
 - One repository writer at a time; one open PR; maximum safe work per prompt, then stop at the gate.
 - Subagents default 0, maximum 2 read-only for genuinely independent substantial tracks, no
   recursion, only the primary session mutates. A same-model self-review is

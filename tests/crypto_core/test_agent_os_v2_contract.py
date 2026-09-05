@@ -122,6 +122,78 @@ ORACLE_WORK_RETURN_CONTRACT = [
     "NEXT_SAFE_ACTION",
 ]
 
+# Every live-state field the durable-surface scan rejects on ASSIGNMENT. Written out literally here
+# so the registry and the scanner cannot quietly shrink together.
+ORACLE_VOLATILE_STATE_FIELDS = {
+    "CURRENT_BRANCH",
+    "BRANCH_REF",
+    "HEAD_REF",
+    "BASE_SHA",
+    "HEAD_SHA",
+    "MAIN_SHA",
+    "CURRENT_HEAD",
+    "MERGE_COMMIT",
+    "BASE_TREE",
+    "HEAD_TREE",
+    "CURRENT_TREE",
+    "PR_NUMBER",
+    "PR_STATE",
+    "CURRENT_PR",
+    "OPEN_PR_COUNT",
+    "CI_STATE",
+    "CI_STATUS",
+    "CURRENT_CI_STATE",
+    "CHECKS_STATE",
+    "CODEQL_STATE",
+    "REVIEW_THREADS",
+    "UNRESOLVED_THREADS",
+    "REVIEW_THREADS_UNRESOLVED",
+    "CURRENT_BLOCKER",
+    "ACTIVE_BLOCKER",
+    "BLOCKER_STATE",
+    "COMPLETED_GATES",
+    "GATE_STATE",
+    "MERGE_AUTHORIZED",
+    "MERGE_AUTHORIZATION",
+    "AUTHORIZATION_STATE",
+    "MODEL_ACTUAL",
+    "MODEL_EFFORT_ACTUAL",
+    "OBSERVED_EFFORT",
+    "MODEL_FALLBACK",
+    "OPENAI_AGENTIC_CAPACITY",
+    "CLAUDE_CAPACITY",
+    "CAPACITY_ROUTING_MODE",
+}
+
+ORACLE_PROOF_PAIRED_MANIFEST_FIELDS = [
+    "branch",
+    "base_sha",
+    "base_tree",
+    "head_sha",
+    "head_tree",
+    "pr_number",
+    "pr_state",
+    "open_pr_count",
+    "ci_state",
+    "review_threads_unresolved",
+    "completed_gates",
+    "blockers",
+    "openai_agentic_capacity",
+    "claude_capacity",
+    "capacity_routing_mode",
+]
+
+ORACLE_PROVIDER_CAPACITY_STATES = ["NORMAL", "CONSERVE", "CRITICAL", "EXHAUSTED", "UNKNOWN"]
+
+ORACLE_CAPACITY_ROUTING_MODES = [
+    "QUALITY_OPTIMAL",
+    "CLAUDE_FIRST_CONSERVATION",
+    "OPENAI_FIRST_CONSERVATION",
+    "CLAUDE_CONTINUITY",
+    "OPENAI_CONTINUITY",
+    "BOTH_EXHAUSTED_STOP",
+]
+
 ORACLE_FRONTIER_LANE = "GPT-6 Astra"
 ORACLE_FRONTIER_MODEL_ID = "gpt-6-astra"
 
@@ -762,15 +834,22 @@ def test_blocker_escape_contract_tokens_must_be_present(sandbox: Path, token: st
     assert_rejects(sandbox, "required contract token missing: {}".format(token))
 
 
+def _proven_variant(prop: dict) -> dict:
+    """Return the non-null branch of a proof-paired property."""
+    for variant in prop.get("anyOf") or []:
+        if variant.get("type") != "null":
+            return variant
+    return prop
+
+
 def test_blocker_state_vocabulary_carries_the_fixed_point() -> None:
     schema = json.loads(
         (REPO_ROOT / "docs/crypto_core/continuity/state_manifest.schema.json").read_text(encoding="utf-8-sig")
     )
-    states = schema["properties"]["blockers"]["items"]["properties"]["state"]["enum"]
-    assert "FIXED_POINT_NOT_REACHED" in states
-    repair_count = schema["properties"]["blockers"]["items"]["properties"]["repair_count"]
-    assert repair_count["type"] == "integer"
-    assert "id" in schema["properties"]["blockers"]["items"]["required"]
+    item = _proven_variant(schema["properties"]["blockers"])["items"]
+    assert "FIXED_POINT_NOT_REACHED" in item["properties"]["state"]["enum"]
+    assert item["properties"]["repair_count"]["type"] == "integer"
+    assert "id" in item["required"]
 
 
 # ---------------------------------------------------------------------------
@@ -893,7 +972,7 @@ def test_validator_runs_in_the_required_ci_job(sandbox: Path) -> None:
         "      - name: Agent OS control-plane contract\n        run: python scripts/crypto_core/validate_agent_os_v2.py\n\n",
         "",
     )
-    assert_rejects(sandbox, "does not run scripts/crypto_core/validate_agent_os_v2.py")
+    assert_rejects(sandbox, "no enabled step in the 'tests' job executes")
 
 
 def test_ci_job_detection_is_structural_not_positional(sandbox: Path) -> None:
@@ -911,7 +990,7 @@ def test_ci_job_detection_is_structural_not_positional(sandbox: Path) -> None:
         1,
     )
     write(sandbox, ".github/workflows/ci.yml", text)
-    assert_rejects(sandbox, "does not run scripts/crypto_core/validate_agent_os_v2.py")
+    assert_rejects(sandbox, "no enabled step in the 'tests' job executes")
 
 
 # ---------------------------------------------------------------------------
@@ -989,3 +1068,426 @@ def test_setup_audit_keeps_network_probes_informational() -> None:
     open_pr_section = body.split("OPEN PRS (informational, best-effort)", 1)[1].split("Write-Section", 1)[0]
     assert "deterministicFailures" not in open_pr_section
     assert "OPEN_PR_COUNT=UNKNOWN" in open_pr_section
+
+
+# ---------------------------------------------------------------------------
+# Durable-state claim boundary (the guarantee must be true, not merely broad)
+# ---------------------------------------------------------------------------
+
+
+def test_volatile_state_field_registry_matches_the_oracle() -> None:
+    registry = validator.parse_surface_registry(
+        (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig"), "VOLATILE_STATE_FIELDS"
+    )
+    assert registry is not None
+    assert {field for field, _cls in registry} == ORACLE_VOLATILE_STATE_FIELDS
+
+
+@pytest.mark.parametrize(
+    "injected",
+    [
+        "CURRENT_CI_STATE=GREEN",
+        "CI_STATE: GREEN",
+        "CODEQL_STATE: SUCCESS",
+        "CURRENT_BRANCH=chore/example-scope-pr1",
+        "PR_STATE: OPEN",
+        "HEAD_TREE: 6acb8d8da82d69fedc03494f47ebafb5d2888ecb",
+        "UNRESOLVED_THREADS = 3",
+        "CURRENT_BLOCKER: secondary-metrics",
+        "COMPLETED_GATES: full_suite",
+        "MERGE_AUTHORIZED: true",
+        "MODEL_ACTUAL: claude-opus-5",
+        "OPENAI_AGENTIC_CAPACITY: EXHAUSTED",
+        "CAPACITY_ROUTING_MODE: CLAUDE_CONTINUITY",
+    ],
+)
+def test_every_declared_volatile_state_class_is_rejected(sandbox: Path, injected: str) -> None:
+    """The advertised guarantee must hold for every class the control plane claims, not just hashes."""
+    text = read(sandbox, "CLAUDE.md")
+    write(sandbox, "CLAUDE.md", injected + "\n\n" + text)
+    found = failures(sandbox)
+    assert found, "a declared volatile-state class was accepted: {}".format(injected)
+
+
+def test_naming_a_volatile_field_without_assigning_it_stays_legal(sandbox: Path) -> None:
+    """Durable doctrine must still be able to EXPLAIN a live-state field."""
+    text = read(sandbox, "CLAUDE.md")
+    write(
+        sandbox,
+        "CLAUDE.md",
+        "The handoff reports `CI_STATE`, `PR_STATE`, `OPEN_PR_COUNT` and `CLAUDE_CAPACITY` as proven "
+        "facts, or as UNKNOWN.\n\n" + text,
+    )
+    assert failures(sandbox) == []
+
+
+def test_registry_entry_separator_is_not_read_as_an_assignment(sandbox: Path) -> None:
+    """The registry lists field names with ' :: ', which must not trip the scanner it feeds."""
+    assert failures(sandbox) == []
+    canonical = read(sandbox, CANONICAL)
+    assert "- CI_STATE :: CI_STATUS" in canonical
+
+
+def test_shrinking_the_volatile_registry_is_visible_to_the_oracle(sandbox: Path) -> None:
+    """Dropping a field from the registry silences the scanner, so the oracle must catch the drift."""
+    patch(sandbox, CANONICAL, "- CURRENT_CI_STATE :: CI_STATUS\n", "")
+    text = read(sandbox, "CLAUDE.md")
+    write(sandbox, "CLAUDE.md", "CURRENT_CI_STATE=GREEN\n\n" + text)
+
+    # The validator alone is now blind to this specific field.
+    assert not any("CURRENT_CI_STATE" in f for f in failures(sandbox))
+
+    # The independent oracle is not.
+    registry = validator.parse_surface_registry(read(sandbox, CANONICAL), "VOLATILE_STATE_FIELDS")
+    assert {field for field, _cls in (registry or [])} != ORACLE_VOLATILE_STATE_FIELDS
+
+
+def test_control_plane_does_not_overclaim_the_scan(sandbox: Path) -> None:
+    canonical = read(sandbox, CANONICAL)
+    assert "DURABLE_STATE_CLAIM_BOUNDARY" in canonical
+    flat = " ".join(canonical.split())
+    assert "What this scan does NOT do" in flat
+    patch(sandbox, CANONICAL, "DURABLE_STATE_CLAIM_BOUNDARY", "DURABLE_STATE_TOTAL_GUARANTEE")
+    assert_rejects(sandbox, "required contract token missing: DURABLE_STATE_CLAIM_BOUNDARY")
+
+
+# ---------------------------------------------------------------------------
+# Manifest proof pairing (schema and registry may not drift apart)
+# ---------------------------------------------------------------------------
+
+
+def test_proof_paired_registry_matches_the_oracle() -> None:
+    registry = validator.parse_registry(
+        (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig"), "PROOF_PAIRED_MANIFEST_FIELDS"
+    )
+    assert registry == ORACLE_PROOF_PAIRED_MANIFEST_FIELDS
+
+
+@pytest.mark.parametrize("field", ORACLE_PROOF_PAIRED_MANIFEST_FIELDS)
+def test_every_registered_field_is_proof_paired_in_the_schema(field: str) -> None:
+    schema = json.loads(
+        (REPO_ROOT / "docs/crypto_core/continuity/state_manifest.schema.json").read_text(encoding="utf-8-sig")
+    )
+    evidence = "{}_evidence".format(field)
+    assert field in schema["properties"], field
+    assert evidence in schema["properties"], evidence
+    assert field in schema["required"]
+    assert evidence in schema["required"]
+    branches = [branch for branch in schema["allOf"] if evidence in (branch.get("if") or {}).get("properties", {})]
+    assert len(branches) == 1, "expected exactly one proof-pair branch for {}".format(field)
+    assert branches[0]["else"]["properties"][field]["type"] == "null"
+
+
+@pytest.mark.parametrize("field", ["ci_state", "pr_state", "head_tree", "review_threads_unresolved"])
+def test_dropping_a_proof_pair_constraint_is_rejected(sandbox: Path, field: str) -> None:
+    """The exact reported defect: a live field carrying a value with no evidence relation."""
+    schema_path = "docs/crypto_core/continuity/state_manifest.schema.json"
+    schema = json.loads(read(sandbox, schema_path))
+    evidence = "{}_evidence".format(field)
+    schema["allOf"] = [b for b in schema["allOf"] if evidence not in b["if"]["properties"]]
+    write(sandbox, schema_path, json.dumps(schema, indent=2))
+    assert_rejects(sandbox, "no proof-pair constraint for registered field: {}".format(field))
+
+
+def test_dropping_an_evidence_companion_is_rejected(sandbox: Path) -> None:
+    schema_path = "docs/crypto_core/continuity/state_manifest.schema.json"
+    schema = json.loads(read(sandbox, schema_path))
+    del schema["properties"]["ci_state_evidence"]
+    schema["required"] = [r for r in schema["required"] if r != "ci_state_evidence"]
+    write(sandbox, schema_path, json.dumps(schema, indent=2))
+    assert_rejects(sandbox, "has no companion: ci_state_evidence")
+
+
+def test_proof_pair_constraint_for_an_unregistered_field_is_rejected(sandbox: Path) -> None:
+    """Drift in the other direction: the schema constraining something the registry never claimed."""
+    schema_path = "docs/crypto_core/continuity/state_manifest.schema.json"
+    schema = json.loads(read(sandbox, schema_path))
+    schema["allOf"].append(
+        {
+            "if": {"required": ["invented_evidence"], "properties": {"invented_evidence": {"const": "PROVEN"}}},
+            "then": {"required": ["invented"], "properties": {"invented": {"type": "string"}}},
+            "else": {"required": ["invented"], "properties": {"invented": {"type": "null"}}},
+        }
+    )
+    write(sandbox, schema_path, json.dumps(schema, indent=2))
+    assert_rejects(sandbox, "proof-pair constraint for unregistered field: invented")
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "evidence"),
+    [
+        ("ci_state", "GREEN", "UNKNOWN"),
+        ("pr_state", "OPEN", "UNKNOWN"),
+        ("head_tree", None, "PROVEN"),
+        ("review_threads_unresolved", 0, "UNKNOWN"),
+        ("openai_agentic_capacity", "NORMAL", "UNKNOWN"),
+    ],
+)
+def test_fixture_proof_pair_violations_are_rejected(sandbox: Path, field, value, evidence) -> None:
+    example_path = "docs/crypto_core/continuity/state_manifest.example.json"
+    example = json.loads(read(sandbox, example_path))
+    example[field] = value
+    example["{}_evidence".format(field)] = evidence
+    write(sandbox, example_path, json.dumps(example, indent=2))
+    found = failures(sandbox)
+    assert found, "an unpaired live-state fact was accepted for {}".format(field)
+
+
+def test_capacity_unknown_has_exactly_one_representation() -> None:
+    """UNKNOWN is null plus UNKNOWN evidence, never also a literal enum member."""
+    schema = json.loads(
+        (REPO_ROOT / "docs/crypto_core/continuity/state_manifest.schema.json").read_text(encoding="utf-8-sig")
+    )
+    for field in ("openai_agentic_capacity", "claude_capacity"):
+        variant = _proven_variant(schema["properties"][field])
+        assert "UNKNOWN" not in variant["enum"], field
+        assert set(variant["enum"]) == {"NORMAL", "CONSERVE", "CRITICAL", "EXHAUSTED"}
+
+
+# ---------------------------------------------------------------------------
+# CI wiring must be an executable step, not a mention
+# ---------------------------------------------------------------------------
+
+_REAL_CI_STEP = (
+    "      - name: Agent OS control-plane contract\n        run: python scripts/crypto_core/validate_agent_os_v2.py\n\n"
+)
+
+
+@pytest.mark.parametrize(
+    ("label", "replacement"),
+    [
+        (
+            "yaml comment only",
+            "      # - name: Agent OS control-plane contract\n"
+            "      #   run: python scripts/crypto_core/validate_agent_os_v2.py\n\n",
+        ),
+        (
+            "shell comment inside a run block",
+            "      - name: Agent OS control-plane contract\n"
+            "        run: |\n"
+            "          # python scripts/crypto_core/validate_agent_os_v2.py\n"
+            "          echo skipped\n\n",
+        ),
+        (
+            "step disabled with if false",
+            "      - name: Agent OS control-plane contract\n"
+            "        if: false\n"
+            "        run: python scripts/crypto_core/validate_agent_os_v2.py\n\n",
+        ),
+        (
+            "path only in the step name",
+            "      - name: scripts/crypto_core/validate_agent_os_v2.py\n        run: echo skipped\n\n",
+        ),
+        ("step removed entirely", ""),
+    ],
+)
+def test_ci_gate_requires_an_executable_step(sandbox: Path, label: str, replacement: str) -> None:
+    """The exact reported defect: the path present without the gate actually running."""
+    patch(sandbox, ".github/workflows/ci.yml", _REAL_CI_STEP, replacement)
+    assert_rejects(sandbox, "no enabled step in the 'tests' job executes")
+    del label
+
+
+def test_ci_gate_accepts_the_real_step_in_a_block_scalar(sandbox: Path) -> None:
+    """A legitimate multi-line run block must still satisfy the gate."""
+    patch(
+        sandbox,
+        ".github/workflows/ci.yml",
+        _REAL_CI_STEP,
+        "      - name: Agent OS control-plane contract\n"
+        "        run: |\n"
+        "          set -euo pipefail\n"
+        "          # the control-plane contract is a hard gate\n"
+        "          python scripts/crypto_core/validate_agent_os_v2.py\n\n",
+    )
+    assert failures(sandbox) == []
+
+
+# ---------------------------------------------------------------------------
+# Provider capacity: continuation, shared pool, and no enforced ratio
+# ---------------------------------------------------------------------------
+
+
+def test_capacity_vocabularies_match_the_oracle() -> None:
+    canonical_text = (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig")
+    assert validator.block_lines(canonical_text, "PROVIDER_CAPACITY_STATES") == ORACLE_PROVIDER_CAPACITY_STATES
+    assert validator.block_lines(canonical_text, "CAPACITY_ROUTING_MODES") == ORACLE_CAPACITY_ROUTING_MODES
+
+
+@pytest.mark.parametrize(
+    ("scenario", "mode"),
+    [
+        ("openai exhausted, claude available", "CLAUDE_CONTINUITY"),
+        ("claude exhausted, openai available", "OPENAI_CONTINUITY"),
+        ("both exhausted", "BOTH_EXHAUSTED_STOP"),
+    ],
+)
+def test_each_capacity_scenario_has_a_declared_mode(scenario: str, mode: str) -> None:
+    """Continuation and stop are contract, not improvisation."""
+    canonical_text = (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig")
+    assert mode in (validator.block_lines(canonical_text, "CAPACITY_ROUTING_MODES") or [])
+    del scenario
+
+
+@pytest.mark.parametrize("mode", ["CLAUDE_CONTINUITY", "OPENAI_CONTINUITY", "BOTH_EXHAUSTED_STOP"])
+def test_removing_a_capacity_mode_is_rejected(sandbox: Path, mode: str) -> None:
+    text = read(sandbox, CANONICAL)
+    begin = "<!-- CAPACITY_ROUTING_MODES_BEGIN -->"
+    end = "<!-- CAPACITY_ROUTING_MODES_END -->"
+    head, _, tail = text.partition(begin)
+    body, _, rest = tail.partition(end)
+    assert mode + "\n" in body
+    write(sandbox, CANONICAL, head + begin + body.replace(mode + "\n", "", 1) + end + rest)
+    assert_rejects(sandbox, "CAPACITY_ROUTING_MODES block must be exactly")
+
+
+def test_one_exhausted_provider_is_not_a_project_stop(sandbox: Path) -> None:
+    canonical = read(sandbox, CANONICAL)
+    assert "PROVIDER_EXHAUSTION_IS_NOT_PROJECT_STOP" in canonical
+    write(
+        sandbox,
+        CANONICAL,
+        canonical.replace("PROVIDER_EXHAUSTION_IS_NOT_PROJECT_STOP", "PROVIDER_EXHAUSTION_STOPS_PROJECT"),
+    )
+    assert_rejects(sandbox, "required contract token missing: PROVIDER_EXHAUSTION_IS_NOT_PROJECT_STOP")
+
+
+def test_unavailable_frontier_lane_blocks_only_its_own_gate() -> None:
+    """An exhausted shared pool blocks the protected gate; it never satisfies or waives it, and it
+    never converts into a project-level stop."""
+    canonical_text = (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig")
+    flat = " ".join(canonical_text.split())
+    assert "ASTRA_REQUIRED_BUT_UNAVAILABLE" in flat
+    assert "PROVIDER_EXHAUSTION_IS_NOT_PROJECT_STOP" in flat
+    assert "it never converts an unavailable protected lane into a satisfied one" in flat
+    # The protected lane is still exclusively routed, whatever the capacity state.
+    rows = validator.block_lines(canonical_text, "ROLE_ROUTING_MATRIX") or []
+    for row in rows:
+        if row.startswith("ROUTE: T4 "):
+            assert ORACLE_FRONTIER_LANE in row
+
+
+def test_work_is_not_represented_as_separate_free_capacity(sandbox: Path) -> None:
+    canonical = read(sandbox, CANONICAL)
+    flat = " ".join(canonical.split())
+    assert "OPENAI_SHARED_AGENTIC_POOL" in flat
+    assert "Work is not a separate free provider" in flat
+    assert "WORK_ENVIRONMENT_VALUE" in flat
+    assert "SHARED_OPENAI_POOL_COST" in flat
+    patch(sandbox, CANONICAL, "Work is not a separate free provider", "Work is its own free pool")
+    assert_rejects(sandbox, "required contract token missing: Work is not a separate free provider")
+
+
+@pytest.mark.parametrize(
+    "injected",
+    [
+        "PROVIDER_RATIO: 3:1",
+        "REQUIRED_CLAUDE_RATIO=3",
+        "MIN_CLAUDE_RATIO: 2",
+        "RATIO_INVARIANT",
+        "ENFORCED_PROVIDER_RATIO",
+    ],
+)
+def test_hard_provider_ratio_is_rejected(sandbox: Path, injected: str) -> None:
+    """A ratio may be a planning SLO. It may never be an enforced routing or correctness constraint."""
+    text = read(sandbox, "CLAUDE.md")
+    write(sandbox, "CLAUDE.md", injected + "\n\n" + text)
+    found = failures(sandbox)
+    assert found, "a hard provider ratio was accepted: {}".format(injected)
+
+
+def test_ratio_is_documented_as_an_slo_only() -> None:
+    flat = " ".join((REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig").split())
+    assert "not a quota, not an invariant" in flat
+    assert "There is no enforced provider ratio anywhere in this control plane." in flat
+
+
+def test_capacity_reading_cannot_be_pinned_into_durable_doctrine() -> None:
+    registry = validator.parse_surface_registry(
+        (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig"), "VOLATILE_STATE_FIELDS"
+    )
+    fields = {field for field, _cls in (registry or [])}
+    for capacity_field in ("OPENAI_AGENTIC_CAPACITY", "CLAUDE_CAPACITY", "CAPACITY_ROUTING_MODE"):
+        assert capacity_field in fields
+
+
+def test_capacity_field_removed_from_the_volatile_registry_is_rejected(sandbox: Path) -> None:
+    patch(sandbox, CANONICAL, "- CLAUDE_CAPACITY :: PROVIDER_CAPACITY\n", "")
+    assert_rejects(sandbox, "CLAUDE_CAPACITY must be registered in VOLATILE_STATE_FIELDS")
+
+
+# ---------------------------------------------------------------------------
+# Task-specific effort and host selection
+# ---------------------------------------------------------------------------
+
+
+def test_effort_selection_stays_task_specific_and_canonical(sandbox: Path) -> None:
+    canonical = read(sandbox, CANONICAL)
+    flat = " ".join(canonical.split())
+    assert "TASK_SPECIFIC_EFFORT_SELECTION" in flat
+    assert "Do not choose effort by file count." in flat
+    assert "De-escalation is mandatory" in flat
+    patch(sandbox, CANONICAL, "TASK_SPECIFIC_EFFORT_SELECTION", "ALWAYS_MAXIMUM_EFFORT")
+    assert_rejects(sandbox, "required contract token missing: TASK_SPECIFIC_EFFORT_SELECTION")
+
+
+def test_host_selector_is_recorded_raw_and_kept_lowest_safe(sandbox: Path) -> None:
+    canonical = read(sandbox, CANONICAL)
+    flat = " ".join(canonical.split())
+    assert "LOWEST_SAFE_HOST_SETTING" in flat
+    assert "HOST_SETTING_RAW" in flat
+    assert "Do NOT default every T4 audit to Ultra." in flat
+    patch(sandbox, CANONICAL, "LOWEST_SAFE_HOST_SETTING", "HIGHEST_AVAILABLE_HOST_SETTING")
+    assert_rejects(sandbox, "required contract token missing: LOWEST_SAFE_HOST_SETTING")
+
+
+def test_ultra_is_never_an_effort_in_the_manifest_schema(sandbox: Path) -> None:
+    schema_path = "docs/crypto_core/continuity/state_manifest.schema.json"
+    schema = json.loads(read(sandbox, schema_path))
+    schema["$defs"]["nullable_effort"]["anyOf"][0]["enum"].append("ultra")
+    write(sandbox, schema_path, json.dumps(schema, indent=2))
+    assert_rejects(sandbox, "Ultra must not appear in the reasoning-effort enum")
+
+
+# ---------------------------------------------------------------------------
+# Audit-wait continuation
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "token",
+    [
+        "AUDIT_WAIT_CONTINUATION",
+        "PREPARED_NOT_REVIEWABLE_YET",
+        "STALE_INVALIDATED",
+        "CAPACITY_STOP",
+        "PROVIDER_CAPACITY_CONTINUATION_MODE_V1",
+        "USAGE_AWARE_CAPACITY_ROUTER_V1",
+        "OPENAI_SHARED_AGENTIC_POOL",
+        "NONPROTECTED_PROVIDER_BIAS",
+    ],
+)
+def test_capacity_contract_tokens_must_be_present(sandbox: Path, token: str) -> None:
+    text = read(sandbox, CANONICAL)
+    write(sandbox, CANONICAL, text.replace(token, "REMOVED_CONTRACT"))
+    assert_rejects(sandbox, "required contract token missing: {}".format(token))
+
+
+def test_audit_wait_continuation_preserves_the_writer_and_pr_invariants() -> None:
+    flat = " ".join((REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig").split())
+    assert "The frozen audited head is IMMUTABLE while waiting." in flat
+    assert "One repository writer remains absolute." in flat
+    assert "One open PR remains the default." in flat
+    assert "A second PR is NOT opened while the frozen PR is open." in flat
+    assert "No mutation of the frozen PR merely to look busy." in flat
+    assert "PREPARED_NOT_REVIEWABLE_YET" in flat
+    assert "never silently promoted" in flat
+    assert "Never create speculative work solely to appear busy." in flat
+
+
+def test_prepared_work_is_not_execution_authority() -> None:
+    """A prepared branch and a prepared Work packet both carry preparation, never authorization."""
+    flat = " ".join((REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig").split())
+    assert "WORK_PREPARED_NOT_AUTHORIZED" in flat
+    assert "prepared, not reviewable" in flat or "PREPARED_NOT_REVIEWABLE_YET" in flat
+    assert "re-prove ancestry, base and dependencies BEFORE opening a PR" in flat

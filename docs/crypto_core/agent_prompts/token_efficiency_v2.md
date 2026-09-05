@@ -90,6 +90,17 @@ action stated once.
 A compressed report still states the actual runtime identity and effort with an honest evidence class,
 still separates evidence from inference from `UNKNOWN`, and still makes no self-audit claim.
 
+## 5a. Capacity notes in a compressed prompt
+
+A compressed prompt still states the capacity facts that change routing, and never invents one. If a
+provider is exhausted, say so and say which lane the task is therefore on; if a protected gate is
+waiting on an unavailable lane, say that the GATE waits rather than implying the project does. A
+capacity reading that is not proven is `UNKNOWN`, written as `UNKNOWN`.
+
+Never compress away the distinction between a lane change and a gate waiver. Rerouting nonprotected
+work to an available provider is routing; letting an available provider satisfy a gate that required
+a different one is a contract breach, however short the prompt.
+
 ## 6. Invariants
 
 Token saving never outranks correctness, proof or a safety gate. Research economy never outranks
