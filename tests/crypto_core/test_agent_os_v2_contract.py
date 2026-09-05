@@ -1284,8 +1284,11 @@ _REAL_CI_STEP = (
 def test_ci_gate_requires_an_executable_step(sandbox: Path, label: str, replacement: str) -> None:
     """The exact reported defect: the path present without the gate actually running."""
     patch(sandbox, ".github/workflows/ci.yml", _REAL_CI_STEP, replacement)
-    assert_rejects(sandbox, "no enabled step in the 'tests' job executes")
-    del label
+    found = failures(sandbox)
+    assert found, "the CI hard gate was defeated by: {}".format(label)
+    assert any("no enabled step in the 'tests' job executes" in item for item in found), (
+        "wrong rejection reason for {}: {}".format(label, found)
+    )
 
 
 def test_ci_gate_accepts_the_real_step_in_a_block_scalar(sandbox: Path) -> None:
@@ -1325,8 +1328,8 @@ def test_capacity_vocabularies_match_the_oracle() -> None:
 def test_each_capacity_scenario_has_a_declared_mode(scenario: str, mode: str) -> None:
     """Continuation and stop are contract, not improvisation."""
     canonical_text = (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig")
-    assert mode in (validator.block_lines(canonical_text, "CAPACITY_ROUTING_MODES") or [])
-    del scenario
+    declared = validator.block_lines(canonical_text, "CAPACITY_ROUTING_MODES") or []
+    assert mode in declared, "no declared routing mode for the scenario {!r}".format(scenario)
 
 
 @pytest.mark.parametrize("mode", ["CLAUDE_CONTINUITY", "OPENAI_CONTINUITY", "BOTH_EXHAUSTED_STOP"])

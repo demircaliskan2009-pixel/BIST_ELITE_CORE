@@ -660,17 +660,16 @@ def _check_routing(root: Path, ctx: dict[str, object], max_effort_classes: froze
     t4_rows = [row for row in parsed if row[0] == "T4"]
     if not t4_rows:
         failures.append(f"{CANONICAL}: no T4 protected route declared")
-    for cls, _intents, lane, model_id, _effort, mutation in t4_rows:
+    for _cls, intents, lane, model_id, _effort, mutation in t4_rows:
         if FRONTIER_LANE not in lane:
             failures.append(f"{CANONICAL}: T4 route lane is {lane} but the protected frontier lane is {FRONTIER_LANE}")
         if model_id != FRONTIER_MODEL_ID:
             failures.append(f"{CANONICAL}: T4 route model id is {model_id} but must be {FRONTIER_MODEL_ID}")
         if mutation != "READ_ONLY":
             failures.append(f"{CANONICAL}: T4 route must be READ_ONLY, got {mutation}")
-        for intent in _intents:
+        for intent in intents:
             if intent != "CLASS_C_CROSS_CONTRACT":
                 failures.append(f"{CANONICAL}: T4 route carries non-Class-C intent {intent}")
-        del cls
 
     # 6) Read-only families never carry mutation authority.
     for cls, _intents, _lane, _mid, _effort, mutation in parsed:
