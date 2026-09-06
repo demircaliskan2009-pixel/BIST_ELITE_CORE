@@ -2106,3 +2106,61 @@ def test_standalone_yaml_comments_do_not_create_execution_context_keys(sandbox: 
         "        run: python scripts/crypto_core/validate_agent_os_v2.py\n\n",
     )
     assert failures(sandbox) == []
+
+
+# ---------------------------------------------------------------------------
+# Pre-audit QA closures: case-insensitive object ids, reachable manifest relations
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("label", "token"),
+    [
+        ("uppercase", "AF4CB1361521AB962A6E29153847532C441026C2"),
+        ("mixed case", "Af4Cb1361521ab962A6e29153847532c441026C2"),
+        ("lowercase", "af4cb1361521ab962a6e29153847532c441026c2"),
+    ],
+    ids=["uppercase object id", "mixed-case object id", "lowercase object id"],
+)
+def test_durable_scan_rejects_an_object_id_in_any_letter_case(sandbox: Path, label: str, token: str) -> None:
+    """Git accepts uppercase object ids, so a lowercase-only rule was a real head-pin bypass."""
+    text = read(sandbox, "AGENTS.md")
+    write(sandbox, "AGENTS.md", "Current head is {}.\n\n".format(token) + text)
+    assert_rejects(sandbox, "AGENTS.md")
+
+
+def test_ordinary_prose_is_not_mistaken_for_an_object_id(sandbox: Path) -> None:
+    """Case-insensitivity must not turn ordinary words into false head pins."""
+    text = read(sandbox, "AGENTS.md")
+    write(sandbox, "AGENTS.md", text + "\nThe DECODED FACADE and the added cabbage are not object ids.\n")
+    assert failures(sandbox) == []
+
+
+def test_compiled_manifest_relations_are_reachable_for_a_real_manifest(tmp_path: Path) -> None:
+    """The relations existed but ran only over the committed fixture, so a compiled operational
+    manifest could satisfy the published schema while contradicting itself. They are now executable.
+    """
+    source = REPO_ROOT / "docs/crypto_core/continuity/state_manifest.example.json"
+    instance = json.loads(source.read_text(encoding="utf-8-sig"))
+    assert instance["model_runtime"]["model_evidence_source"] == "CONFIGURATION_EVIDENCE_ONLY"
+    assert instance["model_runtime"]["model_actual"] is None
+
+    instance["model_runtime"]["model_actual"] = "claude-opus-5"
+    compiled = tmp_path / "state_manifest.json"
+    compiled.write_text(json.dumps(instance), encoding="utf-8")
+
+    found = validator.check_manifest_file(REPO_ROOT, compiled)
+    assert any("must not populate model_actual" in item for item in found), found
+
+
+def test_committed_manifest_example_passes_the_reachable_checker() -> None:
+    """The control: the committed fixture satisfies the same executable gate."""
+    source = REPO_ROOT / "docs/crypto_core/continuity/state_manifest.example.json"
+    assert validator.check_manifest_file(REPO_ROOT, source) == []
+
+
+def test_manifest_schema_states_it_is_not_sufficient_alone() -> None:
+    """Literal and independent: the schema must not imply it can enforce cross-field relations."""
+    text = (REPO_ROOT / "docs/crypto_core/continuity/state_manifest.schema.json").read_text(encoding="utf-8-sig")
+    assert "NECESSARY BUT NOT SUFFICIENT" in text
+    assert "--manifest" in text

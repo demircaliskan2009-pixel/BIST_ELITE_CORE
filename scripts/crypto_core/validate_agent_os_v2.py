@@ -261,8 +261,12 @@ PROHIBITED_GLOBAL_MAX_TOKENS = (
 # Volatile current-state patterns forbidden in the ACTIVE region of a DURABLE surface.
 # The hex rule requires both a digit and a hex letter so ordinary words and plain numbers cannot
 # false-positive; a real commit hash effectively always satisfies it.
+# Git accepts uppercase and mixed-case object ids, so this match is CASE-INSENSITIVE. A lowercase-only
+# rule let an uppercase head pin sit in a durable surface completely undetected, which defeated the
+# first of the four bounded forms the durable-state boundary claims to reject.
 HEX_TOKEN_RE = re.compile(
-    r"(?<![0-9a-zA-Z])(?=[0-9a-f]{7,40}(?![0-9a-zA-Z]))(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}"
+    r"(?<![0-9a-zA-Z])(?=[0-9a-f]{7,40}(?![0-9a-zA-Z]))(?=[0-9a-f]*[0-9])(?=[0-9a-f]*[a-f])[0-9a-f]{7,40}",
+    re.IGNORECASE,
 )
 PR_PIN_RE = re.compile(r"\bPR\s*#\s*\d+")
 OPEN_PR_PIN_RE = re.compile(r"\bOPEN_PR_COUNT\s*[:=]\s*\d+")
@@ -1530,6 +1534,35 @@ def collect_failures(root: Path) -> list[str]:
     return failures
 
 
+def manifest_registered_fields(root: Path) -> list[str] | None:
+    """The PROOF_PAIRED_MANIFEST_FIELDS registry, read from the canonical control plane."""
+    canonical_text = read_text(root, CANONICAL)
+    if canonical_text is None:
+        return None
+    return parse_registry(canonical_text, BLOCK_PROOF_PAIRED)
+
+
+def check_manifest_file(root: Path, manifest_path: Path) -> list[str]:
+    """Run the manifest SEMANTIC relations over a compiled operational manifest.
+
+    Schema validation alone is necessary and NOT sufficient. JSON Schema constrains each field
+    independently, so `CONFIGURATION_EVIDENCE_ONLY` beside a populated `model_actual` satisfies the
+    schema while claiming a runtime identity that was never proven - and routing and audit decisions
+    are taken from exactly that block. The relations already existed; they were only reachable for the
+    committed fixture. This is the executable path that makes them reachable for a real manifest.
+    """
+    registered = manifest_registered_fields(root)
+    if registered is None:
+        return [f"{CANONICAL}: cannot read {BLOCK_PROOF_PAIRED}; manifest relations cannot be checked"]
+    try:
+        instance = json.loads(manifest_path.read_text(encoding="utf-8-sig"))
+    except (OSError, ValueError) as exc:
+        return [f"{manifest_path}: cannot be read as JSON ({exc})"]
+    if not isinstance(instance, dict):
+        return [f"{manifest_path}: a manifest must be a JSON object"]
+    return manifest_relation_failures(str(manifest_path), instance, registered)
+
+
 def repo_root_from_here() -> Path:
     return Path(__file__).resolve().parents[2]
 
@@ -1548,9 +1581,38 @@ def main(argv: list[str] | None = None) -> int:
         help="Repository root to validate (default: the repository containing this script).",
     )
     parser.add_argument("--json", action="store_true", help="Emit machine-readable JSON output.")
+    parser.add_argument(
+        "--manifest",
+        default=None,
+        metavar="PATH",
+        help=(
+            "Validate a COMPILED ephemeral state manifest against the proof-pairing and runtime "
+            "relations. Schema validation alone is not sufficient; this is the executable gate."
+        ),
+    )
     args = parser.parse_args(argv)
 
     root = Path(args.root).resolve() if args.root else repo_root_from_here()
+
+    if args.manifest is not None:
+        manifest_failures = check_manifest_file(root, Path(args.manifest))
+        if args.json:
+            print(
+                json.dumps(
+                    {"manifest": args.manifest, "ok": not manifest_failures, "failures": manifest_failures},
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
+        elif manifest_failures:
+            print(f"STATE_MANIFEST: FAIL ({len(manifest_failures)} issue(s))")
+            for item in manifest_failures:
+                print(f"  - {item}")
+        else:
+            print("STATE_MANIFEST: PASS")
+            print(f"  manifest: {args.manifest}")
+        return 1 if manifest_failures else 0
+
     failures = collect_failures(root)
 
     if args.json:

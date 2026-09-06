@@ -47,6 +47,7 @@ it never tells you WHAT the truth currently is.
 | Evidence-backed lessons | `docs/crypto_core/agent_lessons.md` |
 | Ephemeral state shape | `docs/crypto_core/continuity/state_manifest.schema.json` |
 | Ephemeral state worked example | `docs/crypto_core/continuity/state_manifest.example.json` |
+| Compiled manifest validation | `python scripts/crypto_core/validate_agent_os_v2.py --manifest <path>` |
 | Product architecture authority | `docs/PRDV4_MULTI_MARKET_CRYPTO.md` |
 | Deterministic control-plane gate | `scripts/crypto_core/validate_agent_os_v2.py` |
 | Local setup audit | `scripts/crypto_core/audit_agent_setup.ps1` |
