@@ -1,0 +1,73 @@
+{
+  "$comment": "EXAMPLE_ONLY - an illustrative STATE_MANIFEST_V1 instance, not current repository state. Every hash, number and name below is a fabricated placeholder. Never read this file as proof of anything; compile a real manifest from live git and gh output instead. The fixture deliberately shows both halves of the proof-pairing rule: pr_number, pr_state and review_threads_unresolved are null because their evidence says UNKNOWN, while the remaining registered fields carry values because their evidence says PROVEN. It also shows the relations that topology alone cannot express: CLAUDE_CONTINUITY is only legal because openai capacity is PROVEN EXHAUSTED and claude capacity is PROVEN available, and model_runtime declares CONFIGURATION_EVIDENCE_ONLY so it leaves model_actual and observed_effort null rather than presenting a settings pin as proven execution.",
+  "schema": "STATE_MANIFEST_V1",
+  "repo": "example-owner/EXAMPLE_REPO",
+  "compiled_at_evidence": "EXAMPLE_ONLY placeholder. A real manifest records the exact commands run, for example 'git rev-parse HEAD', 'git rev-parse HEAD^{tree}', 'gh pr list --state open --json number'.",
+  "branch": "chore/example-scope-pr1",
+  "branch_evidence": "PROVEN",
+  "base_sha": "a1b2c3d4e5f60718293a4b5c6d7e8f9012345678",
+  "base_sha_evidence": "PROVEN",
+  "base_tree": "0f1e2d3c4b5a69788796a5b4c3d2e1f001234567",
+  "base_tree_evidence": "PROVEN",
+  "head_sha": "b2c3d4e5f60718293a4b5c6d7e8f90123456789a",
+  "head_sha_evidence": "PROVEN",
+  "head_tree": "1e2d3c4b5a69788796a5b4c3d2e1f00123456789",
+  "head_tree_evidence": "PROVEN",
+  "pr_number": null,
+  "pr_number_evidence": "UNKNOWN",
+  "pr_state": null,
+  "pr_state_evidence": "UNKNOWN",
+  "open_pr_count": 0,
+  "open_pr_count_evidence": "PROVEN",
+  "ci_state": "PENDING",
+  "ci_state_evidence": "PROVEN",
+  "review_threads_unresolved": null,
+  "review_threads_unresolved_evidence": "UNKNOWN",
+  "completed_gates": [
+    {
+      "gate": "targeted_pytest",
+      "evidence_key": "head=b2c3d4e5f60718293a4b5c6d7e8f90123456789a|paths=tests/crypto_core/test_example.py|cmd=python -m pytest -q -W error|env=py3.11-linux|id=EXAMPLE-1",
+      "result": "PASS"
+    }
+  ],
+  "completed_gates_evidence": "PROVEN",
+  "blockers": [
+    {
+      "id": "EXAMPLE_BLOCKER_STABLE_ID_V1",
+      "severity": "P2",
+      "state": "OPEN",
+      "repair_count": 0
+    }
+  ],
+  "blockers_evidence": "PROVEN",
+  "openai_agentic_capacity": "EXHAUSTED",
+  "openai_agentic_capacity_evidence": "PROVEN",
+  "claude_capacity": "NORMAL",
+  "claude_capacity_evidence": "PROVEN",
+  "capacity_routing_mode": "CLAUDE_CONTINUITY",
+  "capacity_routing_mode_evidence": "PROVEN",
+  "task_boundary": "EXAMPLE_SEMANTIC_BOUNDARY_V1",
+  "authorization": {
+    "mutation_scope": "EXAMPLE_ONLY: the exact ALLOWED_FILES set named by the task prompt.",
+    "merge_authorized": false,
+    "notes": "merge_authorized is structurally always false. Merge authority is HUMAN_ONLY_PER_PR, granted per PR and per head at the moment of merge, and never carried in state."
+  },
+  "invalidations": [
+    "EXAMPLE_ONLY: a gate proven under a different toolchain was dropped because its evidence key no longer matches."
+  ],
+  "model_runtime": {
+    "model_id": "example-model-id",
+    "model_requested": "example-model-id",
+    "model_actual": null,
+    "requested_effort": "xhigh",
+    "observed_effort": null,
+    "capability_mode": null,
+    "host_setting_raw": "EXAMPLE_ONLY: the raw host selector string, copied verbatim, never normalized.",
+    "environment": "EXAMPLE_ONLY: the execution environment name.",
+    "client_version": "EXAMPLE_ONLY: the client version string.",
+    "model_evidence_source": "CONFIGURATION_EVIDENCE_ONLY",
+    "model_fallback": null
+  },
+  "next_safe_action": "EXAMPLE_ONLY: exactly one concrete next action, stated once.",
+  "next_safe_action_evidence": "PROVEN"
+}
