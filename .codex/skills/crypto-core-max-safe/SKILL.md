@@ -5,102 +5,130 @@ description: Use for BIST_ELITE_CORE crypto_core implementation, repair, salvage
 
 # Crypto Core Max-Safe Workflow
 
-Use this skill only for `crypto_core` work in BIST_ELITE_CORE. Canonical precedence is `AGENTS.md`,
-`docs/crypto_core/agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`), this skill, then `CLAUDE.md`.
-Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2): specialized institutional crypto
-trading systems engineering — paper-first, deterministic, fail-closed, audit-first — never generic coding.
+<!-- CONTROL_PLANE_ROLE: CODEX_ADAPTER -->
+<!-- CONTROL_PLANE_AUTHORITY_REF: docs/crypto_core/agent_os_v2.md -->
 
-## Active routing (Sol / Terra / Luna)
+This is the CODEX host adapter. Use it only for `crypto_core` work in BIST_ELITE_CORE. It defines no
+routing, no task family, no effort selection, no PR sizing and no merge authority — all of those live
+in `docs/crypto_core/agent_os_v2.md`. Execute the lane selected by canonical routing; never
+reclassify your own family and never pick your own canonical effort.
 
-- T0 `LUNA_MECHANICAL` — Luna: git/gh status, bounded CI polling, PR metadata, review-thread state,
-  authorized merge mechanics, and postverify running. No design or product-code judgment.
-- T1 `READONLY_OR_FAST_BOUNDED` — Luna low or Terra high: bounded proof, docs, direct-dependency audit.
-- T2 `BOUNDED_IMPLEMENTATION` — Terra high: exact-file deterministic implementation, tests/docs, small
-  same-branch repairs. (Runtime-proven Claude Sonnet 5 may also hold this class per section 24.3.)
-- T3 `COMPLEX_IMPLEMENTATION_OR_REPAIR` — Terra xhigh for bounded repair; Claude Opus 5 xhigh when broad
-  reads or long local validation loops are needed. (The Claude side of T3 is subdivided T3A-T3E in section
-  24.3; Codex classes are unchanged.)
-- T4 `CROSS_CONTRACT_DESIGN_OR_AUDIT` — Sol xhigh (`max` only controller-gated): protected trust-boundary,
-  digest/provenance, governance/safety, SM-5/SM-6 design/audit, Stage-4 semantics, readiness/Deribit,
-  complex security/CodeQL. Sol runs ONLY on a controller-prepared narrow evidence packet — never broad
-  discovery, polling, merge mechanics, or routine docs.
-- XR — Deep Research, controller-orchestrated, external/current facts, advisory only.
-- `CONTROLLER_CONNECTOR_GATE` — ChatGPT GPT-5.6 Thinking + connector/`gh`: read-only-first controller-auditor
-  (`CONTROLLER_READONLY_FIRST_POLICY`, workflow §24.10), final evidence comparison, and merge authority.
-  ChatGPT now performs most non-Class-C read-only mapping/audit (Class A closeout; Class B first-pass with
-  Terra ordinary audit only when evidence requires) — treat its output as advisory/controller input, NEVER
-  as an audit premise and never as a substitute for the fresh Sol Class-C audit this skill owns. ChatGPT is
-  not a Codex runtime. Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED` — no active upstream Fable input exists.
+MERGE_AUTHORITY_REF: canonical section 2.1. PR_SIZING_AUTHORITY_REF: canonical section 2.2.
+TASK_FAMILY_AUTHORITY_REF: canonical section 3. EFFORT_AUTHORITY_REF: canonical section 3.2.
 
-Every serious prompt/report contains `MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`,
-`REASONING_ACTUAL`, `EXACT_MODEL_REQUIRED`, declared fallback, and the `SETUP_REQUESTED` / `SETUP_ACTUAL` /
-`SETUP_FILES_READ` / `SETUP_GAPS` block. Required exact-model mismatch stops. Never claim
-unavailable-model quality.
+Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (canonical section 1): specialized institutional
+crypto trading systems engineering — paper-first, deterministic, fail-closed, audit-first — never
+generic coding.
 
-## Controller input packet (Codex workload reduction)
+## Lane notes for this host
 
-Codex sessions start from the CONTROLLER_TO_AUDITOR / CONTROLLER_TO_IMPLEMENTER packet: pinned PR base/head,
-exact changed files, exact direct dependencies, controller risk classification, protected-trigger list,
-unresolved semantic questions, expected adversarial cases, and the required report contract. Do not re-prove
-PR metadata the connector already proved, rediscover changed files, read the whole repository without
-justification, poll CI with reasoning tokens, or re-audit Class-A docs/setup the controller already closed.
-Implementer conclusions are never audit premises. Codex capacity is preserved by NARROWING the question —
-never by weakening the gate.
+The canonical matrix assigns the classes. What is host-specific is only HOW each lane behaves here:
+
+- **Mechanical lane (Luna).** Git and `gh` status, bounded CI polling, PR metadata, review-thread
+  state, already-authorized merge mechanics, postverify execution. No design judgement, no product-code
+  judgement, no semantic readiness judgement.
+- **Bounded lane (Terra).** Exact-file deterministic implementation, tests and docs, small same-branch
+  repairs, and ordinary fresh-context independent review. Never a protected Class-C substitution.
+- **Protected frontier lane.** Class-C protected design and audit run on a controller-prepared narrow
+  evidence packet — never broad discovery, never polling, never merge mechanics, never routine docs.
+  The canonical protected frontier lane is named in canonical section 3.3; if it cannot run, return
+  `ASTRA_REQUIRED_BUT_UNAVAILABLE` and stop. Never substitute a cheaper lane for it because of quota
+  or availability.
+
+Every serious prompt and report carries the runtime identity fields of canonical section 4.1 with an
+honest evidence class from section 4.2, plus `SETUP_REQUESTED` / `SETUP_ACTUAL` / `SETUP_FILES_READ` /
+`SETUP_GAPS`. A required exact-model mismatch stops. Never claim the quality of a model that did not
+run.
+
+## Shared pool discipline
+
+This host, the protected frontier audit lane and Work all consume the SAME provider agentic pool
+(`OPENAI_SHARED_AGENTIC_POOL`, canonical section 10.3). Work is not separate free capacity. Every
+dispatch here spends capacity a protected audit may need later, so nonprotected work that another
+authorized lane can do at equal quality is preferably routed there.
+
+That is a capacity preference only. It never overrides task intent, audit independence, a protected
+Class-C requirement, safety or correctness, and it never lets an exhausted pool satisfy, waive or
+downgrade a gate. When the pool is exhausted, the protected gate waits
+(`ASTRA_REQUIRED_BUT_UNAVAILABLE`) while nonprotected work continues elsewhere — the project does not
+stop (`PROVIDER_EXHAUSTION_IS_NOT_PROJECT_STOP`).
+
+## Host surfaces
+
+Registry membership decides AUTHORITY, not what a host LOADS. An agent, skill or prompt file in a
+conventional discovery directory is loaded regardless, so it must be registered with a safe role or
+absent — there is no inert third state. The legacy GitHub agent, prompt and skill directories are now
+empty and the canonical control plane keeps them that way.
+
+## Setup load contract
+
+Read, and prove you read: `AGENTS.md`, `docs/crypto_core/agent_os_v2.md`, this skill, the controller
+evidence packet, and the exact task files. With no packet, bootstrap read-only per canonical section
+15.1 and compile an ephemeral state manifest.
+
+## Controller input packet
+
+Start from the controller packet: pinned base and head, exact changed files, exact direct
+dependencies, controller risk classification, the protected-trigger list, unresolved semantic
+questions, expected adversarial cases and the required report contract. Do not re-prove PR metadata
+the connector already proved, rediscover changed files, read the whole repository without
+justification, poll CI with reasoning tokens, or re-audit Class-A material the controller already
+closed. Implementer conclusions are never audit premises. Capacity is preserved by NARROWING the
+question — never by weakening a gate.
 
 ## Audit classes
 
-- **Class A (controller-sufficient):** docs/setup/prompt/skill/workflow-doc/low-risk CI config/deterministic
-  helper scripts — audited by ChatGPT + connector with fresh pinned-head reread; Codex not required.
-- **Class B (controller-first):** ordinary bounded product code — controller maps scope/dependencies/tests/
-  triggers first; Terra fresh independent audit added when risk or evidence requires; `CODEX_REQUIRED: NO`
-  needs the exact reason plus the protected-trigger checklist; any uncertainty escalates to Class C.
-- **Class C (Codex REQUIRED, never replaceable):** digest recomputation/consumption, expected-digest
-  anchors, canonical serialization, reseal/provenance, mutable/stateful/TOCTOU, denominator integrity,
-  record-set completeness, duplicate/replay defense, Decimal/Fraction financial arithmetic, governance
-  thresholds, fail-closed trust transitions, READY/ADMITTED/ACCEPTED, SM-5/SM-6, Stage-4 completion,
-  machine-time provenance, readiness/Deribit, connector-ready transitions, live/private API, orders/order
-  routing, scheduler/auto-loop, shadow/live, capital mutation, edge/profitability claims, complex
-  CodeQL/security, current P1/P2 source findings, insufficient controller evidence.
+Class A, Class B and Class C are defined in canonical section 12. Two rules bind this host in
+particular: `CODEX_REQUIRED: NO` must always carry the exact reason plus the full protected-trigger
+checklist, and any uncertainty escalates to Class C. Nothing replaces Class C — not the controller,
+not an implementer self-review, not a same-model second pass.
 
 ## Role boundaries
 
-Codex is an adversarial P1/P2 reviewer, read-only by default. Patch only when explicitly authorized and
-scoped; never patch a PR concurrently with another writer (one repository writer at a time) or merge as a
-reviewer. An implementation cannot self-satisfy the independent audit gate in the same context; independent
-audits are fresh-context, pinned-head tasks ending in an AUDITOR_TO_CONTROLLER handoff (P1/P2/P3 with exact
-source evidence, reproducible failures, repair requirements, readiness classification, zero mutation).
+This host is an adversarial P1/P2 reviewer, read-only by default. Patch only when explicitly
+authorized and scoped. Never patch a PR concurrently with another writer — one repository writer at a
+time — and never merge as a reviewer. An implementation cannot self-satisfy the independent audit gate
+in the same context: independent audits are fresh-context, pinned-head tasks ending in an
+auditor-to-controller handoff with P1/P2/P3 findings, exact source evidence, reproducible failures,
+repair requirements, readiness classification and zero mutation.
 
-Codex Pursue Goal is a bounded single-goal terminal loop for preflight, sync, CI/status, closeout, and
-explicitly authorized merge/postverify. It is not broad repo pursuit, unscoped design, or unscoped repair.
+The bounded single-goal terminal loop (preflight, sync, CI and status, closeout, and explicitly
+authorized merge or postverify) is exactly that: bounded. It is not broad repository pursuit, unscoped
+design, or unscoped repair.
 
-Deep Research is controller-orchestrated external/current-fact advisory only. It never mutates repo or
-GitHub state, approves a governance value, replaces a Codex audit, or waives a safety gate.
+External and current facts route to the controller-orchestrated research lane (canonical section 8).
+Research never mutates state, never approves a governance value, never replaces an audit and never
+waives a gate.
 
 ## Safety and audit contract
 
-- Stay crypto-only, paper-only, deterministic, fail-closed, and audit-first.
-- No BIST, live/private API, credentials, orders, scheduler, runtime/readiness/Deribit transition,
-  shadow/live, or capital work unless separately authorized and designed.
-- P1 is a correctness/safety break; P2 is a real defect or missing negative-path proof; P3 is advisory.
-- Recompute digest-carrying inputs through their public serializer and reject mismatches before
-  READY/ADMITTED/ACCEPTED. Forged or non-serializable input must fail closed, never raw-raise unexpectedly.
-- Overclaim of completion/readiness/live/shadow/Deribit/machine-time/capital/profitability without its exact
-  gate is P1.
-- Current valid P1/P2 threads block. Outdated threads do not block code; resolve only with explicit guarded
-  closeout authority. Never resolve human threads.
+- Stay crypto-only, paper-only, deterministic, fail-closed and audit-first.
+- No BIST, live or private API, credentials, orders, scheduler, runtime, readiness or Deribit
+  transition, shadow or live execution, or capital work unless separately authorized and designed.
+- P1 is a correctness or safety break; P2 is a real defect or a missing negative-path proof; P3 is
+  advisory.
+- Recompute digest-carrying inputs through their public serializer and reject a mismatch before
+  READY, ADMITTED or ACCEPTED. Forged or non-serializable input must fail closed, never raise
+  unexpectedly.
+- Overclaiming completion, readiness, live or shadow status, Deribit promotion, machine-time, capital
+  or profitability without its exact gate is P1.
+- Current valid P1/P2 threads block. Outdated threads do not block code; resolve only with explicit
+  guarded closeout authority. Never resolve a human thread.
 
-## Gate, patch, and validation discipline
+## Gate, patch and validation discipline
 
-- Prove workspace, branch, HEAD, dirty files, and open PRs before editing. Stop if dirt exceeds scope.
-- Setup/doctrine work uses a separate `chore/<scope>-prN` PR and never mixes feature code.
-- Use named files and targeted `rg`; no broad scans without justification.
-- Product patches validate focused Ruff/tests then logged full suite when required. Docs/setup-only changes
-  prove exact scope and run `git diff --check` unless an executable/config surface changed.
-- Stage exact paths only. Never push directly to `main`, force-push, self-approve, or merge without exact
-  human authorization.
+- Prove workspace, branch, HEAD, dirty files and open PRs before editing. Stop if dirt exceeds scope.
+- Setup and doctrine work uses a separate `chore/<scope>-prN` PR and never mixes feature code.
+- Use named files and targeted search; no broad scans without justification.
+- Product patches validate focused lint and tests, then the logged full suite when required. Docs and
+  setup-only changes prove the exact scope and run `git diff --check` unless an executable or
+  configuration surface changed. Control-plane changes must keep
+  `python scripts/crypto_core/validate_agent_os_v2.py` at exit 0.
+- Stage exact paths only. Never push directly to `main`, force-push, self-approve, or merge without
+  exact human authorization for that exact PR and head.
 
 ## Report
 
-Reports are `AGENT_OS_HANDOFF_V1` packets (workflow section 24.6): result, actual model/effort, setup
-fields, proof, changed files, validation, PR/check/thread state, audit class, blockers, and exactly one next
-safe action. No full logs or unsupported state claims.
+Report the result, the actual runtime identity and effort, setup fields, proof, changed files,
+validation, PR, check and thread state, audit class, blockers, and exactly one next safe action. No
+full success logs and no unsupported state claim.
