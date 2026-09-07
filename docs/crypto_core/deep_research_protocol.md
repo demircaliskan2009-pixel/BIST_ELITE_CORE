@@ -1,207 +1,130 @@
-# crypto_core Deep Research Protocol (Agent OS edition, 2026-07-10)
+# crypto_core Research Protocol
 
-> Canonical, complete usage protocol for **Deep Research** in `crypto_core` under `CRYPTO_CORE_AGENT_OS_V1`
-> (`docs/crypto_core/agent_workflow.md` section 24; section 24.9 points here). Deep Research is
-> **controller-orchestrated**: ChatGPT GPT-5.6 Thinking decides whether research runs, frames the exact
-> question, binds it to pinned GitHub-connector evidence, and verifies the result before anything is acted
-> on. Deep Research is **strictly read-only / advisory** — it never mutates repo or GitHub state (even when
-> the underlying work is authorized), never authorizes a merge, a live/order/scheduler surface, or a
-> weakening of any fail-closed gate. Canonical doctrine precedence is unchanged: `AGENTS.md` →
-> `agent_workflow.md` → `.codex/skills/crypto-core-max-safe/SKILL.md` → `CLAUDE.md`; on conflict the
-> **stricter safety rule wins**. This document contains **no secrets, credentials, API keys, or
-> live-trading instructions**. Deep Research is orchestrated by the ChatGPT read-only-first controller
-> (`CONTROLLER_READONLY_FIRST_POLICY`, `agent_workflow.md` section 24.10) and is advisory only. Claude
-> Fable 5 is `INACTIVE_EXPIRED_RETIRED` and is neither a research lane nor a routable executor; external
-> model-capability comparisons remain Deep Research territory.
+<!-- CONTROL_PLANE_ROLE: RESEARCH_ADAPTER -->
+<!-- CONTROL_PLANE_AUTHORITY_REF: docs/crypto_core/agent_os_v2.md -->
 
-## 1. Why Deep Research exists here
+> **Research adapter, not authority.** This file describes how the external-fact research lane is run.
+> It classifies no task family, selects no effort, sizes no PR and holds no merge authority. The
+> canonical authority is `docs/crypto_core/agent_os_v2.md`, section 8.
+>
+> MERGE_AUTHORITY_REF: canonical section 2.1. PR_SIZING_AUTHORITY_REF: canonical section 2.2.
+> TASK_FAMILY_AUTHORITY_REF: canonical section 3. EFFORT_AUTHORITY_REF: canonical section 3.2.
+>
+> Research is READ-ONLY and ADVISORY. It never mutates repository or GitHub state — not a branch, a
+> file, a commit, a push, a PR, a comment, a thread resolution, a workflow rerun, a merge or an
+> auto-merge — even when the underlying work is authorized. It is never an executor lane, never merge
+> authority, and never a safety-gate waiver.
 
-The build is broad and mature; the dominant risks are **artifact proliferation vs end-to-end wiring**,
-**PRD/roadmap drift**, and **stale external assumptions**. Deep Research is the high-leverage tool for
-current / external / high-stakes facts that are not provable from the repo, and — paired with the GitHub
-connector — for combined repo+external architecture review that keeps PR sequencing honest against a top-1
-external standard. It is never a substitute for local proof, Class-C Codex audit, the connector
-source-of-truth gate, or explicit human merge authorization.
+## 1. Why this lane exists
 
-## 2. Controller orchestration (who runs research, and how)
+Some decisions depend on facts that are external to this repository and change over time. Guessing
+them is worse than not answering: a confidently wrong venue fee, rate limit or protocol parameter
+propagates silently into design. This lane exists to answer exactly those questions, with citations,
+and to mark everything it could not verify as `UNKNOWN`.
 
-ChatGPT GPT-5.6 Thinking owns the research lifecycle end to end:
+It does not exist to explain difficult repository code. Repository questions are answered by reading
+the repository.
 
-1. **Trigger decision** — is research REQUIRED / RECOMMENDED / NOT_REQUIRED (section 5)? Executors (Claude/
-   Codex/Copilot) never run web research inside repo tasks; they emit `DEEP_RESEARCH_REQUIRED` with the
-   exact question and stop.
-2. **Packet construction** — every major run starts from a `CONTROLLER_TO_DEEP_RESEARCH` packet (section 6)
-   with pinned repo evidence from the GitHub connector. Deep Research never infers repo state from memory.
-3. **Execution** — Deep Research runs in the selected XR submode (section 4), read-only, primary-source
-   first.
-4. **Verification** — the post-research controller gate (section 8) checks every repo claim via the
-   connector and every load-bearing citation before anything is accepted.
-5. **Conversion** — accepted findings become AT MOST one bounded next-PR proposal, a workflow lesson, or
-   no action. Research never triggers automatic implementation and is never merge authorization.
+## 2. Orchestration
 
-## 3. Use / do-not-use
+The controller decides whether research is needed, writes the research packet, and verifies the
+result. A research result never triggers implementation on its own: it flows back to the controller,
+which decides the next task through normal routing.
 
-**Use Deep Research for:** current exchange/Deribit API facts; fees / rate limits / funding / margin /
-liquidation behavior; current market microstructure; custody / security / regulatory facts; current
-framework and competitor architecture (Hummingbot, Freqtrade, NautilusTrader, QuantConnect LEAN, OctoBot,
-Jesse, institutional execution/risk patterns — architecture lessons only, no blind copy, no license/IP
-bypass); paper/live parity standards; readiness / shadow / live gate benchmarks; top-1 capability
-benchmarking; externally sourced machine-time semantics; current model/tool behavior; academic/technical
-research on backtest risk, safe execution, agentic trading.
+The persistent-workspace lane draws on the SAME shared provider agentic pool as the bounded
+implementation lane and the protected frontier audit lane. It is not separate free capacity, so
+`WORK_ENVIRONMENT_VALUE` must justify `SHARED_OPENAI_POOL_COST` before it is opened, and when that
+pool is constrained or exhausted it is not dispatched as a workaround.
 
-**Do NOT use Deep Research for (repo-native or controller-owned):** local repo state (git/`gh`/connector);
-PR state; CI polling; review threads; branch hygiene; Ruff/pytest failures; ordinary local implementation
-or repair; already-documented internal doctrine; internal deterministic module contracts with no external
-fact; replacing Class-C Codex audit, the connector final gate, tests/CI, or post-merge verification.
+Choose the cheapest lane that actually answers the question. A few straightforward official facts are
+answered by ordinary controller web research. The persistent-workspace lane is preferred only when
+multi-source synthesis, a persistent artifact, and browser or environment interaction together add
+material value. Never duplicate research that is already complete and still fresh.
 
-## 4. XR submodes
+## 3. Use and do-not-use
 
-- **`XR_FACT_CHECK`** — one narrow current external question (API behavior, fee schedule, rate limit,
-  funding mechanics, margin/liquidation, market-data semantics, official model/tool behavior,
-  custody/security/regulatory fact). Official/primary sources first; exact question only; no broad benchmark
-  unless necessary; retrieval date + source version included; unresolved facts stay UNKNOWN; no
-  implementation during research.
-- **`XR_ARCHITECTURE_BENCHMARK`** — comparison with Hummingbot, Freqtrade, NautilusTrader, QuantConnect
-  LEAN, and other credible event-driven/institutional systems: paper/live parity patterns, risk/execution
-  architecture, multi-strategy isolation, replay/determinism, data-leakage prevention, operational
-  resilience, venue abstraction. Compare capabilities and evidence — never stars or marketing; distinguish
-  architectural intent from implemented proof; compare against current official documentation; produce
-  bounded repo-relevant recommendations; respect license/IP.
-- **`XR_PHASE_GATE_REVIEW`** — MANDATORY before material phase transitions involving external/current
-  assumptions: declaring paper-trading DONE; machine-time provenance when external time-source semantics
-  matter; first venue connector/readiness design; Deribit readiness; shadow-readiness; live-readiness; real
-  execution architecture; custody/security design; regulatory-sensitive design; production operational
-  resilience; any phase-completion claim dependent on current industry standards. Also triggered after a
-  major phase bundle is implemented, before roadmap changes based on external capability assumptions, when
-  prior external evidence may be stale, and when official exchange/framework behavior changes.
-- **`XR_OVERENGINEERING_AUDIT`** — at milestone boundaries: artifact proliferation vs end-to-end wiring;
-  duplicate validation contracts; unused modules; excessive governance layers; missing integration paths;
-  freeze-new-artifacts / consolidate / delete decisions; whether the next PR should be integration rather
-  than another artifact; whether execution/risk/runtime surfaces are underbuilt; whether tests verify real
-  composition rather than isolated artifacts. Advisory until controller triage.
+**Use for:** exchange, venue and provider API behavior; fee schedules, maker and taker structures;
+rate limits; funding, basis, carry, margin and liquidation mechanics; order-book and execution
+semantics; current microstructure facts; custody, security and regulatory requirements; provider
+cryptographic parameters; deployed versions and current framework or tool behavior where official
+documentation conflicts; externally sourced machine-time semantics; live-readiness standards defined
+outside this repository; and architecture or benchmark comparison against credible external systems —
+as lessons only, never as code to copy and never as a licence or intellectual-property bypass.
 
-## 5. Trigger policy (event-triggered, never calendar-driven)
+**Do NOT use for:** local repository state; CI polling; PR or merge readiness as a source of truth;
+local implementation repair; routine unit-test or lint debugging; branch hygiene; replacing an
+independent audit; or replacing the connector state gate.
 
-**`DEEP_RESEARCH_REQUIRED`** when correctness depends on: current exchange or Deribit facts; fees / rate
-limits / funding / margin / liquidation; current market microstructure; custody / security / regulation;
-current framework comparison; paper/live parity benchmarks; readiness / live / shadow gate standards;
-overengineering-vs-underbuilding external comparison; top-1 capability benchmarking; current model/tool
-behavior; externally sourced machine-time semantics.
+## 4. Submodes
 
-**`DEEP_RESEARCH_RECOMMENDED`** at: major architecture phase start; major phase closeout; roadmap reorder;
-material connector/execution/risk design; every top-level readiness claim; after a substantial group of
-merged PRs where architecture drift is plausible; when artifact count grows without clear end-to-end
-capability gain.
+- `XR_FACT_CHECK` — one narrow current external question; official and primary sources first.
+- `XR_ARCHITECTURE_BENCHMARK` — capability and evidence comparison against credible external systems.
+  Capabilities and evidence, never popularity or marketing.
+- `XR_PHASE_GATE_REVIEW` — run before a material phase transition that depends on external or current
+  assumptions.
+- `XR_OVERENGINEERING_AUDIT` — artifact proliferation against end-to-end capability, at a milestone
+  boundary.
 
-**`DEEP_RESEARCH_NOT_REQUIRED`** for: local repo state; PR state; CI polling; review threads; branch
-hygiene; Ruff/pytest failures; ordinary local implementation; already-documented internal doctrine; direct
-deterministic module contracts needing no external facts; SM-5/SM-6 repo-internal semantics unless an
-external comparator/venue assumption appears.
+## 5. Trigger policy
 
-Do not use arbitrary calendar frequency; do not research merely because the tool is available.
+Event-triggered, never calendar-driven and never mechanically per-PR.
 
-## 6. Connector-bound research packet (CONTROLLER_TO_DEEP_RESEARCH)
+**Required** when a decision materially depends on: current exchange or venue facts; fees, rate
+limits, funding, margin or liquidation; current microstructure; custody, security or regulation;
+current external framework or tool behavior; paper-to-live parity standards; readiness, shadow or live
+promotion standards defined externally; externally sourced machine-time semantics; or a top-tier
+external benchmark.
 
-Before every major run, ChatGPT prepares:
+**Recommended** at a major phase start or closeout, on a roadmap reorder, before a significant
+execution, risk or connector design, after a substantial PR bundle, when artifacts grow without
+capability growing, and before any major readiness claim.
+
+**Not required** for repository state, PR state, CI, threads, local tests, branch hygiene, routine
+implementation, or an internal deterministic contract with no external fact in it.
+
+## 6. Research packet
+
+The controller supplies: the exact question, narrowly stated; why the answer is load-bearing and what
+decision it changes; the pinned repository revisions and the exact repository files that provide
+internal context; the source quality requirement, official and primary first; what would falsify the
+answer; the freshness requirement; the required output contract; and the explicit statement that the
+lane is read-only.
+
+Pin source revisions. A snapshot of a repository taken elsewhere is never current remote state, and a
+research result that assumes otherwise is invalid regardless of how well sourced its external claims
+are.
+
+## 7. Output contract
+
+Every research return separates, explicitly and per claim:
 
 ```text
-RESEARCH_QUESTION:
-WHY_CURRENT_EXTERNAL_FACTS_ARE_REQUIRED:
-REPO:
-PINNED_MAIN_SHA:
-PINNED_PR_HEADS:
-OPEN_PR_STATE:
-REPO_FILES_TO_READ:
-REPO_SYMBOLS_TO_INSPECT:
-EXTERNAL_BENCHMARK_SET:
-PRIMARY_SOURCE_REQUIREMENTS:
-PROHIBITED_WEAK_SOURCES:
-EVIDENCE_BUCKETS:
-TOP1_CLAIM_STANDARD:
-FORBIDDEN_MUTATIONS:
-EXPECTED_OUTPUT:
-CONTROLLER_POST_RESEARCH_CHECKS:
+RESULT / VERDICT / SOURCE_QUALITY / REPO_EVIDENCE / EXTERNAL_EVIDENCE /
+WHAT_IS_PROVEN / WHAT_IS_INFERRED / WHAT_IS_UNKNOWN / OVERENGINEERING_AUDIT /
+PRD_ALIGNMENT / NEXT_PR_RECOMMENDATIONS / RISKS_TO_AVOID / RESEARCH_FOLLOWUP_NEEDED
 ```
 
-GitHub-connector evidence is pinned research input; Deep Research never infers repo state from memory.
-Source discipline: official docs / peer-reviewed papers / primary exchange documentation outrank weak
-sources (forum posts, undated blogs, marketing) — weak sources are flagged, never authoritative. Every
-statement is labeled exactly one of `REPO_EVIDENCE` / `EXTERNAL_EVIDENCE` / `INFERENCE` / `UNKNOWN`;
-UNKNOWN is fail-closed and never upgraded to fact.
+Every statement is labelled as exactly one of verified repository evidence, verified external
+evidence, inference, or `UNKNOWN`. Live repository state is never inferred without live evidence.
+Official documentation and primary sources are distinguished from weak ones. Recommendations are
+bounded and PR-level, never vague strategy.
 
-## 7. Output contract (DEEP_RESEARCH_TO_CONTROLLER)
+## 8. Post-research gate
 
-Every major report returns exactly:
-
-```text
-RESULT:
-VERDICT:
-RESEARCH_MODE:
-RESEARCH_DATE:
-SOURCE_QUALITY:
-PINNED_REPO_STATE:
-REPO_EVIDENCE:
-EXTERNAL_EVIDENCE:
-WHAT_IS_PROVEN:
-WHAT_IS_INFERRED:
-WHAT_IS_UNKNOWN:
-STALE_PRIOR_FINDINGS:
-OVERENGINEERING_AUDIT:
-PRD_ALIGNMENT:
-TOP1_IMPLICATION:
-RISKS:
-BOUNDED_RECOMMENDATIONS:
-EXACT_NEXT_PR_PROPOSAL:
-WHAT_MUST_NOT_CHANGE:
-REFRESH_TRIGGER:
-CONTROLLER_VERIFICATION_REQUIRED:
-DEEP_RESEARCH_FOLLOWUP_NEEDED:
-```
-
-## 8. Post-research controller gate
-
-ChatGPT must: (1) verify every repo claim through the GitHub connector; (2) inspect load-bearing external
-citations; (3) separate facts from inference; (4) reject unsupported or marketing-style claims; (5) check
-doctrine compatibility; (6) check whether stricter safety rules override recommendations; (7) decide
-`ACCEPT_RESEARCH` / `REPAIR_RESEARCH` / `REJECT_RESEARCH` / `DEEP_RESEARCH_FOLLOWUP_NEEDED`; (8) convert
-accepted findings into no more than ONE next bounded PR proposal; (9) never treat research as merge
-authorization. External "best practices" that conflict with repo safety doctrine are recorded as proposals
-only — the stricter safety rule wins.
+The controller verifies the sources, checks that nothing load-bearing was inferred, and decides the
+next task. A research finding authorizes research conclusions only — never downstream implementation,
+never a readiness or connector transition, and never a governance value.
 
 ## 9. Freshness and reuse
 
-A prior result may be reused only when: the exact question is materially unchanged; relevant repo state is
-unchanged or differences are accounted for; source versions are still current; the research date remains
-acceptable for the fact class; no official documentation update is known; no conflicting repo or external
-evidence appeared. Refresh immediately when: exchange/API docs changed; pricing/fees/rate limits changed;
-regulation/security guidance changed; framework architecture materially changed; the repo phase or design
-question changed; the prior report contains UNKNOWN on a load-bearing fact; a current external decision is
-being authorized. Output always states: research date; repo commit/PR head used; source versions/update
-dates where available; reusable findings; stale findings; UNKNOWN findings; exact refresh trigger.
+A research answer carries the date and the source revision it was verified against. Reuse it while it
+is fresh and while nothing it depended on changed. Re-run it when the external surface changes, when a
+source is superseded, or when a decision now depends on a detail the original question did not cover.
 
-## 10. Mandatory upcoming checkpoints (event-triggered; they authorize research only, never implementation)
+## 10. Misuse prevention
 
-1. **After the Agent OS PR is independently audited, merged, and postverified:** top-1 external
-   architecture + overengineering benchmark (`XR_ARCHITECTURE_BENCHMARK` + `XR_OVERENGINEERING_AUDIT`).
-2. **After SM-5/SM-6 enforcement is merged and postverified:** focused paper/backtest equivalence and
-   secondary-metrics benchmark review.
-3. **Before machine-time provenance implementation** where external time-source or operational evidence
-   semantics matter: targeted current-fact research.
-4. **Before any Deribit/readiness connector design:** official Deribit API, testnet, rate-limit,
-   authentication, operational-risk, and readiness research.
-5. **Before shadow/live/readiness design:** institutional operational-resilience, custody, security, and
-   live-promotion benchmark research.
-
-Each checkpoint's downstream work still requires controller selection and bounded implementation
-authorization through the normal Agent OS chain.
-
-## 11. Misuse prevention (hard limits)
-
-Deep Research must never: mutate repo or GitHub state (no branch/file/commit/push/PR-open/PR-close/comment/
-review/thread-resolve/workflow-rerun/merge/auto-merge — even when the underlying work is authorized);
-justify skipping tests/CI/audit; replace the connector final gate, Class-C Codex audit, tests/CI, or local
-post-merge verification; authorize live/private API/order routing or any forbidden surface; weaken a
-fail-closed gate; replace explicit per-PR merge authorization; produce broad PRD rewrites unless the
-controller explicitly asks; or claim readiness/live/order/capital authority. It may recommend a mutation
-task; the controller routes any authorized mutation to the correct executor lane. On any conflict the
-stricter safety rule wins.
+Research must never justify skipping a test, a CI gate or an independent audit; authorize a live or
+private API, order routing, a scheduler, shadow or live execution, or any forbidden surface; weaken a
+fail-closed gate; replace explicit per-PR human merge authorization; or produce a broad product
+rewrite that nobody asked for. External best practice that conflicts with repository safety doctrine
+is a proposal only — the stricter safety rule wins.
