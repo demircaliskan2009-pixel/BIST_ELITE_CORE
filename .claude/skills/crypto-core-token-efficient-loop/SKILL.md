@@ -65,7 +65,7 @@ TASK_FAMILY_AUTHORITY_REF: canonical section 3. EFFORT_AUTHORITY_REF: canonical 
   `SELF_AUDIT_ONLY_NOT_INDEPENDENT`.
 - No Claude session satisfies an independent audit. Protected Class-C work always gets a fresh-context
   audit from the protected frontier lane (canonical sections 3.3 and 12), and an unavailable frontier
-  lane is `ASTRA_REQUIRED_BUT_UNAVAILABLE` — never a silent downgrade.
+  lane is `CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE` — never a silent downgrade.
 - External or current facts route to the controller, never to local web research, and never as a gate
   waiver.
 - No BIST, live, order, capital or readiness surface; no direct `main` push; no non-standard merge;

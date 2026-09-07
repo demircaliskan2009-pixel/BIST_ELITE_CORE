@@ -55,9 +55,9 @@ themselves, three authoring rules matter most:
 These describe execution STYLE for an already-selected lane. None of them changes a family or an
 effort.
 
-### 4.1 Frontier reasoning profile (GPT-6 Astra)
+### 4.1 Protected frontier profile (Codex GPT-5.6 Sol)
 
-Astra is instruction-sensitive: it follows what the prompt actually says, so vagueness costs more here
+The protected lane is instruction-sensitive: it follows what the prompt actually says, so vagueness costs more here
 than elsewhere. Give the explicit outcome, the exact authority, the exact sources and the exact stop
 condition. Say what "done" looks like.
 
@@ -147,7 +147,7 @@ conclusions as premises.
 Two rules are absolute. An implementation context never satisfies its own independent audit, and a
 same-model second pass is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`. Protected Class-C work always goes to
 the protected frontier lane named in canonical section 3.3; if that lane cannot run, the correct
-output is `ASTRA_REQUIRED_BUT_UNAVAILABLE` and a stop — never a quieter substitute.
+output is `CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE` and a stop — never a quieter substitute.
 
 ## 6. Report shape
 

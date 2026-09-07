@@ -253,8 +253,8 @@ ORACLE_CI_VALIDATOR_COMMAND = "python scripts/crypto_core/validate_agent_os_v2.p
 ORACLE_CI_ANCHOR_COMMAND = "test -f tests/crypto_core/test_agent_os_v2_contract.py"
 ORACLE_BOOTSTRAP_PATH = "tests/crypto_core/test_agent_os_v2_contract.py"
 
-ORACLE_FRONTIER_LANE = "GPT-6 Astra"
-ORACLE_FRONTIER_MODEL_ID = "gpt-6-astra"
+ORACLE_FRONTIER_LANE = "Codex GPT-5.6 Sol"
+ORACLE_FRONTIER_MODEL_ID = "gpt-5.6-sol"
 
 ORACLE_RETIRED_PATH_COUNT = 50
 
@@ -298,10 +298,20 @@ def write(root: Path, rel: str, text: str) -> None:
     (root / rel).write_text(text, encoding="utf-8", newline="\n")
 
 
-def patch(root: Path, rel: str, old: str, new: str, *, count: int = 1) -> None:
-    """Replace ``old`` with ``new``, proving the anchor was unique before mutating."""
+def patch(root: Path, rel: str, old: str, new: str, *, count: int | None = 1) -> None:
+    """Replace EVERY occurrence of ``old``, proving the anchor was there before mutating.
+
+    ``count`` pins how many occurrences the probe expects, so a probe aimed at one exact site
+    fails loudly if the anchor stops being unique. ``count=None`` is for an anchor doctrine may
+    legitimately restate in several sections: the probe then proves only that it was present,
+    and still removes all of it.
+    """
     text = read(root, rel)
-    assert text.count(old) == count, "sandbox anchor {!r} appeared {} times in {}".format(old, text.count(old), rel)
+    found = text.count(old)
+    if count is None:
+        assert found, "sandbox anchor {!r} is absent from {}".format(old, rel)
+    else:
+        assert found == count, "sandbox anchor {!r} appeared {} times in {}".format(old, found, rel)
     write(root, rel, text.replace(old, new))
 
 
@@ -522,7 +532,7 @@ def test_removing_a_declared_max_branch_is_rejected(sandbox: Path) -> None:
     patch(
         sandbox,
         CANONICAL,
-        "ROUTE: T3D | ARCHITECTURE | GPT-6 Astra | gpt-6-astra | max | READ_ONLY\n",
+        "ROUTE: T3D | ARCHITECTURE | Claude Opus 5 | claude-opus-5 | max | READ_ONLY\n",
         "",
     )
     assert_rejects(sandbox, "MAX_EFFORT_CLASSES declares")
@@ -541,7 +551,7 @@ def test_protected_audit_downgrade_is_rejected(sandbox: Path, lane: str, model_i
     patch(
         sandbox,
         CANONICAL,
-        "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY",
+        "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | Codex GPT-5.6 Sol | gpt-5.6-sol | xhigh | READ_ONLY",
         "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | {} | {} | xhigh | READ_ONLY".format(lane, model_id),
     )
     found = failures(sandbox)
@@ -550,14 +560,14 @@ def test_protected_audit_downgrade_is_rejected(sandbox: Path, lane: str, model_i
 
 def test_self_audit_independence_rule_must_be_present(sandbox: Path) -> None:
     """Probe 15: the rule that a same-model self-review never satisfies Class C."""
-    patch(sandbox, CANONICAL, "SELF_AUDIT_ONLY_NOT_INDEPENDENT", "SELF_REVIEW_IS_FINE")
+    patch(sandbox, CANONICAL, "SELF_AUDIT_ONLY_NOT_INDEPENDENT", "SELF_REVIEW_IS_FINE", count=None)
     assert_rejects(sandbox, "SELF_AUDIT_ONLY_NOT_INDEPENDENT")
 
 
-def test_astra_unavailable_stop_token_must_be_present(sandbox: Path) -> None:
+def test_class_c_unavailable_stop_token_must_be_present(sandbox: Path) -> None:
     """Probe 34: without this token there is no named stop, so a silent downgrade becomes possible."""
-    patch(sandbox, CANONICAL, "ASTRA_REQUIRED_BUT_UNAVAILABLE", "ASTRA_OPTIONAL")
-    assert_rejects(sandbox, "ASTRA_REQUIRED_BUT_UNAVAILABLE")
+    patch(sandbox, CANONICAL, "CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE", "CLASS_C_LANE_OPTIONAL")
+    assert_rejects(sandbox, "CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE")
 
 
 def test_max_effort_classes_match_the_oracle() -> None:
@@ -594,8 +604,8 @@ def test_frontier_lane_identity_is_pinned() -> None:
     ("old", "new"),
     [
         (
-            "ROUTE: T3D | ARCHITECTURE | GPT-6 Astra | gpt-6-astra | max | READ_ONLY",
-            "ROUTE: T3D | ARCHITECTURE | GPT-6 Astra | gpt-6-astra | ultra | READ_ONLY",
+            "ROUTE: T3D | ARCHITECTURE | Claude Opus 5 | claude-opus-5 | max | READ_ONLY",
+            "ROUTE: T3D | ARCHITECTURE | Claude Opus 5 | claude-opus-5 | ultra | READ_ONLY",
         ),
         ("<!-- REASONING_EFFORT_ENUM_BEGIN -->\nlow", "<!-- REASONING_EFFORT_ENUM_BEGIN -->\nultra\nlow"),
     ],
@@ -1278,7 +1288,7 @@ def test_unavailable_frontier_lane_blocks_only_its_own_gate() -> None:
     never converts into a project-level stop."""
     canonical_text = (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig")
     flat = " ".join(canonical_text.split())
-    assert "ASTRA_REQUIRED_BUT_UNAVAILABLE" in flat
+    assert "CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE" in flat
     assert "PROVIDER_EXHAUSTION_IS_NOT_PROJECT_STOP" in flat
     assert "it never converts an unavailable protected lane into a satisfied one" in flat
     # The protected lane is still exclusively routed, whatever the capacity state.
@@ -2425,3 +2435,127 @@ def test_canonical_vocabulary_matches_the_executable_grammar() -> None:
     for value_class in validator.VALUE_CLASSES:
         assert value_class in canonical, value_class
     assert "NONEMPTY_STRING" not in canonical
+
+
+# ---------------------------------------------------------------------------
+# Routing authority: the read-only reasoning families and the protected lane
+#
+# Probes are literal and independent: the expected lanes, model ids and effort sets are
+# written out here and never imported from the validator.
+# ---------------------------------------------------------------------------
+
+ORACLE_READ_ONLY_REASONING_LANE = "Claude Opus 5"
+ORACLE_READ_ONLY_REASONING_MODEL_ID = "claude-opus-5"
+ORACLE_READ_ONLY_REASONING_EFFORTS = {
+    "T3C": {"medium", "high", "xhigh"},
+    "T3D": {"high", "xhigh", "max"},
+    "T3E": {"high", "xhigh", "max"},
+}
+ORACLE_PROTECTED_FRONTIER_EFFORTS = {"xhigh", "max"}
+
+
+def _routes() -> list[list[str]]:
+    rows = validator.block_lines((REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig"), "ROLE_ROUTING_MATRIX")
+    parsed = []
+    for row in rows or []:
+        if row.startswith("ROUTE:"):
+            parsed.append([f.strip() for f in row[len("ROUTE:") :].split("|")])
+    return parsed
+
+
+@pytest.mark.parametrize("family", ["T3C", "T3D", "T3E"])
+def test_read_only_reasoning_family_lane_and_efforts(family: str) -> None:
+    rows = [r for r in _routes() if r[0] == family]
+    assert rows, family
+    assert {r[2] for r in rows} == {ORACLE_READ_ONLY_REASONING_LANE}
+    assert {r[3] for r in rows} == {ORACLE_READ_ONLY_REASONING_MODEL_ID}
+    assert {r[4] for r in rows} == ORACLE_READ_ONLY_REASONING_EFFORTS[family]
+    assert {r[5] for r in rows} == {"READ_ONLY"}
+
+
+def test_t3c_never_reaches_max() -> None:
+    """max is reserved for the families whose per-family trigger table grants it."""
+    assert "max" not in {r[4] for r in _routes() if r[0] == "T3C"}
+    rows = validator.block_lines((REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig"), "MAX_EFFORT_FAMILY_TRIGGERS")
+    assert not any(row.lstrip("- ").startswith("T3C ") for row in rows or [])
+
+
+def test_protected_frontier_lane_owns_class_c() -> None:
+    rows = [r for r in _routes() if r[0] == "T4"]
+    assert rows
+    assert {r[2] for r in rows} == {ORACLE_FRONTIER_LANE}
+    assert {r[3] for r in rows} == {ORACLE_FRONTIER_MODEL_ID}
+    assert {r[4] for r in rows} == ORACLE_PROTECTED_FRONTIER_EFFORTS
+    assert {r[5] for r in rows} == {"READ_ONLY"}
+    assert {r[1] for r in rows} == {"CLASS_C_CROSS_CONTRACT"}
+
+
+@pytest.mark.parametrize(
+    ("label", "row"),
+    [
+        ("T3C on the retired frontier lane", "ROUTE: T3C | REVIEW | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY"),
+        ("T3C on Terra", "ROUTE: T3C | REVIEW | GPT-5.6 Terra | - | high | READ_ONLY"),
+        ("T3C at max", "ROUTE: T3C | REVIEW | Claude Opus 5 | claude-opus-5 | max | READ_ONLY"),
+        (
+            "T3D on the retired frontier lane",
+            "ROUTE: T3D | ARCHITECTURE | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY",
+        ),
+        (
+            "T3E on the retired frontier lane",
+            "ROUTE: T3E | PROMPT_ARCHITECTURE | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY",
+        ),
+        (
+            "T4 on the retired frontier lane",
+            "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY",
+        ),
+        ("T4 on Claude", "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | Claude Opus 5 | claude-opus-5 | xhigh | READ_ONLY"),
+        ("T4 on Terra", "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-5.6 Terra | - | xhigh | READ_ONLY"),
+        ("T4 on Luna", "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-5.6 Luna | - | xhigh | READ_ONLY"),
+        (
+            "T4 mutating",
+            "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | Codex GPT-5.6 Sol | gpt-5.6-sol | xhigh | BOUNDED_MUTATION",
+        ),
+        ("T4 at high", "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | Codex GPT-5.6 Sol | gpt-5.6-sol | high | READ_ONLY"),
+        ("T4 with a non-Class-C intent", "ROUTE: T4 | REVIEW | Codex GPT-5.6 Sol | gpt-5.6-sol | xhigh | READ_ONLY"),
+    ],
+    ids=[
+        "T3C on the retired frontier lane",
+        "T3C on Terra",
+        "T3C at max",
+        "T3D on the retired frontier lane",
+        "T3E on the retired frontier lane",
+        "T4 on the retired frontier lane",
+        "T4 on Claude",
+        "T4 on Terra",
+        "T4 on Luna",
+        "T4 mutating",
+        "T4 at high",
+        "T4 with a non-Class-C intent",
+    ],
+)
+def test_routing_authority_rejects_a_substituted_lane(sandbox: Path, label: str, row: str) -> None:
+    """Every way the protected or read-only authority could be quietly reassigned."""
+    text = read(sandbox, CANONICAL)
+    marker = "<!-- ROLE_ROUTING_MATRIX_END -->"
+    write(sandbox, CANONICAL, text.replace(marker, row + "\n" + marker, 1))
+    assert failures(sandbox), "the routing matrix accepted: {}".format(label)
+
+
+def test_class_c_cannot_be_satisfied_by_a_claude_session() -> None:
+    canonical = _normalized(REPO_ROOT / CANONICAL)
+    assert "No Claude lane, no Terra lane, no Luna lane and no controller read-only pass satisfies Class C" in canonical
+    assert "SELF_AUDIT_ONLY_NOT_INDEPENDENT" in canonical
+
+
+def test_provider_capacity_never_reassigns_protected_authority() -> None:
+    canonical = _normalized(REPO_ROOT / CANONICAL)
+    assert "Temporary provider capacity NEVER reassigns protected authority" in canonical
+    assert "CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE" in canonical
+
+
+def test_the_retired_frontier_lane_is_not_active_routing() -> None:
+    """Astra may remain as historical evidence, never as an active lane."""
+    assert "Astra" in validator.RETIRED_ROUTE_LANE_TOKENS
+    assert "Sol" not in validator.RETIRED_ROUTE_LANE_TOKENS
+    for row in _routes():
+        assert "Astra" not in row[2], row

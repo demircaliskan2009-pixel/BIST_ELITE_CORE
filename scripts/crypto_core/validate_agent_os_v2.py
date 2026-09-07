@@ -149,11 +149,25 @@ MUTATION_AUTHORITIES = frozenset(
 T3B_ALLOWED_INTENTS = frozenset({"IMPLEMENTATION", "REPAIR"})
 
 # The protected frontier lane. A T4 row that names anything else is a silent downgrade.
-FRONTIER_LANE = "GPT-6 Astra"
-FRONTIER_MODEL_ID = "gpt-6-astra"
+# The read-only reasoning families run on Claude Opus 5. Their legal efforts are exact sets, so a
+# family cannot silently acquire a stronger effort: T3C in particular must never reach max, because
+# max is reserved for the families whose per-family trigger table grants it.
+READ_ONLY_REASONING_LANE = "Claude Opus 5"
+READ_ONLY_REASONING_MODEL_ID = "claude-opus-5"
+READ_ONLY_REASONING_EFFORTS = {
+    "T3C": frozenset({"medium", "high", "xhigh"}),
+    "T3D": frozenset({"high", "xhigh", "max"}),
+    "T3E": frozenset({"high", "xhigh", "max"}),
+}
+PROTECTED_FRONTIER_EFFORTS = frozenset({"xhigh", "max"})
+
+FRONTIER_LANE = "Codex GPT-5.6 Sol"
+FRONTIER_MODEL_ID = "gpt-5.6-sol"
 
 # Lanes that must never appear in ANY active route row.
-RETIRED_ROUTE_LANE_TOKENS = ("Fable", "Copilot", "Opus 4", "Sol")
+# Lanes that must never appear in an ACTIVE route. Sol is deliberately absent: it is the current
+# protected frontier lane. Astra is listed because it is now historical evidence only.
+RETIRED_ROUTE_LANE_TOKENS = ("Fable", "Copilot", "Opus 4", "Astra")
 
 # Retired PR-sizing template fields and heuristics. This list is deliberately EXACT and CLOSED: it
 # catches the machine-readable field names and the literal retired phrases, and nothing else. English
@@ -265,7 +279,7 @@ REQUIRED_CANONICAL_TOKENS = (
     "ALLOWED_FILES",
     "MUTATION AUTHORIZATION BOUNDARY",
     "SELF_AUDIT_ONLY_NOT_INDEPENDENT",
-    "ASTRA_REQUIRED_BUT_UNAVAILABLE",
+    "CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE",
     "CHATGPT_WORK_LANE",
     "WORK_LANE_BOUNDARIES",
     "WORK_PREPARED_NOT_AUTHORIZED",
@@ -751,6 +765,35 @@ def _check_routing(root: Path, ctx: dict[str, object], max_effort_classes: froze
         for intent in intents:
             if intent != "CLASS_C_CROSS_CONTRACT":
                 failures.append(f"{CANONICAL}: T4 route carries non-Class-C intent {intent}")
+
+    t4_efforts = frozenset(effort for _c, _i, _l, _m, effort, _mut in t4_rows)
+    if t4_rows and t4_efforts != PROTECTED_FRONTIER_EFFORTS:
+        failures.append(
+            f"{CANONICAL}: T4 declares efforts {sorted(t4_efforts)} but the protected frontier lane "
+            f"runs exactly {sorted(PROTECTED_FRONTIER_EFFORTS)}"
+        )
+
+    # 5b) The read-only reasoning families are owned by one lane with an exact effort set.
+    for family, legal in READ_ONLY_REASONING_EFFORTS.items():
+        rows_for = [row for row in parsed if row[0] == family]
+        if not rows_for:
+            failures.append(f"{CANONICAL}: no {family} route declared")
+            continue
+        for _cls, _intents, lane, model_id, _effort, _mut in rows_for:
+            if lane != READ_ONLY_REASONING_LANE:
+                failures.append(
+                    f"{CANONICAL}: {family} routes to {lane} but the read-only reasoning lane is "
+                    f"{READ_ONLY_REASONING_LANE}"
+                )
+            if model_id != READ_ONLY_REASONING_MODEL_ID:
+                failures.append(
+                    f"{CANONICAL}: {family} route model id is {model_id} but must be {READ_ONLY_REASONING_MODEL_ID}"
+                )
+        declared = frozenset(effort for _c, _i, _l, _m, effort, _mut in rows_for)
+        if declared != legal:
+            failures.append(
+                f"{CANONICAL}: {family} declares efforts {sorted(declared)} but its legal set is {sorted(legal)}"
+            )
 
     # 6) Read-only families never carry mutation authority.
     for cls, _intents, _lane, _mid, _effort, mutation in parsed:

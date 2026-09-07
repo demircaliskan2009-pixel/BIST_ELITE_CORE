@@ -87,7 +87,7 @@ protected Class-C requirement, safety or correctness, and there is no provider r
 When the shared OpenAI pool is exhausted and Claude capacity remains, the mode is
 `CLAUDE_CONTINUITY`: nonprotected work continues here. It does NOT mean a Claude session may satisfy
 a gate that requires the protected frontier lane — that specific gate waits, and only that gate
-(`ASTRA_REQUIRED_BUT_UNAVAILABLE`, canonical sections 3.3 and 10.1). Report the capacity reading
+(`CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE`, canonical sections 3.3 and 10.1). Report the capacity reading
 honestly in the handoff, or `UNKNOWN`; never guess one, and never write one into a durable file.
 
 Effort is chosen per task from the work itself, per canonical section 3.2 — `low` for mechanical

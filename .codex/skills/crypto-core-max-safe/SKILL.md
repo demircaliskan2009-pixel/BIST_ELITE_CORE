@@ -32,7 +32,7 @@ The canonical matrix assigns the classes. What is host-specific is only HOW each
 - **Protected frontier lane.** Class-C protected design and audit run on a controller-prepared narrow
   evidence packet — never broad discovery, never polling, never merge mechanics, never routine docs.
   The canonical protected frontier lane is named in canonical section 3.3; if it cannot run, return
-  `ASTRA_REQUIRED_BUT_UNAVAILABLE` and stop. Never substitute a cheaper lane for it because of quota
+  `CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE` and stop. Never substitute a cheaper lane for it because of quota
   or availability.
 
 Every serious prompt and report carries the runtime identity fields of canonical section 4.1 with an
@@ -50,7 +50,7 @@ authorized lane can do at equal quality is preferably routed there.
 That is a capacity preference only. It never overrides task intent, audit independence, a protected
 Class-C requirement, safety or correctness, and it never lets an exhausted pool satisfy, waive or
 downgrade a gate. When the pool is exhausted, the protected gate waits
-(`ASTRA_REQUIRED_BUT_UNAVAILABLE`) while nonprotected work continues elsewhere — the project does not
+(`CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE`) while nonprotected work continues elsewhere — the project does not
 stop (`PROVIDER_EXHAUSTION_IS_NOT_PROJECT_STOP`).
 
 ## Host surfaces
