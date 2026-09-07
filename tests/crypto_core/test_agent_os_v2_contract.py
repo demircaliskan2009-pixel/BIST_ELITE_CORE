@@ -178,7 +178,7 @@ ORACLE_VOLATILE_STATE_FIELDS = {
 # MEANINGFUL_VALUE_CLASS_REGISTRY_V1, declared literally here and never derived from the validator.
 # Order matters: it is the registry order, so a silent reordering is visible too.
 ORACLE_PROOF_PAIRED_MANIFEST_FIELDS = [
-    ("branch", "NONEMPTY_STRING"),
+    ("branch", "TOKEN_BRANCH"),
     ("base_sha", "HASH_IDENTIFIER"),
     ("base_tree", "HASH_IDENTIFIER"),
     ("head_sha", "HASH_IDENTIFIER"),
@@ -193,13 +193,15 @@ ORACLE_PROOF_PAIRED_MANIFEST_FIELDS = [
     ("openai_agentic_capacity", "NORMALIZED_ENUM"),
     ("claude_capacity", "NORMALIZED_ENUM"),
     ("capacity_routing_mode", "NORMALIZED_ENUM"),
-    ("next_safe_action", "NONEMPTY_STRING"),
+    ("next_safe_action", "TEXT_EVIDENCE"),
 ]
 
 ORACLE_PROOF_PAIRED_FIELD_NAMES = [field for field, _class in ORACLE_PROOF_PAIRED_MANIFEST_FIELDS]
 
 ORACLE_MEANINGFUL_VALUE_CLASSES = [
-    "NONEMPTY_STRING",
+    "TEXT_EVIDENCE",
+    "TOKEN_REPO",
+    "TOKEN_BRANCH",
     "HASH_IDENTIFIER",
     "NONNEGATIVE_INT",
     "POSITIVE_INT",
@@ -2251,7 +2253,10 @@ def _revision_evidence(**overrides: object) -> dict:
         "tested_revision_tree": _ORACLE_TREE,
         "checkout_ref_override": False,
         "tests_job_conclusion": "success",
-        "agent_os_gate_step_conclusions": {"validator": "success", "oracle": "success"},
+        "agent_os_gate_step_conclusions": {
+            "Agent OS control-plane contract": "success",
+            "Agent OS contract oracle anchor": "success",
+        },
         "required_contexts": ["tests", "CodeQL", "codeql"],
     }
     evidence.update(overrides)
@@ -2270,7 +2275,16 @@ def _revision_evidence(**overrides: object) -> dict:
         ("checkout ref overridden", {"checkout_ref_override": True}, False),
         ("tests job skipped", {"tests_job_conclusion": "skipped"}, False),
         ("tests job neutral", {"tests_job_conclusion": "neutral"}, False),
-        ("gate step cancelled", {"agent_os_gate_step_conclusions": {"validator": "cancelled"}}, False),
+        (
+            "gate step cancelled",
+            {
+                "agent_os_gate_step_conclusions": {
+                    "Agent OS control-plane contract": "cancelled",
+                    "Agent OS contract oracle anchor": "success",
+                }
+            },
+            False,
+        ),
         ("gate steps absent", {"agent_os_gate_step_conclusions": {}}, False),
         ("workflow source unproven", {"workflow_path": ""}, False),
         ("event not accepted", {"event": "workflow_dispatch"}, False),
@@ -2330,3 +2344,84 @@ def test_canonical_declares_the_tested_revision_evidence_set() -> None:
     assert declared is not None
     fields = {line.lstrip("- ").strip() for line in declared if line.strip()}
     assert fields == set(validator.TESTED_REVISION_EVIDENCE_FIELDS)
+
+
+# ---------------------------------------------------------------------------
+# Pre-audit closures on this candidate
+# ---------------------------------------------------------------------------
+
+
+def test_run_provenance_requires_the_expected_workflow() -> None:
+    """A sibling workflow can publish a green `tests` context, so a non-empty path proves nothing."""
+    assert validator.tested_revision_failures(_revision_evidence(workflow_path=".github/workflows/other.yml"))
+    assert validator.tested_revision_failures(_revision_evidence(workflow_path=""))
+    assert validator.tested_revision_failures(_revision_evidence()) == []
+
+
+@pytest.mark.parametrize(
+    ("label", "conclusions"),
+    [
+        ("only one gate reported", {"Agent OS control-plane contract": "success"}),
+        ("only the oracle reported", {"Agent OS contract oracle anchor": "success"}),
+        ("an unrelated successful key", {"unrelated": "success"}),
+        ("no gates reported", {}),
+    ],
+    ids=["only one gate reported", "only the oracle reported", "an unrelated successful key", "no gates reported"],
+)
+def test_every_expected_gate_step_must_report(label: str, conclusions: dict) -> None:
+    """An absent entry is indistinguishable from a gate that never ran, so absence must fail."""
+    assert validator.tested_revision_failures(_revision_evidence(agent_os_gate_step_conclusions=conclusions)), label
+
+
+def test_expected_gate_step_names_are_declared() -> None:
+    assert set(validator.REQUIRED_AGENT_OS_GATE_STEPS) == {
+        "Agent OS control-plane contract",
+        "Agent OS contract oracle anchor",
+    }
+
+
+def test_runtime_block_requires_the_whole_field_set() -> None:
+    """The block's own contract says absence is never the same statement as UNKNOWN."""
+    manifest = _example_manifest()
+    manifest["model_runtime"] = {"model_evidence_source": "UNKNOWN"}
+    assert validator.check_manifest_instance("probe", manifest)
+    for field in validator.MODEL_RUNTIME_GRAMMAR["fields"]:
+        stripped = _example_manifest()
+        stripped["model_runtime"].pop(field)
+        assert validator.check_manifest_instance("probe", stripped), field
+
+
+@pytest.mark.parametrize(
+    ("source", "actual", "accepted"),
+    [
+        ("CONTRADICTED", "claude-sonnet-5", True),
+        ("CONTRADICTED", None, False),
+        ("CONFIGURATION_EVIDENCE_ONLY", "claude-sonnet-5", False),
+        ("UNKNOWN", "claude-sonnet-5", False),
+    ],
+    ids=[
+        "contradicted records what ran",
+        "contradicted without an observation",
+        "configuration claims execution",
+        "unknown claims execution",
+    ],
+)
+def test_contradicted_records_the_conflicting_execution(source: str, actual: object, accepted: bool) -> None:
+    """CONTRADICTED is contradictory runtime PROOF: something ran, and it was not what was asked for.
+
+    Forcing the observation to null would leave the manifest unable to record the very identity
+    that triggered STOP_MODEL_MISMATCH.
+    """
+    manifest = _example_manifest()
+    manifest["model_runtime"]["model_evidence_source"] = source
+    manifest["model_runtime"]["model_actual"] = actual
+    found = [item for item in validator.manifest_relation_failures("probe", manifest) if "model_actual" in item]
+    assert (not found) is accepted
+
+
+def test_canonical_vocabulary_matches_the_executable_grammar() -> None:
+    """Prose that names classes the grammar rejects would send an author down a dead end."""
+    canonical = _normalized(REPO_ROOT / CANONICAL)
+    for value_class in validator.VALUE_CLASSES:
+        assert value_class in canonical, value_class
+    assert "NONEMPTY_STRING" not in canonical

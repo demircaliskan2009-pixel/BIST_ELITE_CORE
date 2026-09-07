@@ -297,7 +297,9 @@ Rules. Runtime metadata wins whenever it is available. When the exact current se
 the user and no contradictory current-session evidence exists, record it honestly as
 `USER_ATTESTED_UI_SELECTION` — never relabel an attestation as telemetry. A configuration file, a
 default, or a settings pin alone is `CONFIGURATION_EVIDENCE_ONLY` and does not prove the actual
-execution model. Explicit contradictory runtime proof is `CONTRADICTED` and means
+execution model. Explicit contradictory runtime proof is `CONTRADICTED`: something WAS observed to
+run and it was not what was requested, so the observed identity is recorded rather than discarded,
+and it means
 `STOP_MODEL_MISMATCH` before mutation. Generic family-level host metadata is not automatically a
 contradiction of an exact user selector unless it actually proves a different model.
 
@@ -1137,8 +1139,8 @@ question ("is the key populated") while the contract asks an evidential one ("do
 evidence"), so `""` and `"   "` satisfied it. Blanket truthiness would be equally wrong, because
 `0` open PRs, `0` unresolved threads and an empty completed-gates list are all legitimate PROVEN
 facts. Meaningfulness is therefore TYPE-DEPENDENT and DECLARED, never inferred. The closed class
-vocabulary is `NONEMPTY_STRING`, `HASH_IDENTIFIER`, `NONNEGATIVE_INT`, `POSITIVE_INT`,
-`NORMALIZED_ENUM` and `STRUCTURED_LIST`. A field with no class, an unknown class, or a class that
+vocabulary is `TEXT_EVIDENCE`, `TOKEN_REPO`, `TOKEN_BRANCH`, `HASH_IDENTIFIER`,
+`NONNEGATIVE_INT`, `POSITIVE_INT`, `NORMALIZED_ENUM` and `STRUCTURED_LIST`. A field with no class, an unknown class, or a class that
 contradicts the field's schema shape fails the build in either direction — so a new proof field
 cannot be added without stating how it is proven. `HASH_IDENTIFIER` accepts any letter case,
 because Git does.

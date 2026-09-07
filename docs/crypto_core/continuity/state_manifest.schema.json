@@ -476,7 +476,17 @@
       "type": "object",
       "additionalProperties": false,
       "required": [
-        "model_evidence_source"
+        "model_id",
+        "model_requested",
+        "model_actual",
+        "requested_effort",
+        "observed_effort",
+        "capability_mode",
+        "host_setting_raw",
+        "environment",
+        "client_version",
+        "model_evidence_source",
+        "model_fallback"
       ],
       "properties": {
         "model_id": {
@@ -612,7 +622,7 @@
           ]
         }
       },
-      "description": "Runtime-proof block (agent_os_v2.md section 4). ALWAYS present, because a manifest that omits it entirely could silently satisfy a task claiming runtime proof. A host that exposes no runtime metadata says so with model_evidence_source UNKNOWN and null actual values - absence is never the same statement as UNKNOWN. It carries its own evidence class rather than a separate _evidence companion, and the class constrains what may be populated: RUNTIME_TELEMETRY requires a meaningful model_actual; USER_ATTESTED_UI_SELECTION requires a meaningful attested actual or host selector and stays labelled an attestation; CONFIGURATION_EVIDENCE_ONLY, UNKNOWN and CONTRADICTED prove no execution and must leave model_actual and observed_effort null. Ultra is recorded in capability_mode ONLY and is never written into an effort field, and host_setting_raw stores the operator UI choice verbatim without inventing an API mapping. model_actual and model_requested are deliberately unconstrained beyond carrying a payload, so an unexpected model or an observed fallback can always be recorded."
+      "description": "Runtime-proof block (agent_os_v2.md section 4). ALWAYS present, because a manifest that omits it entirely could silently satisfy a task claiming runtime proof. A host that exposes no runtime metadata says so with model_evidence_source UNKNOWN and null actual values - absence is never the same statement as UNKNOWN. It carries its own evidence class rather than a separate _evidence companion, and the class constrains what may be populated: RUNTIME_TELEMETRY requires a meaningful model_actual; USER_ATTESTED_UI_SELECTION requires a meaningful attested actual or host selector and stays labelled an attestation; CONTRADICTED is explicit contradictory runtime proof, so it records what actually ran; CONFIGURATION_EVIDENCE_ONLY and UNKNOWN prove no execution and must leave model_actual and observed_effort null. Ultra is recorded in capability_mode ONLY and is never written into an effort field, and host_setting_raw stores the operator UI choice verbatim without inventing an API mapping. model_actual and model_requested are deliberately unconstrained beyond carrying a payload, so an unexpected model or an observed fallback can always be recorded."
     },
     "authorization": {
       "type": "object",

@@ -1357,7 +1357,19 @@ MODEL_RUNTIME_GRAMMAR = _object(
         "model_evidence_source": _enum(MODEL_EVIDENCE_CLASSES),
         "model_fallback": _text(),
     },
-    required=("model_evidence_source",),
+    required=(
+        "model_id",
+        "model_requested",
+        "model_actual",
+        "requested_effort",
+        "observed_effort",
+        "capability_mode",
+        "host_setting_raw",
+        "environment",
+        "client_version",
+        "model_evidence_source",
+        "model_fallback",
+    ),
     description=(
         "Runtime-proof block (agent_os_v2.md section 4). ALWAYS present, because a manifest that omits "
         "it entirely could silently satisfy a task claiming runtime proof. A host that exposes no "
@@ -1365,8 +1377,9 @@ MODEL_RUNTIME_GRAMMAR = _object(
         "is never the same statement as UNKNOWN. It carries its own evidence class rather than a "
         "separate _evidence companion, and the class constrains what may be populated: RUNTIME_TELEMETRY "
         "requires a meaningful model_actual; USER_ATTESTED_UI_SELECTION requires a meaningful attested "
-        "actual or host selector and stays labelled an attestation; CONFIGURATION_EVIDENCE_ONLY, UNKNOWN "
-        "and CONTRADICTED prove no execution and must leave model_actual and observed_effort null. Ultra "
+        "actual or host selector and stays labelled an attestation; CONTRADICTED is explicit "
+        "contradictory runtime proof, so it records what actually ran; CONFIGURATION_EVIDENCE_ONLY and "
+        "UNKNOWN prove no execution and must leave model_actual and observed_effort null. Ultra "
         "is recorded in capability_mode ONLY and is never written into an effort field, and "
         "host_setting_raw stores the operator UI choice verbatim without inventing an API mapping. "
         "model_actual and model_requested are deliberately unconstrained beyond carrying a payload, so "
@@ -1633,8 +1646,17 @@ def manifest_relation_failures(label: str, instance: object) -> list[str]:
                     f"{label}: USER_ATTESTED_UI_SELECTION carries no model_actual or host_setting_raw "
                     f"payload, so nothing was actually attested"
                 )
+        elif source == "CONTRADICTED":
+            # CONTRADICTED is explicit contradictory runtime PROOF: something was observed to run,
+            # and it was not what was requested. Forcing the observation to null would make the
+            # manifest unable to record the very identity that triggered the stop.
+            if text_evidence_failures(actual):
+                failures.append(
+                    f"{label}: CONTRADICTED means a conflicting execution was observed, so "
+                    f"model_actual must record what actually ran"
+                )
         else:
-            # CONFIGURATION_EVIDENCE_ONLY, UNKNOWN and CONTRADICTED prove no execution.
+            # CONFIGURATION_EVIDENCE_ONLY and UNKNOWN prove no execution at all.
             if actual is not None:
                 failures.append(f"{label}: {source} must not populate model_actual as proven execution")
             if observed is not None:
@@ -1720,6 +1742,18 @@ TESTED_REVISION_EVIDENCE_FIELDS = (
 ACCEPTED_TESTED_EVENTS = ("pull_request", "push")
 TERMINAL_SUCCESS = "success"
 
+# The run must come from THIS workflow. A sibling workflow can publish a green `tests` context,
+# so a non-empty path proves nothing: the observed path is compared to the expected one.
+EXPECTED_CI_WORKFLOW_PATH = ".github/workflows/ci.yml"
+
+# The exact gate steps that must be present AND successful. Checking only the values supplied
+# let a bundle omit a gate entirely, and a missing entry is indistinguishable from a gate that
+# never ran.
+REQUIRED_AGENT_OS_GATE_STEPS = (
+    "Agent OS control-plane contract",
+    "Agent OS contract oracle anchor",
+)
+
 
 def tested_revision_failures(evidence: object) -> list[str]:
     """Judge one premerge evidence bundle. TOTAL: never raises on malformed input.
@@ -1782,20 +1816,28 @@ def tested_revision_failures(evidence: object) -> list[str]:
             f"{TERMINAL_SUCCESS!r} is acceptance - skipped, neutral and cancelled are not"
         )
     steps = evidence["agent_os_gate_step_conclusions"]
-    if not isinstance(steps, dict) or not steps:
+    if not isinstance(steps, dict):
         failures.append("the Agent OS gate step conclusions are missing")
     else:
+        for step in REQUIRED_AGENT_OS_GATE_STEPS:
+            if step not in steps:
+                failures.append(
+                    f"Agent OS gate step {step!r} has no reported conclusion; an absent entry is not "
+                    f"evidence that the gate ran"
+                )
         for step, conclusion in steps.items():
             if conclusion != TERMINAL_SUCCESS:
                 failures.append(
                     f"Agent OS gate step {step!r} concluded {conclusion!r}; only {TERMINAL_SUCCESS!r} is acceptance"
                 )
 
-    # A required context name is not a workflow identity: the run's own source path must match.
-    if not evidence["workflow_path"]:
+    # A required context name is not a workflow identity, so the run's own source path must be
+    # the expected workflow - a sibling workflow publishing a green context is not a substitute.
+    if evidence["workflow_path"] != EXPECTED_CI_WORKFLOW_PATH:
         failures.append(
-            "the source workflow path of the run is unproven; a required status context does not "
-            "identify a workflow file or revision"
+            f"the run's source workflow is {evidence['workflow_path']!r}, not "
+            f"{EXPECTED_CI_WORKFLOW_PATH!r}; a required status context does not identify a workflow "
+            f"file or revision, so a sibling workflow cannot supply this provenance"
         )
     return failures
 
