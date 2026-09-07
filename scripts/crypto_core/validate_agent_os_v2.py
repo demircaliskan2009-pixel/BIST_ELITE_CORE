@@ -1052,10 +1052,11 @@ def _check_continuity_fixtures(root: Path, ctx: dict[str, object], failures: lis
     example_path = "docs/crypto_core/continuity/state_manifest.example.json"
     registered: list[str] = list(ctx["proof_paired"])  # type: ignore[arg-type]
 
+    schema_dict: object = None
     schema_raw = read_text(root, schema_path)
     if schema_raw is not None:
         try:
-            schema = json.loads(schema_raw)
+            schema = schema_dict = json.loads(schema_raw)
         except ValueError as exc:
             failures.append(f"{schema_path}: invalid JSON: {exc}")
         else:
@@ -1119,6 +1120,11 @@ def _check_continuity_fixtures(root: Path, ctx: dict[str, object], failures: lis
         # The committed fixture is validated by the SAME deterministic relation checker the contract
         # uses, never by prose inspection.
         contracts, _contract_failures = manifest_field_contracts(root)
+        # `schema` is bound only when the schema file was read and parsed. A missing or malformed
+        # schema is already reported above; the shape half is then simply not runnable, and skipping
+        # it here must never turn into an exception.
+        if isinstance(schema_dict, dict):
+            failures.extend(manifest_structure_failures(example_path, example, schema_dict))
         failures.extend(manifest_relation_failures(example_path, example, contracts))
 
 
@@ -1296,6 +1302,111 @@ def meaningful_value_failures(value: object, value_class: str, detail: object) -
             reasons.extend(_element_failures(index, element, detail))
         return reasons
     return [f"has no predicate for declared value class {value_class!r}"]
+
+
+def _resolve_ref(root: dict, spec: object) -> object:
+    """Resolve a local ``#/$defs/...`` reference; anything else is unresolvable, hence a failure."""
+    if not isinstance(spec, dict):
+        return None
+    ref = spec.get("$ref")
+    if ref is None:
+        return spec
+    if not isinstance(ref, str) or not ref.startswith("#/$defs/"):
+        return None
+    return (root.get("$defs") or {}).get(ref[len("#/$defs/") :])
+
+
+def _structure_failures(path: str, value: object, spec: object, root: dict, depth: int = 0) -> list[str]:
+    """Enforce the manifest schema's SHAPE, bounded to the constructs this schema actually uses.
+
+    This is deliberately NOT a JSON Schema engine and must never become one: every construct it
+    does not recognize is a failure, never a silent pass, and the recursion is depth-bounded.
+    Relations, evidence semantics and meaningful values remain the semantic checker's job - this
+    only closes the half that the schema owns, so the documented gate runs both halves.
+    """
+    if depth > 6:
+        return [f"{path}: schema nesting is deeper than this checker accepts"]
+    spec = _resolve_ref(root, spec)
+    if not isinstance(spec, dict):
+        return [f"{path}: schema fragment is unresolvable"]
+
+    if "const" in spec:
+        return [] if value == spec["const"] else [f"{path}: must be {spec['const']!r}"]
+    if "enum" in spec:
+        members = spec["enum"]
+        if not isinstance(members, list):
+            return [f"{path}: malformed enum"]
+        return [] if value in members else [f"{path}: is not one of {members}"]
+    if "anyOf" in spec:
+        branches = spec["anyOf"]
+        if not isinstance(branches, list) or not branches:
+            return [f"{path}: malformed anyOf"]
+        for branch in branches:
+            if not _structure_failures(path, value, branch, root, depth + 1):
+                return []
+        return [f"{path}: matches no permitted shape"]
+
+    kind = spec.get("type")
+    if isinstance(kind, list):
+        # A type union, e.g. ["string", "null"]. Accept when the value matches ANY member.
+        if not kind or not all(isinstance(member, str) for member in kind):
+            return [f"{path}: malformed type union"]
+        for member in kind:
+            if not _structure_failures(path, value, {**spec, "type": member}, root, depth + 1):
+                return []
+        return [f"{path}: does not match any of {kind}"]
+    if kind == "null":
+        return [] if value is None else [f"{path}: must be null"]
+    if kind == "boolean":
+        return [] if isinstance(value, bool) else [f"{path}: must be a boolean"]
+    if kind == "string":
+        if not isinstance(value, str):
+            return [f"{path}: must be a string"]
+        if spec.get("minLength") == 1 and not _carries_visible_text(value):
+            return [f"{path}: carries no visible characters"]
+        pattern = spec.get("pattern")
+        if isinstance(pattern, str) and not re.match(pattern, value):
+            return [f"{path}: does not match {pattern}"]
+        return []
+    if kind == "integer":
+        if isinstance(value, bool) or not isinstance(value, int):
+            return [f"{path}: must be an integer"]
+        minimum = spec.get("minimum")
+        if isinstance(minimum, int) and value < minimum:
+            return [f"{path}: must be >= {minimum}"]
+        return []
+    if kind == "array":
+        if not isinstance(value, list):
+            return [f"{path}: must be an array"]
+        items = spec.get("items")
+        if items is None:
+            return [f"{path}: array schema declares no items"]
+        out: list[str] = []
+        for index, element in enumerate(value):
+            out.extend(_structure_failures(f"{path}[{index}]", element, items, root, depth + 1))
+        return out
+    if kind == "object":
+        if not isinstance(value, dict):
+            return [f"{path}: must be an object"]
+        properties = spec.get("properties") or {}
+        out = []
+        for key in spec.get("required") or []:
+            if key not in value:
+                out.append(f"{path}: missing required field {key!r}")
+        if spec.get("additionalProperties") is False:
+            for key in value:
+                if key not in properties:
+                    out.append(f"{path}: carries field {key!r}, which the schema forbids")
+        for key, sub in properties.items():
+            if key in value:
+                out.extend(_structure_failures(f"{path}.{key}" if path else key, value[key], sub, root, depth + 1))
+        return out
+    return [f"{path}: uses a schema construct this checker does not accept"]
+
+
+def manifest_structure_failures(label: str, instance: object, schema: dict) -> list[str]:
+    """The schema half of the manifest gate."""
+    return _structure_failures(label, instance, schema, schema)
 
 
 def manifest_field_contracts(root: Path) -> tuple[dict[str, tuple[str, object]], list[str]]:
@@ -1561,7 +1672,21 @@ def check_manifest_file(root: Path, manifest_path: Path) -> list[str]:
         return [f"{manifest_path}: cannot be read as JSON ({exc})"]
     if not isinstance(instance, dict):
         return [f"{manifest_path}: a manifest must be a JSON object"]
-    return manifest_relation_failures(str(manifest_path), instance, contracts)
+
+    # Both halves, in one gate. The schema owns SHAPE and the checker owns RELATIONS; a gate that
+    # ran only the relations let an incomplete or malformed manifest through while the contract
+    # said schema validation was necessary.
+    schema_raw = read_text(root, "docs/crypto_core/continuity/state_manifest.schema.json")
+    try:
+        schema = json.loads(schema_raw) if schema_raw is not None else None
+    except ValueError as exc:
+        return [f"state_manifest.schema.json: invalid JSON: {exc}"]
+    if not isinstance(schema, dict):
+        return ["state_manifest.schema.json: unreadable; the manifest gate cannot run"]
+
+    failures = manifest_structure_failures(str(manifest_path), instance, schema)
+    failures.extend(manifest_relation_failures(str(manifest_path), instance, contracts))
+    return failures
 
 
 def repo_root_from_here() -> Path:

@@ -161,7 +161,7 @@ Runs ONLY from an explicit closeout authorization that names the PR and the exac
 
 - Re-prove freshly, from no memory: `HEAD` equals the authorized SHA; `state == OPEN`;
   `mergeable == MERGEABLE`; `mergeStateStatus == CLEAN`; changed files equal the expected set; CI
-  terminal green or an accepted skip; exactly one open PR; zero unresolved valid review threads.
+  terminal SUCCESS; exactly one open PR; zero unresolved valid review threads.
 - Resolve ONLY the review threads the closeout authorization names, and only after proving the fix
   exists in source at the current HEAD with a line citation. Never self-resolve otherwise, and never
   resolve a human thread.
@@ -224,7 +224,8 @@ VERDICT / PROOF / REASON / NEXT_PROMPT
 
 Merge only when ALL of these are true, each freshly proven: `HEAD` equals the authorized SHA; the PR
 is `OPEN`; `headRefOid` equals the authorized SHA; the changed files equal the expected set; exactly
-one open PR and it is this one; CI checks are terminal green or an accepted skip, with no pending,
+one open PR and it is this one; CI checks are terminal SUCCESS - a `skipped`, `neutral` or
+`cancelled` load-bearing check is never acceptance (canonical section 17.1) - with no pending,
 queued, in-progress or missing checks; zero unresolved valid review threads; the working tree is
 clean; any test-only repair is proven to have no product-code change; no forbidden-scope surface
 (section 16); no protected-contract weakening; and explicit human authorization naming the PR and the

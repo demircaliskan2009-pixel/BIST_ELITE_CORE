@@ -2238,3 +2238,74 @@ def test_nonempty_string_requires_a_visible_character(label: str, value: str, me
     instance["branch_evidence"] = "PROVEN"
     found = [item for item in validator.manifest_relation_failures("probe", instance, contracts()) if "branch" in item]
     assert (not found) is meaningful, "{}: {}".format(label, found)
+
+
+# ---------------------------------------------------------------------------
+# The documented manifest gate runs BOTH halves: schema shape and semantic relations
+# ---------------------------------------------------------------------------
+
+
+def _gate(tmp_path: Path, instance: object) -> list:
+    compiled = tmp_path / "state_manifest.json"
+    compiled.write_text(json.dumps(instance), encoding="utf-8")
+    return validator.check_manifest_file(REPO_ROOT, compiled)
+
+
+@pytest.mark.parametrize(
+    "field",
+    ["schema", "repo", "compiled_at_evidence", "task_boundary", "model_runtime", "authorization"],
+)
+def test_manifest_gate_rejects_a_missing_required_field(tmp_path: Path, field: str) -> None:
+    """A gate that ran only the relations let an incomplete manifest through.
+
+    The declared split is schema=shape, checker=relations. The GATE has to run both halves, or
+    routing and audit can proceed from a manifest that never carried the facts at all.
+    """
+    instance = _example_manifest()
+    instance.pop(field, None)
+    assert _gate(tmp_path, instance), "a manifest missing {} passed the gate".format(field)
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate"),
+    [
+        ("forbidden extra top-level key", lambda m: m.update({"surprise_key": "x"})),
+        ("wrong schema constant", lambda m: m.update({"schema": "STATE_MANIFEST_V9"})),
+        ("forbidden nested key", lambda m: m["model_runtime"].update({"nope": 1})),
+        ("wrong nested item type", lambda m: m.update({"invalidations": [1]})),
+        ("effort outside the enum", lambda m: m["model_runtime"].update({"requested_effort": "ultra"})),
+    ],
+    ids=[
+        "forbidden extra top-level key",
+        "wrong schema constant",
+        "forbidden nested key",
+        "wrong nested item type",
+        "effort outside the enum",
+    ],
+)
+def test_manifest_gate_enforces_the_schema_shape(tmp_path: Path, label: str, mutate) -> None:
+    instance = _example_manifest()
+    mutate(instance)
+    assert _gate(tmp_path, instance), "the gate accepted: {}".format(label)
+
+
+def test_manifest_gate_accepts_the_committed_example(tmp_path: Path) -> None:
+    """The control: enforcing the shape must not reject the fixture the contract publishes."""
+    assert _gate(tmp_path, _example_manifest()) == []
+
+
+def test_structure_checker_fails_closed_on_an_unknown_construct() -> None:
+    """Unrecognized schema constructs are failures, never silent passes.
+
+    This is what stops the bounded reader from quietly degrading into "accept anything I do not
+    understand", which is how a shape gate becomes decoration.
+    """
+    schema = {"type": "object", "properties": {"x": {"multipleOf": 3}}, "required": ["x"]}
+    assert validator.manifest_structure_failures("probe", {"x": 9}, schema)
+
+
+def test_merge_gate_never_accepts_a_skipped_required_check() -> None:
+    """One surface still said "accepted skip" while the canonical protocol forbids it."""
+    workflow_doc = _normalized(REPO_ROOT / "docs/crypto_core/agent_workflow.md")
+    assert "accepted skip" not in workflow_doc
+    assert "`skipped`, `neutral` or `cancelled` load-bearing check is never acceptance" in workflow_doc
