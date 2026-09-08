@@ -769,6 +769,21 @@ def _check_routing(root: Path, ctx: dict[str, object], max_effort_classes: froze
             )
         )
 
+    # 4a) Coverage, not merely well-formedness: every declared class and every declared intent
+    # must actually be routed somewhere, and a row must route at least one intent.
+    for cls, intents, _lane, _mid, _effort, _mut in parsed:
+        if not intents:
+            failures.append(f"{CANONICAL}: class {cls} declares an empty intent list, so it routes nothing")
+    routed_classes = {cls for cls, *_rest in parsed}
+    for cls in sorted(set(ROUTE_CLASSES) - routed_classes):
+        failures.append(
+            f"{CANONICAL}: class {cls} is declared but has no route; a family with no row is "
+            f"unrouted while the gate would otherwise still report PASS"
+        )
+    routed_intents = {intent for _c, intents, *_rest in parsed for intent in intents}
+    for intent in sorted(set(TASK_INTENTS) - routed_intents):
+        failures.append(f"{CANONICAL}: TASK_INTENT {intent} is declared but no route accepts it")
+
     # 5) Class C and T4 are the SAME set, in both directions.
     #
     # "T4 carries only CLASS_C_CROSS_CONTRACT" was enforced; "only T4 carries
@@ -1540,11 +1555,11 @@ def _manifest_fields() -> tuple[dict, tuple[str, ...]]:
         ),
         "schema": _const(MANIFEST_TITLE),
         "repo": _repo("owner/name of the repository."),
-        "compiled_at_evidence": _text(
+        "compiled_at_evidence": _op(
             "How this manifest was compiled, for example the exact git and gh commands run. Free text, "
             "but it must describe real executed proof, never an assumption."
         ),
-        "task_boundary": _text("The SEMANTIC_BOUNDARY of the work this session is authorized to do."),
+        "task_boundary": _op("The SEMANTIC_BOUNDARY of the work this session is authorized to do."),
     }
     required = ["schema", "repo", "compiled_at_evidence", "task_boundary"]
 
@@ -1787,7 +1802,6 @@ def manifest_relation_failures(label: str, instance: object) -> list[str]:
             f"must carry a runtime-proof block with an explicit evidence class"
         )
     else:
-        host_raw = runtime.get("host_setting_raw")
         # Each dimension is judged on its OWN evidence. Identity and effort are observed by
         # different mechanisms - a host can report the model while exposing no effort setting at
         # all - so collapsing them into one evidence state forced at least one of them to be a lie.
@@ -1808,10 +1822,11 @@ def manifest_relation_failures(label: str, instance: object) -> list[str]:
                         f"{observation_field} carries no observation"
                     )
             elif source == "USER_ATTESTED_UI_SELECTION":
-                if not meaningful(observation) and text_evidence_failures(host_raw):
+                if not meaningful(observation):
                     failures.append(
-                        f"{label}: USER_ATTESTED_UI_SELECTION carries no {observation_field} and no "
-                        f"host_setting_raw payload, so nothing was actually attested about {dimension}"
+                        f"{label}: USER_ATTESTED_UI_SELECTION must record the attested {dimension} in "
+                        f"{observation_field}; host_setting_raw is verbatim context for one host "
+                        f"selector and cannot attest two independent dimensions at once"
                     )
             elif source == "CONTRADICTED":
                 # CONTRADICTED is explicit contradictory runtime PROOF: something WAS observed, and

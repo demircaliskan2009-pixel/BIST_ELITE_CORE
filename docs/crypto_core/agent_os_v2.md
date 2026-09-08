@@ -331,6 +331,12 @@ proven identity. A contradiction in one dimension never erases valid evidence fr
 effort, are both first-class truthful states. Never invent telemetry to fill a dimension: `UNKNOWN`
 with a null observation is the honest record, and it is always available.
 
+An attestation attests ONE dimension. `USER_ATTESTED_UI_SELECTION` records the attested value in
+that dimension's own observation field; `HOST_SETTING_RAW` is the operator's selector copied verbatim
+as context and is never itself a dimension's observation. A single untyped host label such as `Max`
+cannot prove both which model ran and which effort applied — letting one payload satisfy two
+independent dimensions is exactly the collapse this block exists to prevent.
+
 Canonical active identity for the protected frontier lane is `GPT-6 Astra`, API id
 `gpt-6-astra` where API identity is relevant. API availability of a model id never proves account availability in a
 particular product surface, and never proves that a host exposes a capability mode.

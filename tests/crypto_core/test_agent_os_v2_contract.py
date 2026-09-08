@@ -2141,7 +2141,8 @@ def test_proof_pair_relations(label: str, evidence: str, value: object, accepted
         ("RUNTIME_TELEMETRY", "claude-opus-5", None, True),
         ("RUNTIME_TELEMETRY", None, None, False),
         ("RUNTIME_TELEMETRY", "​", None, False),
-        ("USER_ATTESTED_UI_SELECTION", None, "Max", True),
+        ("USER_ATTESTED_UI_SELECTION", "claude-opus-5", "Opus 5 / Max", True),
+        ("USER_ATTESTED_UI_SELECTION", None, "Max", False),
         ("USER_ATTESTED_UI_SELECTION", None, None, False),
         ("CONFIGURATION_EVIDENCE_ONLY", "claude-opus-5", None, False),
     ],
@@ -2149,7 +2150,8 @@ def test_proof_pair_relations(label: str, evidence: str, value: object, accepted
         "telemetry proven",
         "telemetry null",
         "telemetry payload-empty",
-        "attested host",
+        "attested identity recorded",
+        "attested only a shared host label",
         "attested nothing",
         "configuration claims execution",
     ],
@@ -3264,3 +3266,74 @@ def test_ultra_never_enters_an_effort_dimension(field: str) -> None:
     manifest = _example_manifest()
     manifest["model_runtime"][field] = "ultra"
     assert validator.check_manifest_instance("probe", manifest)
+
+
+# --- Pre-audit consolidated repair: three findings automated review reproduced on df165dd -------
+
+
+def test_one_attestation_cannot_prove_two_dimensions() -> None:
+    """A single untyped host label satisfied identity AND effort while both observations were null.
+
+    That is the dimensional collapse the split exists to prevent, reintroduced through a shared
+    fallback. An attestation attests ONE dimension and must record it in that dimension's field.
+    """
+    manifest = _example_manifest()
+    manifest["model_runtime"].update(
+        model_evidence_source="USER_ATTESTED_UI_SELECTION",
+        model_actual=None,
+        effort_evidence_source="USER_ATTESTED_UI_SELECTION",
+        observed_effort=None,
+        host_setting_raw="Max",
+    )
+    assert validator.check_manifest_instance("probe", manifest)
+
+
+def test_an_attestation_that_records_its_own_dimension_is_accepted() -> None:
+    """The POSITIVE anchor: attestation stays a usable evidence class."""
+    manifest = _example_manifest()
+    manifest["model_runtime"].update(
+        model_evidence_source="USER_ATTESTED_UI_SELECTION",
+        model_actual="claude-opus-5",
+        effort_evidence_source="USER_ATTESTED_UI_SELECTION",
+        observed_effort="max",
+        host_setting_raw="Opus 5 / Max",
+    )
+    assert validator.check_manifest_instance("probe", manifest) == []
+
+
+@pytest.mark.parametrize("field", ["compiled_at_evidence", "task_boundary"])
+@pytest.mark.parametrize("filler", ["\u3164", "\u2800", "\u3164\u2800"])
+def test_state_proof_and_scope_are_load_bearing(field: str, filler: str) -> None:
+    """When live-state proof and the authorization boundary are filler, the manifest records nothing."""
+    manifest = _example_manifest()
+    manifest[field] = filler
+    assert [item for item in validator.check_manifest_instance("probe", manifest) if field in item]
+
+
+def test_free_form_commentary_stays_free_form() -> None:
+    """`$comment` is prose about the artifact; nothing compares it, so it keeps the weak grammar."""
+    manifest = _example_manifest()
+    manifest["$comment"] = "\u6ce8\u91c8"
+    assert not [item for item in validator.check_manifest_instance("probe", manifest) if "$comment" in item]
+
+
+@pytest.mark.parametrize(
+    ("label", "old", "new"),
+    [
+        ("the whole T0 STATUS row", "ROUTE: T0 | STATUS | GPT-5.6 Luna | - | low | MECHANICAL_ONLY\n", ""),
+        ("the whole XR row", "ROUTE: XR | EXTERNAL_RESEARCH | Deep Research | - | - | READ_ONLY\n", ""),
+        ("the intent list of a row", "ROUTE: T0 | STATUS |", "ROUTE: T0 |  |"),
+    ],
+    ids=["the whole T0 STATUS row", "the whole XR row", "the intent list of a row"],
+)
+def test_the_routing_matrix_must_cover_every_class_and_intent(sandbox: Path, label: str, old: str, new: str) -> None:
+    """Judging the rows that remain is not coverage: a deleted family is silently unrouted."""
+    patch(sandbox, CANONICAL, old, new)
+    assert failures(sandbox), "the matrix accepted a gap: {}".format(label)
+
+
+def test_every_declared_class_and_intent_is_routed() -> None:
+    rows = _routes()
+    assert {r[0] for r in rows} == set(validator.ROUTE_CLASSES)
+    routed = {intent.strip() for r in rows for intent in r[1].split(",") if intent.strip()}
+    assert routed == set(validator.TASK_INTENTS)

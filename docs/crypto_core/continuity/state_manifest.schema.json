@@ -61,12 +61,12 @@
     },
     "compiled_at_evidence": {
       "type": "string",
-      "minLength": 1,
+      "pattern": "[A-Za-z0-9]",
       "description": "How this manifest was compiled, for example the exact git and gh commands run. Free text, but it must describe real executed proof, never an assumption."
     },
     "task_boundary": {
       "type": "string",
-      "minLength": 1,
+      "pattern": "[A-Za-z0-9]",
       "description": "The SEMANTIC_BOUNDARY of the work this session is authorized to do."
     },
     "branch": {
