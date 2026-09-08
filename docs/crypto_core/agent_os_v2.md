@@ -149,8 +149,8 @@ ROUTE: T3D | ARCHITECTURE | Claude Opus 5 | claude-opus-5 | max | READ_ONLY
 ROUTE: T3E | PROMPT_ARCHITECTURE | Claude Opus 5 | claude-opus-5 | high | READ_ONLY
 ROUTE: T3E | PROMPT_ARCHITECTURE | Claude Opus 5 | claude-opus-5 | xhigh | READ_ONLY
 ROUTE: T3E | PROMPT_ARCHITECTURE | Claude Opus 5 | claude-opus-5 | max | READ_ONLY
-ROUTE: T4 | CLASS_C_CROSS_CONTRACT | Codex GPT-5.6 Sol | gpt-5.6-sol | xhigh | READ_ONLY
-ROUTE: T4 | CLASS_C_CROSS_CONTRACT | Codex GPT-5.6 Sol | gpt-5.6-sol | max | READ_ONLY
+ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY
+ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-6 Astra | gpt-6-astra | max | READ_ONLY
 ROUTE: XR | EXTERNAL_RESEARCH | Deep Research | - | - | READ_ONLY
 <!-- ROLE_ROUTING_MATRIX_END -->
 
@@ -199,14 +199,14 @@ ROUTE: XR | EXTERNAL_RESEARCH | Deep Research | - | - | READ_ONLY
   cryptographic, readiness, post-audit or multi-path prompt architecture, `max` for Agent OS or
   model-routing prompt architecture, critical repair, readiness promotion, or cryptographic
   implementation prompt architecture.
-- **T4 `CLASS_C_CROSS_CONTRACT`** — protected independent design and audit. Codex GPT-5.6 Sol is the
+- **T4 `CLASS_C_CROSS_CONTRACT`** — protected independent design and audit. GPT-6 Astra is the
   PRIMARY and only canonical protected frontier lane, read-only, at `xhigh` normally. Protected
   triggers: trust boundaries; cryptographic verification; digest/provenance; SM-5/SM-6; Stage-4
   semantics; machine-time protected boundaries; readiness; Deribit promotion; security;
   CodeQL/security semantics; a mandatory Class-C audit; critical trust-boundary or cross-contract
-  audit. `max` requires a named controller-gated protected trigger. No Claude lane, no Terra lane, no
-  Luna lane and no controller read-only pass satisfies Class C, and a Claude session can never
-  satisfy it by reviewing its own work.
+  audit. `max` requires a named controller-gated protected trigger. No Claude lane, no Codex
+  GPT-5.6 Sol lane, no Terra lane, no Luna lane and no controller read-only pass satisfies Class C,
+  and a Claude session can never satisfy it by reviewing its own work.
 - **XR `EXTERNAL_RESEARCH`** — the Deep Research method for external current load-bearing facts; see
   section 8. Read-only and advisory; never an executor and never a gate waiver.
 
@@ -266,7 +266,7 @@ recorded in the handoff, and `max` additionally requires naming which trigger fi
 
 ### 3.3 Frontier-lane disposition
 
-Codex GPT-5.6 Sol (`gpt-5.6-sol`) is the canonical protected frontier lane, and it owns T4 outright.
+GPT-6 Astra (`gpt-6-astra`) is the canonical protected frontier lane, and it owns T4 outright.
 It is read-only: the protected lane audits and designs, and never mutates.
 
 Claude Opus 5 owns the read-only reasoning families T3C review, T3D architecture and T3E prompt
@@ -275,12 +275,15 @@ unprotected reasoning work, while Class C stays with the protected lane. A Claud
 reviews work another Claude session implemented is still `SELF_AUDIT_ONLY_NOT_INDEPENDENT`, and no
 Claude lane at any effort satisfies Class C.
 
-GPT-6 Astra is NOT an active routing lane. Astra-era design and audit records remain valid
-HISTORICAL evidence at their original dates, are never rewritten, back-dated or relabelled to pretend
-they used another model, and never re-enter active routing.
+Codex GPT-5.6 Sol remains the primary repo-native engineering accelerator: bounded implementation,
+bounded repair and ordinary fresh-context review. That volume is exactly why it is not the protected
+lane — an ordinary Codex review is NOT a Class-C audit, and no lane inherits T4 authority from being
+the busiest lane in the repository. Sol design and audit records produced while Sol WAS the protected
+lane remain valid historical evidence at their original dates and are never rewritten, back-dated or
+relabelled to pretend they used another model.
 
-A required T4 gate is never silently rerouted to Astra, to Terra, to Luna, to a Claude lane or to a
-controller read-only pass because of quota, availability or convenience. Temporary provider capacity
+A required T4 gate is never silently rerouted to Codex GPT-5.6 Sol, to Terra, to Luna, to a Claude
+lane or to a controller read-only pass because of quota, availability or convenience. Temporary provider capacity
 NEVER reassigns protected authority (section 10.1). If the required audit cannot run, return
 `CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE` to the controller and stop.
 
@@ -297,8 +300,8 @@ MODEL_ID | MODEL_REQUESTED | MODEL_ACTUAL | REQUESTED_EFFORT | OBSERVED_EFFORT |
 HOST_SETTING_RAW | ENVIRONMENT | CLIENT_VERSION | MODEL_EVIDENCE_SOURCE | MODEL_FALLBACK
 ```
 
-Canonical active identity for the protected frontier lane is `Codex GPT-5.6 Sol`, API id
-`gpt-5.6-sol` where API identity is relevant. API availability of a model id never proves account availability in a
+Canonical active identity for the protected frontier lane is `GPT-6 Astra`, API id
+`gpt-6-astra` where API identity is relevant. API availability of a model id never proves account availability in a
 particular product surface, and never proves that a host exposes a capability mode.
 
 ### 4.2 Runtime evidence classes
@@ -393,7 +396,7 @@ do everything automatically; approve your own work; merge when ready; ignore sco
 
 ### 5.1 Subordinate compiler profiles
 
-- **Frontier profile (Codex GPT-5.6 Sol).** Instruction-sensitive: give the explicit outcome, the exact
+- **Frontier profile (GPT-6 Astra).** Instruction-sensitive: give the explicit outcome, the exact
   authority, the exact sources and the exact stop. Routine reversible decisions inside scope continue
   without unnecessary clarification; consequential authority or trust-boundary ambiguity stops or
   asks the controller. State the testing budget explicitly. State the subagent policy explicitly. Do
@@ -1309,10 +1312,10 @@ current authority.
 - Pre-2026-09 — GPT-5.6 Sol was the protected frontier lane for Class-C design and audit. All Sol
   design and audit records produced under that regime remain valid historical evidence at their
   original dates and are never rewritten to name a different model.
-- 2026-09 — GPT-6 Astra was briefly installed as the canonical protected frontier lane and as the
-  strong lane for T3C, T3D and T3E. Astra audit records from that period remain valid historical
-  evidence at their original dates. Astra is no longer an active routing lane: Class C returned to
-  Codex GPT-5.6 Sol and the read-only reasoning families moved to Claude Opus 5; see section 3.3.
+- 2026-09 — GPT-6 Astra became the canonical protected frontier lane and, for a short period, also
+  the strong lane for T3C, T3D and T3E. The read-only reasoning families then moved to Claude
+  Opus 5, which is where they remain; Astra kept Class C and owns T4. Astra audit records remain
+  valid historical evidence at their original dates; the ACTIVE disposition is section 3.3.
 - Copilot has been `INACTIVE_UNAVAILABLE` throughout and is not an execution host. The Copilot-era
   agent, instruction, prompt, skill and hook-engine surfaces listed in `RETIRED_CONTROL_PLANE_PATHS`
   were removed with this control plane.

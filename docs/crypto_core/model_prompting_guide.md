@@ -55,7 +55,7 @@ themselves, three authoring rules matter most:
 These describe execution STYLE for an already-selected lane. None of them changes a family or an
 effort.
 
-### 4.1 Protected frontier profile (Codex GPT-5.6 Sol)
+### 4.1 Protected frontier profile (GPT-6 Astra)
 
 The protected lane is instruction-sensitive: it follows what the prompt actually says, so vagueness costs more here
 than elsewhere. Give the explicit outcome, the exact authority, the exact sources and the exact stop

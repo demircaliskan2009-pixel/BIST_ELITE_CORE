@@ -161,13 +161,14 @@ READ_ONLY_REASONING_EFFORTS = {
 }
 PROTECTED_FRONTIER_EFFORTS = frozenset({"xhigh", "max"})
 
-FRONTIER_LANE = "Codex GPT-5.6 Sol"
-FRONTIER_MODEL_ID = "gpt-5.6-sol"
+FRONTIER_LANE = "GPT-6 Astra"
+FRONTIER_MODEL_ID = "gpt-6-astra"
 
 # Lanes that must never appear in ANY active route row.
-# Lanes that must never appear in an ACTIVE route. Sol is deliberately absent: it is the current
-# protected frontier lane. Astra is listed because it is now historical evidence only.
-RETIRED_ROUTE_LANE_TOKENS = ("Fable", "Copilot", "Opus 4", "Astra")
+# Lanes that must never appear in an ACTIVE route. Sol is deliberately absent: it is not retired,
+# it is the primary repo-native engineering accelerator. What keeps Sol out of the protected gate
+# is the T4 lane pin below, not a retirement claim that would be untrue.
+RETIRED_ROUTE_LANE_TOKENS = ("Fable", "Copilot", "Opus 4")
 
 # Retired PR-sizing template fields and heuristics. This list is deliberately EXACT and CLOSED: it
 # catches the machine-readable field names and the literal retired phrases, and nothing else. English

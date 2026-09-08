@@ -253,8 +253,8 @@ ORACLE_CI_VALIDATOR_COMMAND = "python scripts/crypto_core/validate_agent_os_v2.p
 ORACLE_CI_ANCHOR_COMMAND = "test -f tests/crypto_core/test_agent_os_v2_contract.py"
 ORACLE_BOOTSTRAP_PATH = "tests/crypto_core/test_agent_os_v2_contract.py"
 
-ORACLE_FRONTIER_LANE = "Codex GPT-5.6 Sol"
-ORACLE_FRONTIER_MODEL_ID = "gpt-5.6-sol"
+ORACLE_FRONTIER_LANE = "GPT-6 Astra"
+ORACLE_FRONTIER_MODEL_ID = "gpt-6-astra"
 
 ORACLE_RETIRED_PATH_COUNT = 50
 
@@ -484,7 +484,7 @@ def test_model_name_inside_a_bounded_historical_region_is_allowed(sandbox: Path)
     text = read(sandbox, "docs/crypto_core/agent_workflow.md")
     end = "<!-- HISTORICAL_RECORD_END -->"
     assert text.count(end) == 1
-    injected = "Historically the Class-C audit ran on Codex GPT-5.6 Sol and surge work on Claude Fable 5.\n"
+    injected = "Historically the Class-C audit ran on Claude Opus 4.8 and surge work on Claude Fable 5.\n"
     write(sandbox, "docs/crypto_core/agent_workflow.md", text.replace(end, injected + end))
     assert failures(sandbox) == []
 
@@ -542,7 +542,7 @@ def test_removing_a_declared_max_branch_is_rejected(sandbox: Path) -> None:
     ("lane", "model_id"),
     [
         ("GPT-5.6 Terra", "-"),
-        ("GPT-5.6 Sol", "gpt-5-6-sol"),
+        ("Codex GPT-5.6 Sol", "gpt-5.6-sol"),
         ("Claude Opus 5", "claude-opus-5"),
     ],
 )
@@ -551,7 +551,7 @@ def test_protected_audit_downgrade_is_rejected(sandbox: Path, lane: str, model_i
     patch(
         sandbox,
         CANONICAL,
-        "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | Codex GPT-5.6 Sol | gpt-5.6-sol | xhigh | READ_ONLY",
+        "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY",
         "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | {} | {} | xhigh | READ_ONLY".format(lane, model_id),
     )
     found = failures(sandbox)
@@ -2493,44 +2493,61 @@ def test_protected_frontier_lane_owns_class_c() -> None:
 @pytest.mark.parametrize(
     ("label", "row"),
     [
-        ("T3C on the retired frontier lane", "ROUTE: T3C | REVIEW | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY"),
-        ("T3C on Terra", "ROUTE: T3C | REVIEW | GPT-5.6 Terra | - | high | READ_ONLY"),
-        ("T3C at max", "ROUTE: T3C | REVIEW | Claude Opus 5 | claude-opus-5 | max | READ_ONLY"),
+        # The protected gate reassigned to every lane that could plausibly absorb it.
         (
-            "T3D on the retired frontier lane",
-            "ROUTE: T3D | ARCHITECTURE | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY",
-        ),
-        (
-            "T3E on the retired frontier lane",
-            "ROUTE: T3E | PROMPT_ARCHITECTURE | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY",
-        ),
-        (
-            "T4 on the retired frontier lane",
-            "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY",
+            "T4 on the busiest engineering lane",
+            "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | Codex GPT-5.6 Sol | gpt-5.6-sol | xhigh | READ_ONLY",
         ),
         ("T4 on Claude", "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | Claude Opus 5 | claude-opus-5 | xhigh | READ_ONLY"),
         ("T4 on Terra", "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-5.6 Terra | - | xhigh | READ_ONLY"),
         ("T4 on Luna", "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-5.6 Luna | - | xhigh | READ_ONLY"),
         (
-            "T4 mutating",
-            "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | Codex GPT-5.6 Sol | gpt-5.6-sol | xhigh | BOUNDED_MUTATION",
+            "T4 on a retired lane",
+            "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | Claude Fable 5 | claude-fable-5 | xhigh | READ_ONLY",
         ),
-        ("T4 at high", "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | Codex GPT-5.6 Sol | gpt-5.6-sol | high | READ_ONLY"),
-        ("T4 with a non-Class-C intent", "ROUTE: T4 | REVIEW | Codex GPT-5.6 Sol | gpt-5.6-sol | xhigh | READ_ONLY"),
+        (
+            "T4 on an unknown lane",
+            "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-7 Nova | gpt-7-nova | xhigh | READ_ONLY",
+        ),
+        # The protected gate kept on its own lane but weakened.
+        ("T4 at high", "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-6 Astra | gpt-6-astra | high | READ_ONLY"),
+        ("T4 at medium", "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-6 Astra | gpt-6-astra | medium | READ_ONLY"),
+        ("T4 at low", "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-6 Astra | gpt-6-astra | low | READ_ONLY"),
+        (
+            "T4 mutating",
+            "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-6 Astra | gpt-6-astra | xhigh | BOUNDED_MUTATION",
+        ),
+        ("T4 with a non-Class-C intent", "ROUTE: T4 | REVIEW | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY"),
+        # The read-only reasoning families pulled back onto the protected lane, or off Claude entirely.
+        ("T3C on the protected lane", "ROUTE: T3C | REVIEW | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY"),
+        (
+            "T3D on the protected lane",
+            "ROUTE: T3D | ARCHITECTURE | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY",
+        ),
+        (
+            "T3E on the protected lane",
+            "ROUTE: T3E | PROMPT_ARCHITECTURE | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY",
+        ),
+        ("T3C on Terra", "ROUTE: T3C | REVIEW | GPT-5.6 Terra | - | high | READ_ONLY"),
+        ("T3C at max", "ROUTE: T3C | REVIEW | Claude Opus 5 | claude-opus-5 | max | READ_ONLY"),
     ],
     ids=[
-        "T3C on the retired frontier lane",
-        "T3C on Terra",
-        "T3C at max",
-        "T3D on the retired frontier lane",
-        "T3E on the retired frontier lane",
-        "T4 on the retired frontier lane",
+        "T4 on the busiest engineering lane",
         "T4 on Claude",
         "T4 on Terra",
         "T4 on Luna",
-        "T4 mutating",
+        "T4 on a retired lane",
+        "T4 on an unknown lane",
         "T4 at high",
+        "T4 at medium",
+        "T4 at low",
+        "T4 mutating",
         "T4 with a non-Class-C intent",
+        "T3C on the protected lane",
+        "T3D on the protected lane",
+        "T3E on the protected lane",
+        "T3C on Terra",
+        "T3C at max",
     ],
 )
 def test_routing_authority_rejects_a_substituted_lane(sandbox: Path, label: str, row: str) -> None:
@@ -2541,9 +2558,14 @@ def test_routing_authority_rejects_a_substituted_lane(sandbox: Path, label: str,
     assert failures(sandbox), "the routing matrix accepted: {}".format(label)
 
 
-def test_class_c_cannot_be_satisfied_by_a_claude_session() -> None:
+def test_class_c_cannot_be_satisfied_by_a_claude_or_codex_session() -> None:
+    """Neither the lane that implements most of the work nor the lane that reviews it is Class C."""
     canonical = _normalized(REPO_ROOT / CANONICAL)
-    assert "No Claude lane, no Terra lane, no Luna lane and no controller read-only pass satisfies Class C" in canonical
+    assert (
+        "No Claude lane, no Codex GPT-5.6 Sol lane, no Terra lane, no Luna lane and no controller "
+        "read-only pass satisfies Class C" in canonical
+    )
+    assert "an ordinary Codex review is NOT a Class-C audit" in canonical
     assert "SELF_AUDIT_ONLY_NOT_INDEPENDENT" in canonical
 
 
@@ -2553,9 +2575,41 @@ def test_provider_capacity_never_reassigns_protected_authority() -> None:
     assert "CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE" in canonical
 
 
-def test_the_retired_frontier_lane_is_not_active_routing() -> None:
-    """Astra may remain as historical evidence, never as an active lane."""
-    assert "Astra" in validator.RETIRED_ROUTE_LANE_TOKENS
+def test_the_protected_lane_is_not_declared_retired() -> None:
+    """A retirement claim about an ACTIVE lane would be a false statement the validator enforces."""
+    for token in validator.RETIRED_ROUTE_LANE_TOKENS:
+        assert token not in ORACLE_FRONTIER_LANE, token
+        assert token not in ORACLE_READ_ONLY_REASONING_LANE, token
     assert "Sol" not in validator.RETIRED_ROUTE_LANE_TOKENS
-    for row in _routes():
-        assert "Astra" not in row[2], row
+
+
+def test_the_protected_gate_is_pinned_to_exactly_two_rows() -> None:
+    """The POSITIVE side: xhigh is the working effort, max exists and needs a named trigger."""
+    rows = sorted(" | ".join(r) for r in _routes() if r[0] == "T4")
+    assert rows == [
+        "T4 | CLASS_C_CROSS_CONTRACT | GPT-6 Astra | gpt-6-astra | max | READ_ONLY",
+        "T4 | CLASS_C_CROSS_CONTRACT | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY",
+    ]
+    triggers = validator.block_lines(
+        (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig"), "MAX_EFFORT_FAMILY_TRIGGERS"
+    )
+    t4 = [row for row in triggers or [] if row.lstrip("- ").startswith("T4 ")]
+    assert len(t4) == 1, t4
+    assert "CLASS_C_CROSS_CONTRACT" in t4[0]
+
+
+def test_temporary_unavailability_cannot_reassign_the_protected_gate(sandbox: Path) -> None:
+    """Capacity is a reason to WAIT for the gate, never a reason to hand it to another lane."""
+    text = read(sandbox, CANONICAL)
+    moved = text.replace(
+        "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY",
+        "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | Codex GPT-5.6 Sol | gpt-5.6-sol | xhigh | READ_ONLY",
+        1,
+    ).replace(
+        "return\n`CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE` to the controller and stop",
+        "reroute the gate to the next available lane",
+        1,
+    )
+    assert moved != text, "neither capacity-argument anchor matched; the probe would prove nothing"
+    write(sandbox, CANONICAL, moved)
+    assert_rejects(sandbox, "the protected frontier lane is GPT-6 Astra")
