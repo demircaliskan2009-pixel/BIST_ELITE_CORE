@@ -468,7 +468,7 @@
       "type": "array",
       "items": {
         "type": "string",
-        "minLength": 1
+        "pattern": "[A-Za-z0-9]"
       },
       "description": "Facts that stopped being true during this session and must not be reused. This is a session narrative rather than an external fact, so it is deliberately NOT proof-paired: pairing it would be ceremony, not proof."
     },
@@ -642,7 +642,7 @@
           ]
         }
       },
-      "description": "Runtime-proof block (agent_os_v2.md section 4). ALWAYS present, because a manifest that omits it entirely could silently satisfy a task claiming runtime proof. A host that exposes no runtime metadata says so with an UNKNOWN evidence source and null observations - absence is never the same statement as UNKNOWN. The block is DIMENSIONAL: model identity, effort and thinking are observed by different mechanisms and are known independently, so each carries its own evidence and a contradiction in one never erases valid evidence from another. A host that reports its model but exposes no effort setting records RUNTIME_TELEMETRY identity alongside UNKNOWN effort - truthfully, and without inventing telemetry. Within each dimension the class constrains what may be populated: RUNTIME_TELEMETRY requires a meaningful observation; USER_ATTESTED_UI_SELECTION requires a meaningful attested value or host selector and stays labelled an attestation; CONTRADICTED is explicit contradictory runtime proof, so it records what actually ran or what effort actually applied; CONFIGURATION_EVIDENCE_ONLY and UNKNOWN prove no execution and leave that dimension's observation null. thinking_actual is its own dimension with an explicit UNKNOWN. Ultra is recorded in capability_mode ONLY and is never written into an effort field, and host_setting_raw stores the operator UI choice verbatim without inventing an API mapping."
+      "description": "Runtime-proof block (agent_os_v2.md section 4). ALWAYS present, because a manifest that omits it entirely could silently satisfy a task claiming runtime proof. A host that exposes no runtime metadata says so with an UNKNOWN evidence source and null observations - absence is never the same statement as UNKNOWN. The block is DIMENSIONAL: model identity, effort and thinking are observed by different mechanisms and are known independently, so each carries its own evidence and a contradiction in one never erases valid evidence from another. A host that reports its model but exposes no effort setting records RUNTIME_TELEMETRY identity alongside UNKNOWN effort - truthfully, and without inventing telemetry. Within each dimension the class constrains what may be populated: RUNTIME_TELEMETRY requires a meaningful observation; USER_ATTESTED_UI_SELECTION requires the attested value in THAT dimension's own observation field and stays labelled an attestation, because one host selector string cannot attest two independent dimensions - host_setting_raw is verbatim context, never a fallback proof; CONTRADICTED is explicit contradictory runtime proof, so it records what actually ran or what effort actually applied; CONFIGURATION_EVIDENCE_ONLY and UNKNOWN prove no execution and leave that dimension's observation null. thinking_actual is its own dimension with an explicit UNKNOWN. Ultra is recorded in capability_mode ONLY and is never written into an effort field, and host_setting_raw stores the operator UI choice verbatim without inventing an API mapping."
     },
     "authorization": {
       "type": "object",
@@ -654,7 +654,7 @@
       "properties": {
         "mutation_scope": {
           "type": "string",
-          "minLength": 1,
+          "pattern": "[A-Za-z0-9]",
           "description": "Exact authorized mutation scope, or NONE."
         },
         "merge_authorized": {

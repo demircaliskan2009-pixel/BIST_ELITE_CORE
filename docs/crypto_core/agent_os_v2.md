@@ -154,6 +154,31 @@ ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-6 Astra | gpt-6-astra | max | READ_ONLY
 ROUTE: XR | EXTERNAL_RESEARCH | Deep Research | - | - | READ_ONLY
 <!-- ROLE_ROUTING_MATRIX_END -->
 
+`FAMILY_INTENT_OWNERSHIP` declares WHICH task intents each family may own. The routing matrix above
+declares HOW a family routes an intent — lane, model, effort and mutation authority — and this block
+declares whose intent it is in the first place. Coverage alone was not enough: it proved every intent
+was routed somewhere while allowing `REVIEW` to be routed through a mutation family or `STATUS`
+through an unrelated one, which creates a second authority for that intent beside the real one. The
+two blocks are checked against each other in BOTH directions, so neither can drift, and every class
+in the routing matrix appears here exactly once. Format: `- <CLASS> :: <INTENT>[,<INTENT>]`.
+
+<!-- FAMILY_INTENT_OWNERSHIP_BEGIN -->
+- T0 :: STATUS
+- T1 :: CLOSEOUT,BOUNDED_READ
+- T2 :: IMPLEMENTATION,REPAIR
+- T3A :: IMPLEMENTATION,REPAIR
+- T3B :: IMPLEMENTATION,REPAIR
+- T3C :: REVIEW
+- T3D :: ARCHITECTURE
+- T3E :: PROMPT_ARCHITECTURE
+- T4 :: CLASS_C_CROSS_CONTRACT
+- XR :: EXTERNAL_RESEARCH
+<!-- FAMILY_INTENT_OWNERSHIP_END -->
+
+A family also has exactly ONE mutation authority across all of its rows, and no two rows address the
+same lane and model at the same effort. A repeated `(class, lane, model, effort)` row is either
+redundant or a contradiction; either way the authority for that route stops being unambiguous.
+
 ### 3.1 Family semantics
 
 - **T0 `STATUS_MECHANICS`** — git/gh state, bounded CI polling, PR metadata, review/thread status,

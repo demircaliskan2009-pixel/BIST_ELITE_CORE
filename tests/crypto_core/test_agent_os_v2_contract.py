@@ -2621,7 +2621,7 @@ def test_temporary_unavailability_cannot_reassign_the_protected_gate(sandbox: Pa
     )
     assert moved != text, "neither capacity-argument anchor matched; the probe would prove nothing"
     write(sandbox, CANONICAL, moved)
-    assert_rejects(sandbox, "the protected frontier lane is GPT-6 Astra")
+    assert_rejects(sandbox, "the protected frontier lane is exactly")
 
 
 # ===========================================================================================
@@ -3140,30 +3140,72 @@ def test_setup_audit_still_passes_when_the_validator_runs() -> None:
     assert "VALIDATOR_EXIT=0" in done.stdout, done.stdout
 
 
-@pytest.mark.skipif(_powershell() is None, reason="no PowerShell host available")
-def test_setup_audit_propagates_a_real_validator_failure(tmp_path: Path) -> None:
-    """A nonzero validator verdict must still reach the exit code."""
-    fake = tmp_path / "fake.py"
-    fake.write_text("import sys\nsys.exit(3)\n", encoding="utf-8")
+def _run_audit_against_a_substitute_validator(workdir: Path, body: str) -> subprocess.CompletedProcess:
+    """Run the REAL audit against a validator that is genuinely found and genuinely launched.
+
+    The script resolves the validator at the fixed repo-relative path, so planting a substitute at
+    that exact path inside a scratch working directory exercises the real branch end to end: the
+    path exists, the interpreter launches it, and its exit status is what the audit reads. An
+    earlier version of this regression wrote a `fake.py` the script never opened and ran from a
+    directory with no validator at all, so it passed through `VALIDATOR=MISSING` and proved nothing
+    about nonzero propagation.
+    """
+    planted = workdir / "scripts" / "crypto_core" / "validate_agent_os_v2.py"
+    planted.parent.mkdir(parents=True, exist_ok=True)
+    planted.write_text(body, encoding="utf-8")
     shell = _powershell()
     assert shell
-    script = str(REPO_ROOT / "scripts" / "crypto_core" / "audit_agent_setup.ps1")
     interpreter = shutil.which("python") or shutil.which("python3")
     assert interpreter
-    done = subprocess.run(  # noqa: S603 - repo-local script, locally built argv, no shell
+    script = str(REPO_ROOT / "scripts" / "crypto_core" / "audit_agent_setup.ps1")
+    return subprocess.run(  # noqa: S603 - repo-local script, locally built argv, no shell
         [
             shell,
             "-NoProfile",
             "-Command",
             "& '{}' -ValidatorOnly -PythonExe '{}'; exit $LASTEXITCODE".format(script, interpreter),
         ],
-        cwd=str(tmp_path),
+        cwd=str(workdir),
         capture_output=True,
         text=True,
         timeout=300,
         check=False,
     )
+
+
+@pytest.mark.skipif(_powershell() is None, reason="no PowerShell host available")
+def test_setup_audit_propagates_the_exact_nonzero_validator_status(tmp_path: Path) -> None:
+    """A nonzero validator verdict must reach the exit code, by the intended path.
+
+    The assertions pin the EXACT status, so deleting the nonzero propagation branch fails this
+    test rather than letting some other failure keep it green.
+    """
+    done = _run_audit_against_a_substitute_validator(tmp_path, "import sys\n\nsys.exit(3)\n")
+    assert "VALIDATOR=MISSING" not in done.stdout, done.stdout
+    assert "VALIDATOR_EXIT=3" in done.stdout, done.stdout
+    assert "validator exit 3" in done.stdout, done.stdout
     assert done.returncode != 0, done.stdout + done.stderr
+
+
+@pytest.mark.skipif(_powershell() is None, reason="no PowerShell host available")
+def test_setup_audit_fails_when_the_validator_raises(tmp_path: Path) -> None:
+    """A validator that throws is a validator that did not pass."""
+    done = _run_audit_against_a_substitute_validator(tmp_path, "raise SystemError('control plane exploded')\n")
+    assert "VALIDATOR=MISSING" not in done.stdout, done.stdout
+    assert "VALIDATOR_EXIT=1" in done.stdout, done.stdout
+    assert done.returncode != 0, done.stdout + done.stderr
+
+
+@pytest.mark.skipif(_powershell() is None, reason="no PowerShell host available")
+def test_setup_audit_accepts_a_substitute_validator_that_succeeds(tmp_path: Path) -> None:
+    """The POSITIVE anchor for the substitution harness itself.
+
+    Without this, a harness that always failed for an unrelated reason would look like proof.
+    """
+    done = _run_audit_against_a_substitute_validator(tmp_path, "import sys\n\nsys.exit(0)\n")
+    assert "VALIDATOR=MISSING" not in done.stdout, done.stdout
+    assert "VALIDATOR_EXIT=0" in done.stdout, done.stdout
+    assert done.returncode == 0, done.stdout + done.stderr
 
 
 # --- Phase-4 siblings: same abstractions, defects nobody reported ------------------------------
@@ -3337,3 +3379,200 @@ def test_every_declared_class_and_intent_is_routed() -> None:
     assert {r[0] for r in rows} == set(validator.ROUTE_CLASSES)
     routed = {intent.strip() for r in rows for intent in r[1].split(",") if intent.strip()}
     assert routed == set(validator.TASK_INTENTS)
+
+
+# ===========================================================================================
+# Final Class-C findings on c628faec: operational authorization text, routing ownership,
+# protected-lane exactness, stale prose. Every reported counterexample is executed here.
+# ===========================================================================================
+
+ORACLE_OPERATIONAL_FILLER = ("ㅤ", "⠀", "ㅤ⠀", "   ", "​", "")
+
+
+@pytest.mark.parametrize("filler", ORACLE_OPERATIONAL_FILLER)
+def test_authorized_mutation_scope_is_load_bearing(filler: str) -> None:
+    """P1-01. mutation_scope IS the authorization a human reads before touching anything."""
+    manifest = _example_manifest()
+    manifest["authorization"]["mutation_scope"] = filler
+    assert [item for item in validator.check_manifest_instance("probe", manifest) if "mutation_scope" in item]
+
+
+@pytest.mark.parametrize("filler", ORACLE_OPERATIONAL_FILLER)
+def test_invalidations_are_load_bearing(filler: str) -> None:
+    """P1-01. An invalidation names a fact that must not be reused; filler names nothing."""
+    manifest = _example_manifest()
+    manifest["invalidations"] = [filler]
+    assert [item for item in validator.check_manifest_instance("probe", manifest) if "invalidations" in item]
+
+
+def test_a_real_scope_and_a_real_invalidation_still_pass() -> None:
+    """The POSITIVE anchor for the operational grammar."""
+    manifest = _example_manifest()
+    manifest["authorization"]["mutation_scope"] = "scripts/crypto_core/validate_agent_os_v2.py"
+    manifest["invalidations"] = ["the ruff gate was dropped: its evidence key changed"]
+    assert validator.check_manifest_instance("probe", manifest) == []
+
+
+def test_every_free_form_text_field_is_free_form_by_classification() -> None:
+    """The remaining TEXT_EVIDENCE fields are the ones no authorization or provenance decision reads.
+
+    This is the WHOLE inventory, so a load-bearing field cannot later be added as free-form text by
+    accident: a new one would appear here and fail.
+    """
+    found = []
+
+    def walk(node: dict, path: list[str]) -> None:
+        kind = node.get("kind")
+        if kind == "OBJECT":
+            for key, sub in node["fields"].items():
+                walk(sub, [*path, key])
+        elif kind == "STRUCTURED_LIST":
+            walk(node["item"], [*path, "[]"])
+        elif kind == "TEXT_EVIDENCE":
+            found.append(".".join(path))
+
+    walk(validator.MANIFEST_GRAMMAR, [])
+    assert sorted(found) == [
+        "$comment",
+        "authorization.notes",
+        "model_runtime.host_setting_raw",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("label", "row"),
+    [
+        (
+            "a contradictory second mutation authority for T0",
+            "ROUTE: T0 | STATUS | GPT-5.6 Luna | - | low | HEAVY_MUTATION",
+        ),
+        (
+            "REVIEW routed through a mutation family",
+            "ROUTE: T2 | REVIEW | GPT-5.6 Terra | - | medium | BOUNDED_MUTATION",
+        ),
+        (
+            "STATUS routed through an unrelated family",
+            "ROUTE: T3A | STATUS | Claude Opus 5 | claude-opus-5 | xhigh | HEAVY_MUTATION",
+        ),
+        (
+            "ARCHITECTURE routed through an implementation family",
+            "ROUTE: T3A | ARCHITECTURE | Claude Opus 5 | claude-opus-5 | xhigh | HEAVY_MUTATION",
+        ),
+        (
+            "an exact duplicate of a committed row",
+            "ROUTE: T0 | STATUS | GPT-5.6 Luna | - | low | MECHANICAL_ONLY",
+        ),
+        (
+            "an alternate mutation authority for a read-only family",
+            "ROUTE: T3C | REVIEW | Claude Opus 5 | claude-opus-5 | medium | BOUNDED_MUTATION",
+        ),
+        (
+            "CLOSEOUT smuggled into a heavy family",
+            "ROUTE: T3A | CLOSEOUT | Claude Opus 5 | claude-opus-5 | xhigh | HEAVY_MUTATION",
+        ),
+    ],
+    ids=[
+        "a contradictory second mutation authority for T0",
+        "REVIEW routed through a mutation family",
+        "STATUS routed through an unrelated family",
+        "ARCHITECTURE routed through an implementation family",
+        "an exact duplicate of a committed row",
+        "an alternate mutation authority for a read-only family",
+        "CLOSEOUT smuggled into a heavy family",
+    ],
+)
+def test_family_ownership_rejects_a_second_authority_for_an_intent(sandbox: Path, label: str, row: str) -> None:
+    """P2-01. Coverage proved every intent was routed; it never said WHICH family may own it."""
+    text = read(sandbox, CANONICAL)
+    marker = "<!-- ROLE_ROUTING_MATRIX_END -->"
+    write(sandbox, CANONICAL, text.replace(marker, row + "\n" + marker, 1))
+    assert failures(sandbox), "the matrix accepted: {}".format(label)
+
+
+def test_the_ownership_map_and_the_matrix_cannot_drift() -> None:
+    """One authority, two views, checked in both directions."""
+    canonical_text = (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig")
+    rows = validator.parse_registry(canonical_text, "FAMILY_INTENT_OWNERSHIP")
+    assert rows
+    owned: dict[str, set[str]] = {}
+    for row in rows:
+        cls, _sep, intents = row.partition("::")
+        owned[cls.strip()] = {i.strip() for i in intents.split(",") if i.strip()}
+    assert set(owned) == set(validator.ROUTE_CLASSES)
+    assert {i for members in owned.values() for i in members} == set(validator.TASK_INTENTS)
+    routed: dict[str, set[str]] = {}
+    for cls, intents, *_rest in _routes():
+        routed.setdefault(cls, set()).update(i.strip() for i in intents.split(",") if i.strip())
+    assert routed == owned
+
+
+def test_declared_ownership_must_be_reachable(sandbox: Path) -> None:
+    """An owned intent nothing routes is a claim the matrix does not honour."""
+    patch(sandbox, CANONICAL, "- T0 :: STATUS", "- T0 :: STATUS,BOUNDED_READ")
+    assert_rejects(sandbox, "no T0 route accepts it")
+
+
+def test_removing_the_ownership_block_is_rejected(sandbox: Path) -> None:
+    patch(sandbox, CANONICAL, "<!-- FAMILY_INTENT_OWNERSHIP_BEGIN -->", "<!-- OWNERSHIP_RETIRED -->")
+    assert_rejects(sandbox, "FAMILY_INTENT_OWNERSHIP")
+
+
+@pytest.mark.parametrize(
+    "lane",
+    [
+        "GPT-6 Astra or GPT-5.6 Terra",
+        "foo GPT-6 Astra",
+        "GPT-6 Astra backup",
+        "GPT-6 Astra / Terra",
+        "gpt-6 astra",
+        "GPT-6  Astra",
+    ],
+)
+def test_the_protected_lane_is_matched_exactly(sandbox: Path, lane: str) -> None:
+    """P2-02. A containment test cannot tell an identity from a label that merely mentions it."""
+    patch(
+        sandbox,
+        CANONICAL,
+        "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | GPT-6 Astra | gpt-6-astra | xhigh | READ_ONLY",
+        "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | {} | gpt-6-astra | xhigh | READ_ONLY".format(lane),
+    )
+    assert failures(sandbox), "an ambiguous protected lane label was accepted: {!r}".format(lane)
+
+
+def test_the_canonical_protected_lane_still_passes() -> None:
+    rows = [r for r in _routes() if r[0] == "T4"]
+    assert rows
+    assert {r[2] for r in rows} == {validator.FRONTIER_LANE}
+    assert {r[3] for r in rows} == {validator.FRONTIER_MODEL_ID}
+    assert validator.collect_failures(REPO_ROOT) == []
+
+
+def test_authority_identity_comparisons_are_exact_not_containment() -> None:
+    """Both authority-bearing lane comparisons use equality; the retired scan stays containment.
+
+    The retired-lane rule is an EXCLUSION, where matching a mention is the correct behaviour, so it
+    deliberately keeps its word-boundary search.
+    """
+    source = (REPO_ROOT / "scripts/crypto_core/validate_agent_os_v2.py").read_text(encoding="utf-8")
+    code = "\n".join(line for line in source.splitlines() if not line.lstrip().startswith("#"))
+    assert "lane != FRONTIER_LANE" in code
+    assert "FRONTIER_LANE not in lane" not in code
+    assert "lane != READ_ONLY_REASONING_LANE" in code
+    assert "RETIRED_ROUTE_LANE_TOKENS" in code
+
+
+def test_the_runtime_description_matches_the_enforced_attestation_rule() -> None:
+    """P3-01. The description promised a host-selector fallback the contract no longer has."""
+    description = validator.MODEL_RUNTIME_GRAMMAR["description"]
+    assert "meaningful attested value or host selector" not in description
+    assert "own observation field" in description
+    assert "never a fallback proof" in description
+
+
+def test_the_example_comment_describes_the_example_payload() -> None:
+    """P3-01. The fixture's own commentary named an evidence class the payload does not use."""
+    example = _example_manifest()
+    comment = example["$comment"]
+    assert "CONFIGURATION_EVIDENCE_ONLY" not in comment
+    assert example["model_runtime"]["model_evidence_source"] in comment
+    assert "thinking_actual" in comment

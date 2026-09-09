@@ -359,6 +359,7 @@ BLOCK_ROUTING_MODES = "CAPACITY_ROUTING_MODES"
 BLOCK_HOST_DISCOVERY = "HOST_DISCOVERY_SCAN_PATHS"
 BLOCK_MAX_FAMILY = "MAX_EFFORT_FAMILY_TRIGGERS"
 BLOCK_ROUTING_MATRIX = "ROLE_ROUTING_MATRIX"
+BLOCK_FAMILY_OWNERSHIP = "FAMILY_INTENT_OWNERSHIP"
 BLOCK_EFFORT_ENUM = "REASONING_EFFORT_ENUM"
 BLOCK_PROMPT_FIELDS = "PROMPT_COMPILER_V2_1_FIELDS"
 BLOCK_EVIDENCE_CLASSES = "MODEL_EVIDENCE_CLASSES"
@@ -769,8 +770,8 @@ def _check_routing(root: Path, ctx: dict[str, object], max_effort_classes: froze
             )
         )
 
-    # 4a) Coverage, not merely well-formedness: every declared class and every declared intent
-    # must actually be routed somewhere, and a row must route at least one intent.
+    # 4a) Coverage: every declared class and every declared intent must actually be routed, and a
+    # row must route at least one intent.
     for cls, intents, _lane, _mid, _effort, _mut in parsed:
         if not intents:
             failures.append(f"{CANONICAL}: class {cls} declares an empty intent list, so it routes nothing")
@@ -783,6 +784,73 @@ def _check_routing(root: Path, ctx: dict[str, object], max_effort_classes: froze
     routed_intents = {intent for _c, intents, *_rest in parsed for intent in intents}
     for intent in sorted(set(TASK_INTENTS) - routed_intents):
         failures.append(f"{CANONICAL}: TASK_INTENT {intent} is declared but no route accepts it")
+
+    # 4b) OWNERSHIP: which family may own which intent. Coverage says every intent is routed
+    # somewhere; it does not say REVIEW may not be routed through a mutation family.
+    owned = parse_registry(ctx["canonical_text"], BLOCK_FAMILY_OWNERSHIP)  # type: ignore[arg-type]
+    ownership: dict[str, set[str]] = {}
+    if owned is None:
+        failures.append(f"{CANONICAL}: {BLOCK_FAMILY_OWNERSHIP} block missing or malformed")
+    else:
+        for row in owned:
+            cls, sep, intents_raw = row.partition("::")
+            cls = cls.strip()
+            if not sep:
+                failures.append(f"{CANONICAL}: {BLOCK_FAMILY_OWNERSHIP} row is not '<CLASS> :: <INTENT>[,...]': {row}")
+                continue
+            if cls in ownership:
+                failures.append(f"{CANONICAL}: {BLOCK_FAMILY_OWNERSHIP} declares class {cls} more than once")
+            if cls not in ROUTE_CLASSES:
+                failures.append(f"{CANONICAL}: {BLOCK_FAMILY_OWNERSHIP} declares unknown class {cls}")
+            members = {i.strip() for i in intents_raw.split(",") if i.strip()}
+            if not members:
+                failures.append(f"{CANONICAL}: {BLOCK_FAMILY_OWNERSHIP} class {cls} owns no intent")
+            for intent in sorted(members - set(TASK_INTENTS)):
+                failures.append(f"{CANONICAL}: {BLOCK_FAMILY_OWNERSHIP} class {cls} owns unknown intent {intent}")
+            ownership[cls] = members
+        for cls in sorted(set(ROUTE_CLASSES) - set(ownership)):
+            failures.append(f"{CANONICAL}: {BLOCK_FAMILY_OWNERSHIP} does not declare who owns class {cls}")
+
+        # Both directions, so the matrix and the ownership map cannot drift apart.
+        for cls, intents, lane, _mid, _effort, _mut in parsed:
+            allowed = ownership.get(cls)
+            if allowed is None:
+                continue
+            for intent in sorted(set(intents) - allowed):
+                failures.append(
+                    f"{CANONICAL}: class {cls} routes {intent} through {lane}, but {cls} owns only "
+                    f"{sorted(allowed)}; routing an intent through a family that does not own it "
+                    f"creates a second authority for that intent"
+                )
+        for cls, allowed in sorted(ownership.items()):
+            actually = {intent for c, intents, *_r in parsed if c == cls for intent in intents}
+            for intent in sorted(allowed - actually):
+                failures.append(
+                    f"{CANONICAL}: {BLOCK_FAMILY_OWNERSHIP} gives {cls} the intent {intent} but no "
+                    f"{cls} route accepts it, so the declared ownership is unreachable"
+                )
+
+    # 4c) One family, one mutation authority - and no two rows that address the same lane at the
+    # same effort. A second row for an already-routed (class, lane, model, effort) is either an
+    # exact duplicate or a contradiction, and both leave the authority ambiguous.
+    authorities: dict[str, set[str]] = {}
+    for cls, _intents, _lane, _mid, _effort, mutation in parsed:
+        authorities.setdefault(cls, set()).add(mutation)
+    for cls, found_authorities in sorted(authorities.items()):
+        if len(found_authorities) > 1:
+            failures.append(
+                f"{CANONICAL}: class {cls} declares more than one mutation authority "
+                f"({sorted(found_authorities)}); a family has exactly one, or its authority is ambiguous"
+            )
+    seen: set[tuple[str, str, str, str]] = set()
+    for cls, _intents, lane, model_id, effort, _mut in parsed:
+        key = (cls, lane, model_id, effort)
+        if key in seen:
+            failures.append(
+                f"{CANONICAL}: class {cls} routes {lane} at {effort} more than once; a repeated "
+                f"(class, lane, model, effort) row is either redundant or a contradiction"
+            )
+        seen.add(key)
 
     # 5) Class C and T4 are the SAME set, in both directions.
     #
@@ -804,8 +872,11 @@ def _check_routing(root: Path, ctx: dict[str, object], max_effort_classes: froze
     if not t4_rows:
         failures.append(f"{CANONICAL}: no T4 protected route declared")
     for _cls, intents, lane, model_id, _effort, mutation in t4_rows:
-        if FRONTIER_LANE not in lane:
-            failures.append(f"{CANONICAL}: T4 route lane is {lane} but the protected frontier lane is {FRONTIER_LANE}")
+        if lane != FRONTIER_LANE:
+            failures.append(
+                f"{CANONICAL}: T4 route lane is {lane!r} but the protected frontier lane is exactly "
+                f"{FRONTIER_LANE!r}; a label that merely mentions it is not that lane"
+            )
         if model_id != FRONTIER_MODEL_ID:
             failures.append(f"{CANONICAL}: T4 route model id is {model_id} but must be {FRONTIER_MODEL_ID}")
         if mutation != "READ_ONLY":
@@ -1520,8 +1591,10 @@ MODEL_RUNTIME_GRAMMAR = _object(
         "that reports its model but exposes no effort setting records RUNTIME_TELEMETRY identity "
         "alongside UNKNOWN effort - truthfully, and without inventing telemetry. Within each "
         "dimension the class constrains what may be populated: RUNTIME_TELEMETRY requires a "
-        "meaningful observation; USER_ATTESTED_UI_SELECTION requires a meaningful attested value or "
-        "host selector and stays labelled an attestation; CONTRADICTED is explicit contradictory "
+        "meaningful observation; USER_ATTESTED_UI_SELECTION requires the attested value in THAT "
+        "dimension's own observation field and stays labelled an attestation, because one host "
+        "selector string cannot attest two independent dimensions - host_setting_raw is verbatim "
+        "context, never a fallback proof; CONTRADICTED is explicit contradictory "
         "runtime proof, so it records what actually ran or what effort actually applied; "
         "CONFIGURATION_EVIDENCE_ONLY and UNKNOWN prove no execution and leave that dimension's "
         "observation null. thinking_actual is its own dimension with an explicit UNKNOWN. Ultra is "
@@ -1532,7 +1605,7 @@ MODEL_RUNTIME_GRAMMAR = _object(
 
 AUTHORIZATION_GRAMMAR = _object(
     {
-        "mutation_scope": _text("Exact authorized mutation scope, or NONE."),
+        "mutation_scope": _op("Exact authorized mutation scope, or NONE."),
         "merge_authorized": _const(
             False,
             "A manifest never records merge authority. MERGE_AUTHORITY_SOURCE is HUMAN_ONLY_PER_PR and "
@@ -1569,7 +1642,7 @@ def _manifest_fields() -> tuple[dict, tuple[str, ...]]:
         required.extend((field, f"{field}_evidence"))
 
     fields["invalidations"] = _list(
-        _text(),
+        _op(),
         "Facts that stopped being true during this session and must not be reused. This is a session "
         "narrative rather than an external fact, so it is deliberately NOT proof-paired: pairing it "
         "would be ceremony, not proof.",
