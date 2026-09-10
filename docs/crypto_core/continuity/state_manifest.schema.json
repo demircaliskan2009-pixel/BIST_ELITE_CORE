@@ -28,6 +28,7 @@
     "head_sha_evidence",
     "head_tree",
     "head_tree_evidence",
+    "invalidations",
     "model_runtime",
     "next_safe_action",
     "next_safe_action_evidence",
@@ -470,7 +471,7 @@
         "type": "string",
         "pattern": "[A-Za-z0-9]"
       },
-      "description": "Facts that stopped being true during this session and must not be reused. This is a session narrative rather than an external fact, so it is deliberately NOT proof-paired: pairing it would be ceremony, not proof."
+      "description": "Facts that stopped being true during this session and must not be reused. REQUIRED and never omitted: an absent list cannot be distinguished from 'the producer never said', which would leave stale completed-gate evidence quietly reusable. An EMPTY list is the truthful way to say nothing was invalidated, and is always valid - never fabricate an entry to satisfy shape. It is deliberately NOT proof-paired: this is a session narrative rather than an external fact, so pairing it would be ceremony, not proof."
     },
     "model_runtime": {
       "type": "object",

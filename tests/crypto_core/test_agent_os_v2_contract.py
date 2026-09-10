@@ -2169,6 +2169,11 @@ def test_runtime_evidence_class_constrains_what_may_be_populated(
     manifest["model_runtime"]["model_evidence_source"] = source
     manifest["model_runtime"]["model_actual"] = actual
     manifest["model_runtime"]["host_setting_raw"] = host_raw
+    # Isolate the CLASS: the required identity agrees with the observation, so anything this probe
+    # rejects is rejected by the evidence class and not by the separate identity relation.
+    if isinstance(actual, str) and not validator.operational_text_failures(actual):
+        manifest["model_runtime"]["model_id"] = actual
+        manifest["model_runtime"]["model_requested"] = actual
     found = [
         item
         for item in validator.manifest_relation_failures("probe", manifest)
@@ -3026,6 +3031,8 @@ def test_nan_and_infinity_are_not_a_specification() -> None:
             "the identity matches while the effort conflicts",
             {
                 "model_evidence_source": "RUNTIME_TELEMETRY",
+                "model_id": "claude-opus-5",
+                "model_requested": "claude-opus-5",
                 "model_actual": "claude-opus-5",
                 "effort_evidence_source": "CONTRADICTED",
                 "observed_effort": "high",
@@ -3352,6 +3359,8 @@ def test_an_attestation_that_records_its_own_dimension_is_accepted() -> None:
     manifest = _example_manifest()
     manifest["model_runtime"].update(
         model_evidence_source="USER_ATTESTED_UI_SELECTION",
+        model_id="claude-opus-5",
+        model_requested="claude-opus-5",
         model_actual="claude-opus-5",
         effort_evidence_source="USER_ATTESTED_UI_SELECTION",
         observed_effort="max",
@@ -4000,3 +4009,285 @@ def test_terra_and_sonnet_profiles_no_longer_claim_review() -> None:
     adapter = (REPO_ROOT / ".codex/skills/crypto-core-max-safe/SKILL.md").read_text(encoding="utf-8-sig")
     assert "Terra carries no review duty." in adapter
     assert "Repo-native lane (Codex GPT-5.6 Sol)" in adapter
+
+
+# ===========================================================================================
+# RELATIONAL_IDENTITY_PROOF and CONTINUITY_REQUIREDNESS.
+#
+# A populated `model_actual` proved only that SOMETHING was observed, never that it was the runtime
+# the route required: a manifest requesting `gpt-6-astra` while telemetry reported `gpt-5.6-terra`
+# passed as ordinary matching evidence, so work - or a protected audit - performed by the wrong
+# runtime looked valid and STOP_MODEL_MISMATCH never fired. Separately, `invalidations` was added to
+# the manifest field map and never to `required`, so the record of facts that must not be reused
+# could be omitted entirely and stale completed-gate evidence stayed quietly reusable.
+#
+# The identity cases are generated over real lane identities from BOTH providers, because a relation
+# that only works for the protected lane is not a relation.
+# ===========================================================================================
+
+ORACLE_LANE_IDENTITIES = ("claude-opus-5", "claude-sonnet-5", "gpt-5.6-sol", "gpt-6-astra")
+ORACLE_EXECUTION_PROVING_CLASSES = {"RUNTIME_TELEMETRY", "USER_ATTESTED_UI_SELECTION"}
+
+
+def _runtime(**overrides: object) -> dict:
+    manifest = _example_manifest()
+    manifest["model_runtime"].update(overrides)
+    return manifest
+
+
+_MISMATCH_CASES = [
+    (required, observed, source)
+    for required in ORACLE_LANE_IDENTITIES
+    for observed in ORACLE_LANE_IDENTITIES
+    if observed != required
+    for source in sorted(ORACLE_EXECUTION_PROVING_CLASSES)
+]
+
+
+@pytest.mark.parametrize(
+    ("required", "observed", "source"),
+    _MISMATCH_CASES,
+    ids=["{} ran {} under {}".format(r, o, s) for r, o, s in _MISMATCH_CASES],
+)
+def test_an_observed_runtime_that_is_not_the_required_one_is_never_matching_evidence(
+    required: str, observed: str, source: str
+) -> None:
+    """B1. Every ordered pair of real lane identities, in both providers, under both proving classes."""
+    manifest = _runtime(
+        model_id=required, model_requested=required, model_actual=observed, model_evidence_source=source
+    )
+    found = validator.check_manifest_instance("probe", manifest)
+    assert found, "{} claimed a clean match while {} actually ran".format(source, observed)
+    assert any("CONTRADICTED" in item for item in found), found
+
+
+@pytest.mark.parametrize("identity", ORACLE_LANE_IDENTITIES)
+@pytest.mark.parametrize("source", sorted(ORACLE_EXECUTION_PROVING_CLASSES))
+def test_an_observed_runtime_that_matches_still_passes(identity: str, source: str) -> None:
+    """The POSITIVE anchor: a relation that rejects the correct runtime has closed nothing."""
+    manifest = _runtime(
+        model_id=identity, model_requested=identity, model_actual=identity, model_evidence_source=source
+    )
+    assert validator.check_manifest_instance("probe", manifest) == []
+
+
+@pytest.mark.parametrize(
+    ("label", "overrides"),
+    [
+        (
+            "telemetry claiming proof with nothing observed",
+            {
+                "model_id": "claude-opus-5",
+                "model_requested": "claude-opus-5",
+                "model_actual": None,
+                "model_evidence_source": "RUNTIME_TELEMETRY",
+            },
+        ),
+        (
+            "an unknown class carrying an observation",
+            {
+                "model_id": "claude-opus-5",
+                "model_requested": "claude-opus-5",
+                "model_actual": "claude-opus-5",
+                "model_evidence_source": "UNKNOWN",
+            },
+        ),
+        (
+            "configuration evidence dressed as execution",
+            {
+                "model_id": "claude-opus-5",
+                "model_requested": "claude-opus-5",
+                "model_actual": "claude-opus-5",
+                "model_evidence_source": "CONFIGURATION_EVIDENCE_ONLY",
+            },
+        ),
+        (
+            "CONTRADICTED that contradicts nothing",
+            {
+                "model_id": "claude-opus-5",
+                "model_requested": "claude-opus-5",
+                "model_actual": "claude-opus-5",
+                "model_evidence_source": "CONTRADICTED",
+            },
+        ),
+        (
+            "two different requests recorded at once",
+            {
+                "model_id": "claude-opus-5",
+                "model_requested": "gpt-6-astra",
+                "model_actual": "claude-opus-5",
+                "model_evidence_source": "RUNTIME_TELEMETRY",
+            },
+        ),
+        (
+            "an observed fallback beside a clean-match claim",
+            {
+                "model_id": "claude-opus-5",
+                "model_requested": "claude-opus-5",
+                "model_actual": "claude-opus-5",
+                "model_evidence_source": "RUNTIME_TELEMETRY",
+                "model_fallback": "fell back to claude-sonnet-5",
+            },
+        ),
+        (
+            "a lane with no API id whose observation differs",
+            {
+                "model_id": None,
+                "model_requested": "GPT-5.6 Terra",
+                "model_actual": "GPT-5.6 Luna",
+                "model_evidence_source": "RUNTIME_TELEMETRY",
+            },
+        ),
+    ],
+    ids=[
+        "telemetry claiming proof with nothing observed",
+        "an unknown class carrying an observation",
+        "configuration evidence dressed as execution",
+        "CONTRADICTED that contradicts nothing",
+        "two different requests recorded at once",
+        "an observed fallback beside a clean-match claim",
+        "a lane with no API id whose observation differs",
+    ],
+)
+def test_identity_evidence_siblings_fail_closed(label: str, overrides: dict) -> None:
+    assert validator.check_manifest_instance("probe", _runtime(**overrides)), label
+
+
+def test_an_honestly_recorded_fallback_is_representable() -> None:
+    """A fallback must be RECORDABLE, or a session that hit one could not describe it truthfully."""
+    manifest = _runtime(
+        model_id="claude-opus-5",
+        model_requested="claude-opus-5",
+        model_actual="claude-sonnet-5",
+        model_evidence_source="CONTRADICTED",
+        model_fallback="fell back to claude-sonnet-5",
+    )
+    assert validator.check_manifest_instance("probe", manifest) == []
+
+
+@pytest.mark.parametrize(
+    ("label", "overrides"),
+    [
+        (
+            "a contradicted identity keeps a proven effort",
+            {
+                "model_actual": "claude-sonnet-5",
+                "model_evidence_source": "CONTRADICTED",
+                "effort_evidence_source": "RUNTIME_TELEMETRY",
+                "observed_effort": "xhigh",
+            },
+        ),
+        (
+            "a proven identity keeps an unknown effort",
+            {"effort_evidence_source": "UNKNOWN", "observed_effort": None},
+        ),
+        (
+            "an unknown identity keeps a proven effort",
+            {
+                "model_actual": None,
+                "model_evidence_source": "UNKNOWN",
+                "effort_evidence_source": "RUNTIME_TELEMETRY",
+                "observed_effort": "max",
+            },
+        ),
+        ("a proven identity keeps an unknown thinking state", {"thinking_actual": "UNKNOWN"}),
+        (
+            "a contradicted effort keeps a proven identity",
+            {"effort_evidence_source": "CONTRADICTED", "observed_effort": "high"},
+        ),
+    ],
+    ids=[
+        "a contradicted identity keeps a proven effort",
+        "a proven identity keeps an unknown effort",
+        "an unknown identity keeps a proven effort",
+        "a proven identity keeps an unknown thinking state",
+        "a contradicted effort keeps a proven identity",
+    ],
+)
+def test_a_contradiction_in_one_dimension_never_erases_another(label: str, overrides: dict) -> None:
+    """R2. The identity relation must not have quietly collapsed the dimensional split."""
+    manifest = _example_manifest()
+    manifest["model_runtime"].update(
+        model_id="claude-opus-5", model_requested="claude-opus-5", model_actual="claude-opus-5"
+    )
+    manifest["model_runtime"].update(overrides)
+    assert validator.check_manifest_instance("probe", manifest) == [], label
+
+
+def test_the_authoritative_identity_is_documented_and_implemented() -> None:
+    """R3. Two names that look equivalent must not be compared inconsistently."""
+    canonical = _normalized(REPO_ROOT / CANONICAL)
+    assert "`MODEL_ID` is the AUTHORITATIVE exact identity" in canonical
+    assert "where both carry a payload they must agree" in canonical
+    assert validator.EXECUTION_PROVING_CLASSES == frozenset(ORACLE_EXECUTION_PROVING_CLASSES)
+    runtime = {"model_id": "claude-opus-5", "model_requested": "gpt-6-astra"}
+    assert validator.required_model_identity(runtime) == "claude-opus-5"
+    assert validator.required_model_identity({"model_id": None, "model_requested": "GPT-5.6 Terra"}) == "GPT-5.6 Terra"
+    assert validator.required_model_identity({"model_id": None, "model_requested": None}) is None
+
+
+# --- CONTINUITY_REQUIREDNESS ------------------------------------------------------------------
+
+
+def test_invalidations_is_required() -> None:
+    """B2. An absent record is indistinguishable from 'the producer never said'."""
+    assert "invalidations" in validator.MANIFEST_REQUIRED
+    manifest = _example_manifest()
+    manifest.pop("invalidations")
+    assert validator.check_manifest_instance("probe", manifest)
+
+
+def test_an_empty_invalidation_list_is_truthful_and_valid() -> None:
+    """R5. Nothing was invalidated is a real answer; never fabricate an entry to satisfy shape."""
+    manifest = _example_manifest()
+    manifest["invalidations"] = []
+    assert validator.check_manifest_instance("probe", manifest) == []
+
+
+@pytest.mark.parametrize(
+    ("label", "value"),
+    [
+        ("a bare string", "none"),
+        ("an object", {}),
+        ("null", None),
+        ("a filler entry", ["ㅤ"]),
+        ("a null entry", [None]),
+        ("a numeric entry", [7]),
+    ],
+    ids=["a bare string", "an object", "null", "a filler entry", "a null entry", "a numeric entry"],
+)
+def test_invalidations_must_be_a_list_of_operational_facts(label: str, value: object) -> None:
+    manifest = _example_manifest()
+    manifest["invalidations"] = value
+    assert validator.check_manifest_instance("probe", manifest), label
+
+
+def test_every_field_the_example_carries_is_required() -> None:
+    """CLOSED-WORLD: no load-bearing field may be omittable, and requiredness has ONE source.
+
+    `$comment` is the single documented exception - it is documentation about the artifact.
+    """
+    example = _example_manifest()
+    omittable = sorted(set(example) - set(validator.MANIFEST_REQUIRED) - {"$comment"})
+    assert omittable == [], "these load-bearing fields may be omitted entirely: {}".format(omittable)
+    for field in sorted(set(example) - {"$comment"}):
+        probe = _example_manifest()
+        probe.pop(field)
+        assert validator.check_manifest_instance("probe", probe), field
+
+
+def test_requiredness_agrees_with_the_generated_schema_in_both_directions() -> None:
+    schema = validator.emit_manifest_schema()
+    assert set(schema["required"]) == set(validator.MANIFEST_REQUIRED)
+    committed = json.loads(
+        (REPO_ROOT / "docs/crypto_core/continuity/state_manifest.schema.json").read_text("utf-8-sig")
+    )
+    assert set(committed["required"]) == set(validator.MANIFEST_REQUIRED)
+    assert "invalidations" in committed["required"]
+
+
+def test_continuity_requiredness_is_documented() -> None:
+    canonical = _normalized(REPO_ROOT / CANONICAL)
+    assert "CONTINUITY_REQUIREDNESS" in canonical
+    assert "An EMPTY list is the truthful way to record that nothing was invalidated" in canonical
+    assert 'An omitted load-bearing field never means "unknown but safe"' in canonical

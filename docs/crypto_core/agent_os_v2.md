@@ -396,6 +396,20 @@ proven identity. A contradiction in one dimension never erases valid evidence fr
 effort, are both first-class truthful states. Never invent telemetry to fill a dimension: `UNKNOWN`
 with a null observation is the honest record, and it is always available.
 
+`RELATIONAL_IDENTITY_PROOF` — a populated `MODEL_ACTUAL` proves only that SOMETHING was observed,
+never that it was the runtime the route required, so the two are COMPARED. `MODEL_ID` is the
+AUTHORITATIVE exact identity: it is the API identity the routing matrix pins for the lane.
+`MODEL_REQUESTED` records the same request as the controller asked for it and is the required
+identity only where no API identity applies, because some lanes route with none; where both carry a
+payload they must agree, since two values are two different requests. Under an evidence class that
+asserts execution was OBSERVED — `RUNTIME_TELEMETRY` or `USER_ATTESTED_UI_SELECTION` — a recorded
+`MODEL_ACTUAL` that differs from the required identity is NOT ordinary matching evidence: the only
+honest class is `CONTRADICTED`, which is what triggers `STOP_MODEL_MISMATCH` before mutation.
+`CONTRADICTED` correspondingly requires a real conflict — an actual equal to the required identity
+contradicts nothing. A populated `MODEL_FALLBACK` is itself an observed conflicting execution, so it
+cannot coexist with a class claiming a clean match. The relation names no model and holds for every
+exact-model route, in either provider.
+
 An attestation attests ONE dimension. `USER_ATTESTED_UI_SELECTION` records the attested value in
 that dimension's own observation field; `HOST_SETTING_RAW` is the operator's selector copied verbatim
 as context and is never itself a dimension's observation. A single untyped host label such as `Max`
@@ -1263,6 +1277,15 @@ but semantically empty value presented as proof are all invalid.
 here without a schema constraint, and no schema proof-pair constraint that is not registered here.
 Static descriptive metadata is deliberately NOT paired: an evidence field for a task boundary or for
 a session narrative would be ceremony, not proof.
+
+`CONTINUITY_REQUIREDNESS` — every field the manifest calls load-bearing is REQUIRED, and
+requiredness is derived in exactly one place so the published schema is generated from the same
+source rather than restated. `invalidations` is required for the same reason the proof pairs are: an
+absent list cannot be distinguished from "the producer never said", which leaves stale
+completed-gate evidence quietly reusable across a fresh chat. An EMPTY list is the truthful way to
+record that nothing was invalidated and is always valid — a fabricated entry to satisfy shape would
+be worse than the omission it replaces. An omitted load-bearing field never means "unknown but
+safe": missing material operational evidence is UNKNOWN or BLOCKED, never a pass.
 
 `MEANINGFUL_VALUE_CLASS_REGISTRY_V1` — each row declares a VALUE_CLASS, format
 `- <field> :: <VALUE_CLASS>`. Non-null was never a proof predicate: it answers a JSON topology

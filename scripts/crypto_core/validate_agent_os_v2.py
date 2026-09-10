@@ -1761,13 +1761,16 @@ def _manifest_fields() -> tuple[dict, tuple[str, ...]]:
 
     fields["invalidations"] = _list(
         _op(),
-        "Facts that stopped being true during this session and must not be reused. This is a session "
-        "narrative rather than an external fact, so it is deliberately NOT proof-paired: pairing it "
-        "would be ceremony, not proof.",
+        "Facts that stopped being true during this session and must not be reused. REQUIRED and never "
+        "omitted: an absent list cannot be distinguished from 'the producer never said', which would "
+        "leave stale completed-gate evidence quietly reusable. An EMPTY list is the truthful way to "
+        "say nothing was invalidated, and is always valid - never fabricate an entry to satisfy "
+        "shape. It is deliberately NOT proof-paired: this is a session narrative rather than an "
+        "external fact, so pairing it would be ceremony, not proof.",
     )
     fields["model_runtime"] = MODEL_RUNTIME_GRAMMAR
     fields["authorization"] = AUTHORIZATION_GRAMMAR
-    required.extend(("model_runtime", "authorization"))
+    required.extend(("invalidations", "model_runtime", "authorization"))
     return fields, tuple(sorted(required))
 
 
@@ -1966,6 +1969,26 @@ def proof_pair_failures(label: str, instance: dict, value_field: str, evidence_f
     return failures
 
 
+# The classes that assert an execution was OBSERVED. Under these, a recorded identity is a claim
+# about what actually ran, so it must equal the identity the route required.
+EXECUTION_PROVING_CLASSES = frozenset({"RUNTIME_TELEMETRY", "USER_ATTESTED_UI_SELECTION"})
+
+
+def required_model_identity(runtime: dict) -> object:
+    """The identity runtime equality is judged against.
+
+    `model_id` is AUTHORITATIVE: it is the exact API identity the routing matrix pins for the lane.
+    `model_requested` is the same request recorded as the controller asked for it, and is used only
+    when no API identity applies - some lanes route with no API id at all. Where both carry a
+    payload they must agree, because two different values name two different required runtimes.
+    """
+    model_id = runtime.get("model_id")
+    if not operational_text_failures(model_id):
+        return model_id
+    requested = runtime.get("model_requested")
+    return requested if not operational_text_failures(requested) else None
+
+
 def _is_operational_observation(value: object) -> bool:
     """A recorded identity must be an operational token, not merely non-null."""
     return value is not None and not operational_text_failures(value)
@@ -2032,6 +2055,49 @@ def manifest_relation_failures(label: str, instance: object) -> list[str]:
                 # CONFIGURATION_EVIDENCE_ONLY and UNKNOWN prove no observation in THIS dimension.
                 if observation is not None:
                     failures.append(f"{label}: {source} must not populate {observation_field} as a proven {dimension}")
+
+        # --- identity RELATION: observed vs required -----------------------------------------
+        # Everything here stays inside the identity dimension. An identity contradiction never
+        # touches the effort or thinking observations, which carry their own evidence.
+        model_id = runtime.get("model_id")
+        requested = runtime.get("model_requested")
+        actual = runtime.get("model_actual")
+        source = runtime.get("model_evidence_source")
+        fallback = runtime.get("model_fallback")
+
+        if (
+            not operational_text_failures(model_id)
+            and not operational_text_failures(requested)
+            and model_id != requested
+        ):
+            failures.append(
+                f"{label}: model_id {model_id!r} and model_requested {requested!r} disagree, so the "
+                f"manifest names two different required runtimes; model_id is the authoritative identity"
+            )
+
+        required_identity = required_model_identity(runtime)
+        observed_identity = actual if _is_operational_observation(actual) else None
+        if required_identity is not None and observed_identity is not None:
+            matches = observed_identity == required_identity
+            if source in EXECUTION_PROVING_CLASSES and not matches:
+                failures.append(
+                    f"{label}: {source} reports model_actual {observed_identity!r} but the required "
+                    f"identity is {required_identity!r}; a runtime that is not the one the route "
+                    f"required is CONTRADICTED, never ordinary matching execution evidence"
+                )
+            if source == "CONTRADICTED" and matches:
+                failures.append(
+                    f"{label}: CONTRADICTED claims a conflicting runtime, but model_actual "
+                    f"{observed_identity!r} equals the required identity, so nothing is contradicted"
+                )
+
+        # An observed fallback IS a conflicting execution: the lane that ran is not the lane asked
+        # for. Recording one while the identity class claims a clean match states both at once.
+        if not operational_text_failures(fallback) and source != "CONTRADICTED":
+            failures.append(
+                f"{label}: model_fallback records {fallback!r}, so a runtime other than the requested "
+                f"one executed; the identity evidence class must be CONTRADICTED, not {source!r}"
+            )
 
         thinking = runtime.get("thinking_actual")
         if thinking not in THINKING_STATES:
