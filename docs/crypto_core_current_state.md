@@ -1,45 +1,70 @@
-# Crypto Core Current State
+# Crypto Core Current State — Durable Pointer
 
-This note is a compact continuity aid for Codex setup and future crypto_core phases. It is not a PRD and does not replace `docs/PRDV4_MULTI_MARKET_CRYPTO.md`.
+<!-- CONTROL_PLANE_ROLE: DURABLE_STATE_POINTER -->
+<!-- CONTROL_PLANE_AUTHORITY_REF: docs/crypto_core/agent_os_v2.md -->
 
-## Active Stream
+> **This file deliberately contains no current state.** It is a durable POINTER to where current state
+> actually lives. It defines no routing, task family, effort, PR sizing or merge authority; those live
+> in `docs/crypto_core/agent_os_v2.md`.
+>
+> MERGE_AUTHORITY_REF: canonical section 2.1. PR_SIZING_AUTHORITY_REF: canonical section 2.2.
+> TASK_FAMILY_AUTHORITY_REF: canonical section 3. EFFORT_AUTHORITY_REF: canonical section 3.2.
 
-- Active implementation scope is `src/crypto_core/**` and `tests/crypto_core/**`.
+## Why this file holds no state
+
+A committed file cannot stay current. Every previous version of this note pinned a head, a blocker
+and a phase status that were true on the day they were written and misleading afterwards — and a
+stale pin read as current is exactly the failure this control plane exists to prevent. So the pins
+are gone, and the durable-surface scan in `scripts/crypto_core/validate_agent_os_v2.py` now fails the
+build if a commit hash, a PR number or an open-PR count reappears in the active region of this file.
+
+## Where current state lives
+
+| Question | Where the answer actually is |
+|---|---|
+| Current `main` head and tree | `git rev-parse origin/main`, `git rev-parse origin/main^{tree}` |
+| Current branch, head, clean tree | `git status --short --branch`, `git rev-parse HEAD` |
+| Open PR count and identity | `gh pr list --state open` |
+| PR state, mergeability, head oid | `gh pr view <n> --json state,mergeable,mergeStateStatus,headRefOid` |
+| CI and security-scan results | `gh pr checks <n>`, `gh run list`, the commit check-runs |
+| Review threads and resolution | the PR review-threads GraphQL query |
+| Current blocker set and next slice | the ephemeral state manifest and the current handoff |
+| Completed-gate reuse validity | the gate's evidence key in the ephemeral state manifest |
+
+Compile the ephemeral manifest from `docs/crypto_core/continuity/state_manifest.schema.json`. A value
+that cannot be proven is `UNKNOWN` — never a plausible guess. A worked instance is in
+`docs/crypto_core/continuity/state_manifest.example.json`, which is an illustrative fixture and not
+state.
+
+## Durable orientation
+
+- Active implementation scope is `src/crypto_core/**`, `tests/crypto_core/**`,
+  `scripts/crypto_core/**` and explicitly authorized `docs/crypto_core/**`.
 - Legacy BIST code is out of scope unless the user explicitly requests it.
-- Future work should continue from the latest committed crypto_core state after checking `git status` and recent crypto_core commits.
-- All future phases remain paper-only unless explicitly instructed otherwise.
+- All phases remain paper-only unless explicitly instructed otherwise.
+- The durable capability map — the chain from strategy specification through admission to the paper
+  sleeve and beyond — is in `docs/crypto_core/continuity/CONTINUITY_INDEX.md`. Progress along that
+  chain is proven from the repository, never read from a document.
+- The product architecture authority is `docs/PRDV4_MULTI_MARKET_CRYPTO.md`. This note is not a PRD
+  and does not replace it.
 
-## Verified Surfaces Present
+## Operating reminder
 
-The current tree contains crypto_core surfaces for:
+Preserve deterministic replay, fail-closed behavior, explicit auditability, scoped git hygiene and
+evidence-before-promotion. Do not add fake data, live-trading enablement, credentials, or provider and
+network expansion unless the task explicitly asks for it.
 
-- pipeline and service orchestration
-- campaign, review, and readiness flows
-- external-regime governance
-- decision-pack and escalation workflow
-- crypto sleeve portfolio state
-- sleeve qualification and recommendation
-- sleeve campaign evidence
-- sleeve decision pack
-- sleeve candidate workflow
-- sleeve promotion review and admission flow
+<!-- HISTORICAL_RECORD_BEGIN -->
 
-## Operating Reminder
+## Historical note
 
-Preserve deterministic replay, fail-closed behavior, explicit auditability, scoped git hygiene, and evidence-before-promotion. Do not add fake data, live trading enablement, credentials, or provider/network expansion unless the task explicitly asks for it.
+Earlier revisions of this file carried a "Verified Surfaces Present" inventory and a "Known Blockers"
+section pinning a specific resolved blocker commit and a dated phase status. Both were point-in-time
+records. They were removed rather than updated, because a committed inventory of what exists is
+re-derivable from the tree at any moment and a committed blocker list goes stale silently. The
+surfaces that note listed — pipeline and service orchestration, campaign, review and readiness flows,
+external-regime governance, decision-pack and escalation workflow, sleeve portfolio state,
+qualification and recommendation, campaign evidence, decision pack, candidate workflow, and promotion
+review and admission — are all still discoverable directly under `src/crypto_core/`.
 
-## Known Blockers
-
-### Blocker 1 — ServiceOrchestrator missing `_sleeve_candidate_workflow_controller` — RESOLVED
-
-- **Commit:** `d2d8b893c85e16cb94b25dd6d5b6d4c800002b5a`
-- `_sleeve_candidate_workflow_controller` added to `__init__` after `_sleeve_admission_controller = None`.
-- Dead-code block (12 lines after `return` in `get_sleeve_admission_portfolio_summary`) removed.
-- Full suite: all tests green.
-
-### Phase 16L Status
-
-- **Status:** Implemented by Codex (GPT-5.5). Targeted tests pass (`test_phase10a.py` + `test_phase10b.py` clean).
-- **Files:** `src/crypto_core/service/promotion_review.py` and `tests/crypto_core/service/test_phase10a.py`.
-- **Full suite:** Previously BLOCKED by Blocker 1 above — now UNBLOCKED (Blocker 1 resolved).
-- **Next step:** Rerun `pytest -x -q tests/crypto_core` on the Phase 16L branch to confirm full suite green, then commit Phase 16L as an atomic commit.
+<!-- HISTORICAL_RECORD_END -->
