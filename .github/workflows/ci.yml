@@ -63,13 +63,8 @@ jobs:
       - name: Run pytest
         run: |
           set -euo pipefail
-          python -m pytest -q -W error tests/crypto_core
-
-      - name: Coverage report
-        run: |
-          set -euo pipefail
           python -m pip install pytest-cov
-          python -m pytest --cov=src/crypto_core --cov-report=term --cov-fail-under=70 -q tests/crypto_core
+          python -m pytest -q -W error --cov=src/crypto_core --cov-report=term --cov-fail-under=70 tests/crypto_core
 
   slow-tests:
     name: slow-tests
