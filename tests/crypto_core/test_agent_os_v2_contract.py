@@ -6635,3 +6635,320 @@ def test_the_active_surface_semantics_are_documented() -> None:
     assert "Authority syntax is RESERVED" in text
     assert "it is POSITIVE PROOF, never the absence of a known unsafe spelling" in text
     assert "rejects the surface the moment its front matter declares" not in text
+
+
+# ===========================================================================================
+# ACTIVE_AUTHORITY_STRUCTURAL_COMPLETENESS
+#
+# A control-plane authority construct is valid only when its complete active structural form is uniquely
+# present and populated. Three sibling failures, closed together: a ROUTE row and a canonical declaration
+# recognized only at column zero, an authority reference proven by presence instead of cardinality and
+# value, and a required block accepted for its markers alone. Every expected verdict below is written out
+# literally and never derived from the validator.
+# ===========================================================================================
+
+ORACLE_AUTHORITY_INDENTS = [
+    ("column zero", ""),
+    ("two spaces", "  "),
+    ("four spaces", "    "),
+    ("a tab", chr(9)),
+    ("a space and a tab", " " + chr(9)),
+]
+ORACLE_EXTERNAL_ROUTE = "ROUTE: T4 | CLASS_C_CROSS_CONTRACT | Claude Opus 5 | claude-opus-5 | low | READ_ONLY"
+ORACLE_ROUTE_SURFACES = ["CLAUDE.md", "docs/crypto_core/model_prompting_guide.md"]
+ORACLE_INDEPENDENCE_STATES = [
+    "SELF_AUDIT_ONLY_NOT_INDEPENDENT",
+    "ORDINARY_INDEPENDENT_REVIEW",
+    "PROTECTED_CLASS_C_AUDIT",
+]
+ORACLE_TESTED_REVISION_FIELDS = [
+    "event",
+    "audited_pr_head",
+    "audited_head_tree",
+    "current_base",
+    "workflow_run_id",
+    "workflow_path",
+    "run_reported_head",
+    "actual_checkout_revision",
+    "tested_revision_parents",
+    "tested_revision_tree",
+    "checkout_ref_override",
+    "tests_job_conclusion",
+    "agent_os_gate_step_conclusions",
+    "required_contexts",
+]
+
+_ROUTE_INDENT_CASES = [
+    (rel, label, indent) for rel in ORACLE_ROUTE_SURFACES for label, indent in ORACLE_AUTHORITY_INDENTS
+]
+
+
+@pytest.mark.parametrize(
+    ("rel", "label", "indent"),
+    _ROUTE_INDENT_CASES,
+    ids=["{} with {}".format(rel, label) for rel, label, _indent in _ROUTE_INDENT_CASES],
+)
+def test_an_external_route_line_is_rejected_at_any_indentation(
+    sandbox: Path, rel: str, label: str, indent: str
+) -> None:
+    """P1-01: a competing route hid behind ordinary Markdown indentation; only column zero was rejected."""
+    write(sandbox, rel, read(sandbox, rel) + "\n" + indent + ORACLE_EXTERNAL_ROUTE + "\n")
+    assert_rejects(sandbox, "ROUTE line outside the canonical routing matrix")
+
+
+def test_an_external_route_line_with_a_spaced_colon_is_rejected(sandbox: Path) -> None:
+    write(
+        sandbox,
+        "CLAUDE.md",
+        read(sandbox, "CLAUDE.md") + "\n  ROUTE : T4 | REVIEW | Claude Opus 5 | claude-opus-5 | low | READ_ONLY\n",
+    )
+    assert_rejects(sandbox, "ROUTE line outside the canonical routing matrix")
+
+
+def test_the_canonical_matrix_rows_remain_legal(sandbox: Path) -> None:
+    """The POSITIVE anchor: the canonical matrix is full of ROUTE rows and must stay valid."""
+    rows = [line for line in read(sandbox, CANONICAL).split("\n") if line.startswith("ROUTE:")]
+    assert len(rows) >= 20
+    assert failures(sandbox) == []
+
+
+_DECLARATION_INDENT_CASES = [
+    ("MERGE_AUTHORITY_SOURCE: CONTROLLER_DECIDES", "MERGE_AUTHORITY_SOURCE must be declared exactly once"),
+    ("PR_SIZING_AUTHORITY: MAX_FILE_COUNT", "PR_SIZING_AUTHORITY must be declared exactly once"),
+    ("TASK_FAMILY_AUTHORITY: ADAPTER_DECIDES", "TASK_FAMILY_AUTHORITY must be declared exactly once"),
+    ("EFFORT_AUTHORITY: HOST_DECIDES", "EFFORT_AUTHORITY must be declared exactly once"),
+    ("MAX_EFFORT_CLASSES: T0,T1,T2", "MAX_EFFORT_CLASSES must be declared exactly once"),
+]
+_DECLARATION_CASES_WITH_INDENT = [
+    (line, needle, label, indent)
+    for line, needle in _DECLARATION_INDENT_CASES
+    for label, indent in ORACLE_AUTHORITY_INDENTS[1:]
+]
+
+
+@pytest.mark.parametrize(
+    ("line", "needle", "label", "indent"),
+    _DECLARATION_CASES_WITH_INDENT,
+    ids=["{} with {}".format(case[0].split(":")[0], case[2]) for case in _DECLARATION_CASES_WITH_INDENT],
+)
+def test_an_indented_declaration_in_a_subordinate_is_still_a_declaration(
+    sandbox: Path, line: str, needle: str, label: str, indent: str
+) -> None:
+    """P1-01 sibling: the declaration reader used the same column-zero anchor as the ROUTE reader."""
+    write(sandbox, "CLAUDE.md", read(sandbox, "CLAUDE.md") + "\n" + indent + line + "\n")
+    assert_rejects(sandbox, needle)
+
+
+def test_a_declaration_carrying_more_than_one_value_token_is_rejected(sandbox: Path) -> None:
+    write(sandbox, "CLAUDE.md", read(sandbox, "CLAUDE.md") + "\n  EFFORT_AUTHORITY: HOST ADAPTER DECIDES\n")
+    assert_rejects(sandbox, "a canonical declaration carries exactly one value token")
+
+
+ORACLE_CANONICAL_REF = "<!-- CONTROL_PLANE_AUTHORITY_REF: docs/crypto_core/agent_os_v2.md -->"
+ORACLE_FOREIGN_REF = "<!-- CONTROL_PLANE_AUTHORITY_REF: docs/crypto_core/shadow_authority.md -->"
+_AUTHORITY_REF_CASES = [
+    (
+        "a foreign marker beside the canonical one",
+        "append",
+        ORACLE_FOREIGN_REF,
+        "expected exactly one CONTROL_PLANE_AUTHORITY_REF marker, found 2",
+    ),
+    (
+        "the canonical marker duplicated",
+        "append",
+        ORACLE_CANONICAL_REF,
+        "expected exactly one CONTROL_PLANE_AUTHORITY_REF marker, found 2",
+    ),
+    (
+        "an indented duplicate",
+        "append",
+        "   " + ORACLE_CANONICAL_REF,
+        "expected exactly one CONTROL_PLANE_AUTHORITY_REF marker, found 2",
+    ),
+    (
+        "a spaced-out duplicate",
+        "append",
+        "<!--   CONTROL_PLANE_AUTHORITY_REF :  docs/crypto_core/agent_os_v2.md   -->",
+        "expected exactly one CONTROL_PLANE_AUTHORITY_REF marker, found 2",
+    ),
+    (
+        "a foreign marker instead of the canonical one",
+        "replace",
+        ORACLE_FOREIGN_REF,
+        "CONTROL_PLANE_AUTHORITY_REF names",
+    ),
+    ("no marker at all", "remove", "", "missing CONTROL_PLANE_AUTHORITY_REF marker"),
+    ("the marker only inside history", "exempt", "", "missing CONTROL_PLANE_AUTHORITY_REF marker"),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "mode", "payload", "needle"),
+    _AUTHORITY_REF_CASES,
+    ids=[case[0] for case in _AUTHORITY_REF_CASES],
+)
+def test_the_authority_reference_is_unique_and_canonical(
+    sandbox: Path, label: str, mode: str, payload: str, needle: str
+) -> None:
+    """P1-02: presence of the expected marker proved one exists, never that it is the only one."""
+    rel = "CLAUDE.md"
+    text = read(sandbox, rel)
+    assert text.count(ORACLE_CANONICAL_REF) == 1
+    if mode == "append":
+        text = text + "\n" + payload + "\n"
+    elif mode == "replace":
+        text = text.replace(ORACLE_CANONICAL_REF, payload, 1)
+    elif mode == "remove":
+        text = text.replace(ORACLE_CANONICAL_REF + "\n", "", 1)
+    else:
+        text = text.replace(
+            ORACLE_CANONICAL_REF,
+            "<!-- HISTORICAL_RECORD_BEGIN -->\n" + ORACLE_CANONICAL_REF + "\n<!-- HISTORICAL_RECORD_END -->",
+            1,
+        )
+    write(sandbox, rel, text)
+    assert_rejects(sandbox, needle)
+
+
+def test_the_canonical_authority_references_no_other_authority(sandbox: Path) -> None:
+    """P1-02 sibling: the canonical file itself could carry a marker naming another authority."""
+    text = read(sandbox, CANONICAL)
+    marker = "<!-- CONTROL_PLANE_ROLE: CANONICAL_AUTHORITY -->"
+    assert text.count(marker) == 1
+    write(sandbox, CANONICAL, text.replace(marker, marker + "\n" + ORACLE_FOREIGN_REF, 1))
+    assert_rejects(sandbox, "the canonical authority references no other authority")
+
+
+@pytest.mark.parametrize("rel", sorted(set(ORACLE_ACTIVE_DOCTRINE_SURFACES) - {CANONICAL}))
+def test_every_subordinate_surface_carries_exactly_one_canonical_reference(rel: str) -> None:
+    """The POSITIVE anchor, on the real tree: one marker, resolving to the canonical authority."""
+    text = (REPO_ROOT / rel).read_text(encoding="utf-8-sig")
+    targets = re.findall(r"<!--\s*CONTROL_PLANE_AUTHORITY_REF\s*:\s*([^>]*?)\s*-->", text)
+    assert targets == [CANONICAL], targets
+
+
+_BLOCK_BODY_SHAPES = [
+    ("an empty body", []),
+    ("a whitespace-only body", ["   "]),
+    ("a comment-only body", ["<!-- retired -->"]),
+]
+_BLOCK_BODY_CASES = [
+    (name, shape, filler) for name in ORACLE_CANONICAL_AUTHORITY_BLOCKS for shape, filler in _BLOCK_BODY_SHAPES
+]
+
+
+@pytest.mark.parametrize(
+    ("name", "shape", "filler"),
+    _BLOCK_BODY_CASES,
+    ids=["{} with {}".format(name, shape) for name, shape, _f in _BLOCK_BODY_CASES],
+)
+def test_a_required_authority_block_must_carry_a_body(sandbox: Path, name: str, shape: str, filler: list) -> None:
+    """P2-01: markers alone certified a block; emptying two of the 25 left the whole gate green."""
+    text = read(sandbox, CANONICAL)
+    first, last = _authority_bounds(text, name)
+    lines = text.split("\n")
+    write(sandbox, CANONICAL, "\n".join(lines[: first + 1] + filler + lines[last:]))
+    found = failures(sandbox)
+    assert found, "{} was accepted with {}".format(name, shape)
+
+
+def test_the_inventory_itself_rejects_an_empty_block_body() -> None:
+    """The floor under every block: the inventory refuses an empty body even where a consumer would not."""
+    text = (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig")
+    first, last = _authority_bounds(text, "MODEL_AGNOSTIC_SURFACES")
+    lines = text.split(chr(10))
+    emptied = chr(10).join(lines[: first + 1] + lines[last:])
+    # The inventory reads the ACTIVE projection, exactly as the validator feeds it.
+    emptied_view = validator.project_surface(CANONICAL, emptied.split(chr(10)))
+    found = validator.active_authority_failures(emptied_view.text)
+    assert any("MODEL_AGNOSTIC_SURFACES carries no active body" in item for item in found), found
+    committed_view = validator.project_surface(CANONICAL, text.split(chr(10)))
+    assert validator.active_authority_failures(committed_view.text) == []
+
+
+def test_the_independence_vocabulary_body_matches_canonical_doctrine(sandbox: Path) -> None:
+    rows = validator.parse_surface_registry(read(sandbox, CANONICAL), "INDEPENDENCE_VOCABULARY")
+    assert [state for state, _description in rows or []] == ORACLE_INDEPENDENCE_STATES
+    assert all(description for _state, description in rows or [])
+    assert failures(sandbox) == []
+
+
+_INDEPENDENCE_MUTATIONS = [
+    (
+        "a missing state",
+        "- ORDINARY_INDEPENDENT_REVIEW :: fresh-context T3C review by a permitted family that did not implement it\n",
+        "",
+    ),
+    (
+        "a duplicated state",
+        "- PROTECTED_CLASS_C_AUDIT :: fresh-context GPT-6 Astra T4 only, and nothing else ever satisfies it\n",
+        "- PROTECTED_CLASS_C_AUDIT :: fresh-context GPT-6 Astra T4 only, and nothing else ever satisfies it\n- PROTECTED_CLASS_C_AUDIT :: again\n",
+    ),
+    ("a foreign state", "- PROTECTED_CLASS_C_AUDIT ::", "- CONTROLLER_SUFFICIENT_AUDIT ::"),
+    (
+        "a reordered vocabulary",
+        "- SELF_AUDIT_ONLY_NOT_INDEPENDENT :: the same model family reviewing its own implementation\n",
+        "",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "old", "new"),
+    _INDEPENDENCE_MUTATIONS,
+    ids=[case[0] for case in _INDEPENDENCE_MUTATIONS],
+)
+def test_the_independence_vocabulary_is_enforced_not_merely_present(
+    sandbox: Path, label: str, old: str, new: str
+) -> None:
+    text = read(sandbox, CANONICAL)
+    assert text.count(old) == 1, old
+    write(sandbox, CANONICAL, text.replace(old, new, 1))
+    assert_rejects(sandbox, "INDEPENDENCE_VOCABULARY")
+
+
+_TESTED_REVISION_MUTATIONS = [
+    ("a missing evidence field", "- run_reported_head\n", ""),
+    ("a duplicated evidence field", "- workflow_run_id\n", "- workflow_run_id\n- workflow_run_id\n"),
+    ("a foreign evidence field", "- checkout_ref_override\n", "- checkout_ref_override\n- checkout_ref_trusted\n"),
+    ("a reordered bundle", "- event\n- audited_pr_head\n", "- audited_pr_head\n- event\n"),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "old", "new"),
+    _TESTED_REVISION_MUTATIONS,
+    ids=[case[0] for case in _TESTED_REVISION_MUTATIONS],
+)
+def test_the_tested_revision_bundle_declaration_is_enforced(sandbox: Path, label: str, old: str, new: str) -> None:
+    text = read(sandbox, CANONICAL)
+    assert text.count(old) == 1, old
+    write(sandbox, CANONICAL, text.replace(old, new, 1))
+    assert_rejects(sandbox, "TESTED_REVISION_EVIDENCE must declare exactly")
+
+
+def test_the_tested_revision_declaration_matches_the_executable_bundle() -> None:
+    declared = validator.parse_registry(
+        (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig"), "TESTED_REVISION_EVIDENCE"
+    )
+    assert declared == ORACLE_TESTED_REVISION_FIELDS
+    assert list(validator.TESTED_REVISION_EVIDENCE_FIELDS) == ORACLE_TESTED_REVISION_FIELDS
+
+
+def test_one_matcher_decides_what_an_authority_construct_is() -> None:
+    """F1 structurally: the active reader and the reserved rule share one pattern per construct."""
+    source = VALIDATOR_PATH.read_text(encoding="utf-8")
+    assert 'line.startswith("ROUTE:")' not in source
+    assert "ref_marker not in text" not in source
+    for indent in ("", "  ", "    ", chr(9), " " + chr(9)):
+        assert validator.ROUTE_LINE_RE.match(indent + "ROUTE: T0 | STATUS | x | - | low | MECHANICAL_ONLY")
+        assert validator.DECLARATION_LINE_RE.match(indent + "MERGE_AUTHORITY_SOURCE: HUMAN_ONLY_PER_PR")
+    assert not validator.ROUTE_LINE_RE.match("ROUTES: not a row")
+    assert not validator.DECLARATION_LINE_RE.match("MERGE_AUTHORITY_SOURCE_REF: x")
+
+
+def test_the_structural_completeness_rules_are_documented() -> None:
+    text = _normalized(REPO_ROOT / CANONICAL)
+    assert "ACTIVE_AUTHORITY_STRUCTURAL_COMPLETENESS" in text
+    assert "regardless of indentation" in text
+    assert "exactly one authority reference" in text

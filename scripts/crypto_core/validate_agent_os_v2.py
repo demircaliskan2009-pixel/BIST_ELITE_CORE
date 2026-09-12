@@ -28,6 +28,9 @@ STRUCTURE and BOUNDED LEXICAL CONTRACTS over the control-plane surfaces register
   authority reading and every active scan consumes that projection; authority syntax may not appear
   inside an exemption region, and every canonical block is required in the active projection;
 * the positive NON_APPLYING front-matter contract for a historical host surface;
+* ACTIVE_AUTHORITY_STRUCTURAL_COMPLETENESS: authority syntax is recognized structurally rather than at
+  column zero, a subordinate surface carries exactly one authority reference and it resolves to the
+  canonical file, and a required authority block is its populated body rather than its markers;
 * the canonical typed operational grammar, and that the committed manifest schema equals the
   schema generated from it;
 * the strict JSON evidence boundary: every JSON document it judges - the committed schema, the
@@ -433,6 +436,27 @@ MISSING_ACTIVE_AUTHORITY = "MISSING_ACTIVE_AUTHORITY"
 # A standalone block marker line, exactly as block_span reads one.
 BLOCK_MARKER_LINE_RE = re.compile(r"\A<!-- ([A-Z0-9_]+)_(BEGIN|END) -->\Z")
 
+# ACTIVE_AUTHORITY_STRUCTURAL_COMPLETENESS (agent_os_v2.md section 15). ONE matcher decides what an
+# authority construct IS, and both the active readers and the reserved-syntax rule below use it. The active
+# readers previously anchored a ROUTE row and a canonical declaration at column zero, so ordinary Markdown
+# indentation hid a competing route or a rival declaration from the very checks that make routing and
+# declaration authority singular - while the same indented line was already reserved syntax inside an
+# exemption region. Each construct therefore has exactly one pattern, compiled twice: the exact-case reader
+# for active authority, and a case-insensitive twin that keeps the reserved rule fail-closed.
+DECLARATION_NAMES = tuple(name for name, _value in CANONICAL_DECLARATIONS) + ("MAX_EFFORT_CLASSES",)
+_ROUTE_PATTERN = r"^\s*ROUTE\s*:"
+_DECLARATION_PATTERN = (
+    r"^\s*(?P<name>" + "|".join(re.escape(name) for name in DECLARATION_NAMES) + r")\s*:(?P<rest>.*)$"
+)
+ROUTE_LINE_RE = re.compile(_ROUTE_PATTERN)
+ROUTE_ANY_SPELLING_RE = re.compile(_ROUTE_PATTERN, re.IGNORECASE)
+DECLARATION_LINE_RE = re.compile(_DECLARATION_PATTERN)
+DECLARATION_ANY_SPELLING_RE = re.compile(_DECLARATION_PATTERN, re.IGNORECASE)
+
+# An authority reference is collected with its TARGET, so cardinality and value are judged instead of mere
+# presence: keeping the expected marker and adding a second one naming another authority passed before.
+AUTHORITY_REF_RE = re.compile(r"<!--\s*CONTROL_PLANE_AUTHORITY_REF\s*:\s*(?P<target>[^>]*?)\s*-->")
+
 # RESERVED authority syntax: everything the authority readers read. None of it may appear inside an exemption
 # region, in any spelling, so historical or example prose describes an old block without reproducing it - and
 # a reader that ever drifted back to the whole text would still find no authority inside a region.
@@ -442,17 +466,19 @@ RESERVED_AUTHORITY_SYNTAX = (
         "a control-plane role or authority-reference marker",
         re.compile(r"<!--\s*CONTROL_PLANE_(?:ROLE|AUTHORITY_REF)\s*:", re.IGNORECASE),
     ),
-    (
-        "a canonical authority declaration",
-        re.compile(
-            r"^\s*(?:"
-            + "|".join(re.escape(name) for name, _value in CANONICAL_DECLARATIONS)
-            + r"|MAX_EFFORT_CLASSES)\s*:",
-            re.IGNORECASE,
-        ),
-    ),
-    ("a routing-matrix ROUTE line", re.compile(r"^\s*ROUTE\s*:", re.IGNORECASE)),
+    ("a canonical authority declaration", DECLARATION_ANY_SPELLING_RE),
+    ("a routing-matrix ROUTE line", ROUTE_ANY_SPELLING_RE),
 )
+
+# The canonical independence vocabulary (agent_os_v2.md section 3.3). Its block has no other typed consumer,
+# so without this contract its body could be emptied while the markers alone certified it.
+INDEPENDENCE_STATES = (
+    "SELF_AUDIT_ONLY_NOT_INDEPENDENT",
+    "ORDINARY_INDEPENDENT_REVIEW",
+    "PROTECTED_CLASS_C_AUDIT",
+)
+BLOCK_INDEPENDENCE_VOCABULARY = "INDEPENDENCE_VOCABULARY"
+BLOCK_TESTED_REVISION_EVIDENCE = "TESTED_REVISION_EVIDENCE"
 
 # An exemption marker in any other spelling - case, spacing, separators, surrounding text - is not read as a
 # marker, so it would silently leave the region its author intended active. It fails instead.
@@ -629,14 +655,27 @@ def surface_view(root: Path, ctx: dict[str, object], rel: str) -> ActiveProjecti
 
 
 def active_authority_failures(authority_text: str) -> list[str]:
-    """Every canonical block exactly once in the ACTIVE projection, and no undeclared block beside them."""
+    """Every canonical block exactly once in the ACTIVE projection, populated, and none undeclared.
+
+    Marker presence was never authority: a block whose body was deleted, blanked or reduced to a comment
+    still satisfied requiredness, because `block_span` only proves the markers are there. A required
+    machine-readable block is its CONTENT, so an empty active body fails here for every block, and the two
+    blocks with no other typed consumer get their own body contracts below.
+    """
     lines = authority_text.splitlines()
-    failures = [
-        f"{CANONICAL}: {MISSING_ACTIVE_AUTHORITY}: {name} is not exactly one well-formed block in the active "
-        f"authority; content inside HISTORICAL_RECORD or EXAMPLE_ONLY is inert and never satisfies a requirement"
-        for name in CANONICAL_AUTHORITY_BLOCKS
-        if block_span(lines, name) is None
-    ]
+    failures: list[str] = []
+    for name in CANONICAL_AUTHORITY_BLOCKS:
+        if block_span(lines, name) is None:
+            failures.append(
+                f"{CANONICAL}: {MISSING_ACTIVE_AUTHORITY}: {name} is not exactly one well-formed block in the "
+                f"active authority; content inside HISTORICAL_RECORD or EXAMPLE_ONLY is inert and never "
+                f"satisfies a requirement"
+            )
+        elif not block_lines(authority_text, name):
+            failures.append(
+                f"{CANONICAL}: {MISSING_ACTIVE_AUTHORITY}: {name} carries no active body; a required authority "
+                f"block is its content, and markers alone declare nothing"
+            )
     for lineno, line in enumerate(lines, start=1):
         marker = BLOCK_MARKER_LINE_RE.match(line.strip())
         if marker is not None and marker.group(1) not in CANONICAL_AUTHORITY_BLOCKS:
@@ -824,7 +863,6 @@ def _check_existence(root: Path, ctx: dict[str, object], failures: list[str]) ->
 def _check_roles(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
     surfaces: list[tuple[str, str]] = ctx["surfaces"]  # type: ignore[assignment]
     role_re = re.compile(r"<!--\s*CONTROL_PLANE_ROLE:\s*([A-Z_]+)\s*-->")
-    ref_marker = f"<!-- CONTROL_PLANE_AUTHORITY_REF: {CANONICAL} -->"
 
     canonical_count = 0
     for path, expected_role in surfaces:
@@ -846,27 +884,79 @@ def _check_roles(root: Path, ctx: dict[str, object], failures: list[str]) -> Non
             canonical_count += 1
             if path != CANONICAL:
                 failures.append(f"{path}: only {CANONICAL} may declare CANONICAL_AUTHORITY")
-        elif ref_marker not in text:
-            failures.append(f"{path}: missing CONTROL_PLANE_AUTHORITY_REF marker to {CANONICAL}")
+        failures.extend(authority_reference_failures(path, text))
 
     if canonical_count != 1:
         failures.append(f"expected exactly one CANONICAL_AUTHORITY surface, found {canonical_count}")
 
 
+def declaration_sites(root: Path, ctx: dict[str, object], failures: list[str]) -> dict[str, list[tuple[str, str]]]:
+    """Every ACTIVE canonical declaration, recognized structurally: name -> [(surface, value)].
+
+    Anchoring the name at column zero meant ordinary Markdown indentation hid a rival declaration from the
+    singularity check, so a subordinate surface could declare merge, sizing, family, effort or max-effort
+    authority invisibly. Recognition now uses the one declaration matcher, and the value must still be the
+    single token the contract compares.
+    """
+    sites: dict[str, list[tuple[str, str]]] = {name: [] for name in DECLARATION_NAMES}
+    for path, _role in ctx["surfaces"]:  # type: ignore[union-attr]
+        view = surface_view(root, ctx, path)
+        if view is None:
+            continue
+        for lineno, line in view.numbered:
+            match = DECLARATION_LINE_RE.match(line)
+            if match is None:
+                continue
+            value = match.group("rest").strip()
+            if len(value.split()) != 1:
+                failures.append(
+                    f"{path}:{lineno}: {match.group('name')} declares {value!r}; a canonical declaration "
+                    f"carries exactly one value token"
+                )
+                continue
+            sites[match.group("name")].append((path, value))
+    return sites
+
+
+def authority_reference_failures(rel: str, active_text: str) -> list[str]:
+    """Exactly one ACTIVE authority reference per subordinate surface, and it resolves to the canonical file.
+
+    Presence of the expected marker was never uniqueness: a surface could keep it and add a second marker
+    naming another authority, so the gate certified this file as exclusive while an active adapter
+    advertised a rival. Markers are collected structurally - indentation and inner spacing are irrelevant -
+    and the canonical authority itself references no other authority.
+    """
+    targets = [match.group("target") for match in AUTHORITY_REF_RE.finditer(active_text)]
+    if rel == CANONICAL:
+        if targets:
+            return [
+                f"{rel}: carries {len(targets)} CONTROL_PLANE_AUTHORITY_REF marker(s); the canonical "
+                f"authority references no other authority"
+            ]
+        return []
+    failures: list[str] = []
+    if not targets:
+        failures.append(f"{rel}: missing CONTROL_PLANE_AUTHORITY_REF marker to {CANONICAL}")
+    elif len(targets) != 1:
+        failures.append(
+            f"{rel}: expected exactly one CONTROL_PLANE_AUTHORITY_REF marker, found {len(targets)}; a "
+            f"subordinate surface names exactly one authority"
+        )
+    for target in targets:
+        if target != CANONICAL:
+            failures.append(
+                f"{rel}: CONTROL_PLANE_AUTHORITY_REF names {target!r}, but the canonical authority is {CANONICAL}"
+            )
+    return failures
+
+
 def _check_declarations(root: Path, ctx: dict[str, object], failures: list[str]) -> frozenset[str]:
-    """Authority declarations are singular and canonical-only."""
-    surfaces: list[tuple[str, str]] = ctx["surfaces"]  # type: ignore[assignment]
+    """Authority declarations are singular and canonical-only, at any indentation."""
     max_effort_classes: frozenset[str] = frozenset()
+    declared = declaration_sites(root, ctx, failures)
 
     for name, expected_value in CANONICAL_DECLARATIONS:
-        pattern = re.compile(rf"^{re.escape(name)}:\s*(\S+)\s*$", re.MULTILINE)
-        sites: list[tuple[str, str]] = []
-        for path, _role in surfaces:
-            view = surface_view(root, ctx, path)
-            if view is None:
-                continue
-            for value in pattern.findall(view.text):
-                sites.append((path, value))
+        sites = declared[name]
         if len(sites) != 1:
             failures.append(
                 "{} must be declared exactly once across active doctrine surfaces, found {} ({})".format(
@@ -880,14 +970,7 @@ def _check_declarations(root: Path, ctx: dict[str, object], failures: list[str])
         if site_value != expected_value:
             failures.append(f"{name} must be {expected_value} but the declaration says {site_value}")
 
-    pattern = re.compile(r"^MAX_EFFORT_CLASSES:\s*(\S+)\s*$", re.MULTILINE)
-    sites = []
-    for path, _role in surfaces:
-        view = surface_view(root, ctx, path)
-        if view is None:
-            continue
-        for value in pattern.findall(view.text):
-            sites.append((path, value))
+    sites = declared["MAX_EFFORT_CLASSES"]
     if len(sites) != 1:
         failures.append(f"MAX_EFFORT_CLASSES must be declared exactly once, found {len(sites)}")
     else:
@@ -920,7 +1003,7 @@ def _check_routing(root: Path, ctx: dict[str, object], max_effort_classes: froze
         if view is None:
             continue
         for lineno, line in view.numbered:
-            if not line.startswith("ROUTE:"):
+            if not ROUTE_LINE_RE.match(line):
                 continue
             if path != CANONICAL or lineno - 1 not in allowed:
                 failures.append(
@@ -1245,6 +1328,40 @@ def _check_fixed_blocks(ctx: dict[str, object], failures: list[str]) -> None:
             continue
         if found != expected:
             failures.append(f"{CANONICAL}: {name} block must be exactly {expected} in order, got {found}")
+
+
+def _check_unconsumed_block_bodies(ctx: dict[str, object], failures: list[str]) -> None:
+    """Body contracts for the two required blocks no other typed parser reads.
+
+    Every other canonical block is already content-checked by the parser that consumes it - a registry, a
+    fixed block, a column table or the boundary sentence. These two were required by their markers alone,
+    so their declared bodies get the minimum deterministic contract canonical doctrine already states:
+    the exact independence vocabulary (section 3.3) and the exact tested-revision evidence bundle
+    (section 17.2). Nothing new is invented here.
+    """
+    authority_text: str = ctx["authority_text"]  # type: ignore[assignment]
+
+    rows = parse_surface_registry(authority_text, BLOCK_INDEPENDENCE_VOCABULARY)
+    if rows is None:
+        failures.append(f"{CANONICAL}: {BLOCK_INDEPENDENCE_VOCABULARY} block missing or malformed")
+    else:
+        # An entry with no sentence after the separator is already malformed to parse_surface_registry,
+        # so the states themselves are what this contract adds.
+        states = [state for state, _description in rows]
+        if states != list(INDEPENDENCE_STATES):
+            failures.append(
+                f"{CANONICAL}: {BLOCK_INDEPENDENCE_VOCABULARY} must declare exactly "
+                f"{list(INDEPENDENCE_STATES)} in order, got {states}"
+            )
+
+    declared = block_lines(authority_text, BLOCK_TESTED_REVISION_EVIDENCE)
+    expected = [f"- {field}" for field in TESTED_REVISION_EVIDENCE_FIELDS]
+    if declared is None:
+        failures.append(f"{CANONICAL}: {BLOCK_TESTED_REVISION_EVIDENCE} block missing or malformed")
+    elif declared != expected:
+        failures.append(
+            f"{CANONICAL}: {BLOCK_TESTED_REVISION_EVIDENCE} must declare exactly {expected} in order, got {declared}"
+        )
 
 
 def _check_single_prompt_template(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
@@ -3196,6 +3313,7 @@ def collect_failures(root: Path) -> list[str]:
     max_effort_classes = _check_declarations(root, ctx, failures)
     _check_routing(root, ctx, max_effort_classes, failures)
     _check_fixed_blocks(ctx, failures)
+    _check_unconsumed_block_bodies(ctx, failures)
     _check_single_prompt_template(root, ctx, failures)
     _check_required_tokens(root, ctx, failures)
     _check_durable_surfaces(root, ctx, failures)

@@ -985,6 +985,18 @@ active. Every machine-readable block of this file is required exactly once in th
 and a block marker the validator does not know fails as undeclared authority: a required block that
 exists only inside `HISTORICAL_RECORD` or `EXAMPLE_ONLY` is `MISSING_ACTIVE_AUTHORITY`.
 
+`ACTIVE_AUTHORITY_STRUCTURAL_COMPLETENESS` - an authority construct is valid only when its complete
+active structural form is uniquely present and populated. Authority syntax is recognized structurally,
+regardless of indentation: a routing row or a canonical declaration is that construct wherever it sits
+on the line, so ordinary Markdown indentation never hides a competing route or a rival declaration from
+the checks that keep routing and declaration authority singular. Every subordinate active surface
+carries exactly one authority reference and it resolves to this file - presence of the expected marker
+is not uniqueness, a second marker naming another authority is a second authority, and the canonical
+authority itself references no other. A required machine-readable block is its CONTENT: an empty,
+whitespace-only or comment-only body is not authority, so every block is either content-checked by the
+parser that consumes it or, where none does, by the contract its own section already states - the
+independence vocabulary of section 3.3 and the tested-revision evidence bundle of section 17.2.
+
 ### 15.1 FRESH_CHAT_BOOTSTRAP
 
 Canonical startup order for any new session:
