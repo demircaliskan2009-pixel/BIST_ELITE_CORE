@@ -133,8 +133,9 @@ independent semantic audit's responsibility — this file claims nothing more.
 A file in a host auto-discovery location is loaded by that host whatever any registry says, so an
 unregistered file there is not inert — it is undeclared behavior. Every such path must be either
 explicitly registered with a safe role, or absent. The canonical control plane declares which
-locations are scanned and keeps the allowed set in each of them empty; the scan claims nothing about
-host conventions outside that declared list.
+locations are scanned; in each of them the only allowed files are the ones its registries name — an active
+surface, or a historical host surface proven non-applying — and the scan claims nothing about host
+conventions outside that declared list.
 
 ## Capacity
 

@@ -27,6 +27,9 @@ STRUCTURE and BOUNDED LEXICAL CONTRACTS over the control-plane surfaces register
 * ONE active projection per surface: exemption regions are parsed once, structurally, and every
   authority reading and every active scan consumes that projection; authority syntax may not appear
   inside an exemption region, and every canonical block is required in the active projection;
+* ONE authority reading: a registered doctrine surface and an executable subordinate's module docstring
+  pass through the same projection, marker collector, reference, declaration and routing checks;
+* ONE file-to-text boundary: a file that is not UTF-8 is a structured rejection, never a traceback;
 * the positive NON_APPLYING front-matter contract for a historical host surface;
 * ACTIVE_AUTHORITY_STRUCTURAL_COMPLETENESS: authority syntax is recognized structurally rather than at
   column zero, a subordinate surface carries exactly one authority reference and it resolves to the
@@ -51,10 +54,12 @@ Exit code 0 means every structural contract above holds. Any failure exits 1 wit
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import re
 import sys
 import unicodedata
+import warnings
 from pathlib import Path
 from typing import NamedTuple
 
@@ -455,17 +460,43 @@ DECLARATION_ANY_SPELLING_RE = re.compile(_DECLARATION_PATTERN, re.IGNORECASE)
 
 # An authority reference is collected with its TARGET, so cardinality and value are judged instead of mere
 # presence: keeping the expected marker and adding a second one naming another authority passed before.
-AUTHORITY_REF_RE = re.compile(r"<!--\s*CONTROL_PLANE_AUTHORITY_REF\s*:\s*(?P<target>[^>]*?)\s*-->")
+#
+# ONE_AUTHORITY_READING (agent_os_v2.md section 15). A role or authority-reference marker is RECOGNIZED by one
+# prefix pattern in any spelling - the very pattern the reserved-syntax rule below uses - and READ by the exact
+# form compiled from that same prefix. Every recognized marker counts, and one the exact form cannot read is a
+# malformed marker, never an invisible one: a lowercase second reference or role marker used to be no marker
+# at all to the active reader, while the same line was already reserved authority syntax inside a region.
+_ROLE_MARKER_PATTERN = r"<!--\s*CONTROL_PLANE_ROLE\s*:"
+_AUTHORITY_REF_PATTERN = r"<!--\s*CONTROL_PLANE_AUTHORITY_REF\s*:"
+ROLE_MARKER_ANY_SPELLING_RE = re.compile(_ROLE_MARKER_PATTERN, re.IGNORECASE)
+AUTHORITY_REF_ANY_SPELLING_RE = re.compile(_AUTHORITY_REF_PATTERN, re.IGNORECASE)
+ROLE_MARKER_RE = re.compile(_ROLE_MARKER_PATTERN + r"\s*(?P<value>[A-Z_]+)\s*-->")
+AUTHORITY_REF_RE = re.compile(_AUTHORITY_REF_PATTERN + r"\s*(?P<value>[^>]*?)\s*-->")
+ROLE_MARKER = "CONTROL_PLANE_ROLE"
+AUTHORITY_REF_MARKER = "CONTROL_PLANE_AUTHORITY_REF"
+MARKER_GRAMMAR = {
+    ROLE_MARKER: (ROLE_MARKER_ANY_SPELLING_RE, ROLE_MARKER_RE),
+    AUTHORITY_REF_MARKER: (AUTHORITY_REF_ANY_SPELLING_RE, AUTHORITY_REF_RE),
+}
+
+# EXECUTABLE SUBORDINATE surfaces (agent_os_v2.md section 20.1). Their authority text is the module docstring as
+# Python parses the module, and it is read through the SAME projection, marker collector and authority checks
+# as a doctrine surface. A reader of their own - a raw substring count of one exact marker in a raw
+# triple-quote span - certified a second authority, an exempted reference and a malformed exemption.
+EXECUTABLE_SUBORDINATE_PATHS = (
+    "scripts/crypto_core/validate_agent_os_v2.py",
+    "tests/crypto_core/test_agent_os_v2_contract.py",
+)
+BLOCK_NEGATIVE_BOUNDARY = "EXECUTABLE_NEGATIVE_BOUNDARY"
+EXECUTABLE_ROLE = "EXECUTABLE_SUBORDINATE"
 
 # RESERVED authority syntax: everything the authority readers read. None of it may appear inside an exemption
 # region, in any spelling, so historical or example prose describes an old block without reproducing it - and
 # a reader that ever drifted back to the whole text would still find no authority inside a region.
 RESERVED_AUTHORITY_SYNTAX = (
     ("a control-plane block marker", re.compile(r"<!--\s*[A-Za-z0-9_]+_(?:BEGIN|END)\s*-->", re.IGNORECASE)),
-    (
-        "a control-plane role or authority-reference marker",
-        re.compile(r"<!--\s*CONTROL_PLANE_(?:ROLE|AUTHORITY_REF)\s*:", re.IGNORECASE),
-    ),
+    ("a control-plane role or authority-reference marker", ROLE_MARKER_ANY_SPELLING_RE),
+    ("a control-plane role or authority-reference marker", AUTHORITY_REF_ANY_SPELLING_RE),
     ("a canonical authority declaration", DECLARATION_ANY_SPELLING_RE),
     ("a routing-matrix ROUTE line", ROUTE_ANY_SPELLING_RE),
 )
@@ -500,12 +531,37 @@ def _end(name: str) -> str:
     return f"<!-- {name}_END -->"
 
 
+# ONE FILE-TO-TEXT BOUNDARY (agent_os_v2.md section 15). Every surface, executable and JSON document the control
+# plane judges is decoded HERE. A committed schema, a committed example or any registered surface carrying a
+# byte that is not UTF-8 escaped as an uncaught UnicodeDecodeError, so the gate produced a traceback instead of
+# a verdict; only the compiled-manifest path refused it. A read or decode failure is now one typed error that
+# every reader turns into a structured rejection - never a traceback, and never a silently skipped surface.
+UNREADABLE_TEXT = "UNREADABLE_TEXT"
+
+
+class UnreadableTextError(ValueError):
+    """An existing file the control plane cannot read as UTF-8 text. Raised only by `decode_text_file`."""
+
+
+def decode_text_file(path: Path) -> str:
+    """Decode one file as UTF-8, tolerating a BOM, or raise UnreadableTextError carrying a bounded reason."""
+    try:
+        return path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise UnreadableTextError(f"{UNREADABLE_TEXT}: not valid UTF-8 ({exc.reason} at byte {exc.start})") from None
+    except OSError as exc:
+        raise UnreadableTextError(f"{UNREADABLE_TEXT}: cannot be read ({exc.strerror or type(exc).__name__})") from None
+
+
 def read_text(root: Path, rel: str) -> str | None:
-    """Read a repository-relative text file as UTF-8, tolerating a BOM. None when absent."""
+    """A repository-relative file through the one text boundary.
+
+    None when absent - the caller names the absence. UnreadableTextError when present but not readable text.
+    """
     path = root / rel
     if not path.is_file():
         return None
-    return path.read_text(encoding="utf-8-sig")
+    return decode_text_file(path)
 
 
 def block_span(lines: list[str], name: str) -> tuple[int, int] | None:
@@ -645,13 +701,76 @@ def exemption_scan(rel: str, lines: list[str]) -> tuple[list[str], list[tuple[in
     return list(projection.failures), projection.numbered
 
 
+def _docstring_expression(text: str) -> ast.Expr | None:
+    """The module docstring statement as Python parses the module, or None (no docstring, or not Python)."""
+    try:
+        with warnings.catch_warnings():
+            # A warning is not a verdict: the reading must not depend on the interpreter's warning filters.
+            warnings.simplefilter("ignore")
+            tree = ast.parse(text)
+    except (SyntaxError, ValueError, RecursionError):
+        return None
+    if not tree.body:
+        return None
+    first = tree.body[0]
+    if not isinstance(first, ast.Expr) or not isinstance(first.value, ast.Constant):
+        return None
+    if not isinstance(first.value.value, str):
+        return None
+    return first
+
+
+def module_docstring(text: str) -> str | None:
+    """The module docstring as Python defines it - the first statement of the module - or None.
+
+    The first triple-quoted span of the raw text is not the docstring: a module whose real docstring used other
+    quotes and named a foreign authority was certified by a later string constant carrying the expected markers.
+    """
+    node = _docstring_expression(text)
+    return None if node is None else str(node.value.value)
+
+
+def read_projection(root: Path, rel: str) -> ActiveProjection | None:
+    """Read and project one authority surface. None when the file is absent.
+
+    A doctrine surface is projected whole. An executable subordinate is projected from its module docstring,
+    padded so every line keeps its original number. A surface whose authority text cannot be obtained - a file
+    that is not UTF-8, or an executable with no docstring - is an EMPTY projection carrying that reason, so it
+    fails structurally and no reader can find authority in it.
+    """
+    try:
+        text = read_text(root, rel)
+    except UnreadableTextError as exc:
+        return ActiveProjection((f"{rel}: {exc}",), ())
+    if text is None:
+        return None
+    if rel not in EXECUTABLE_SUBORDINATE_PATHS:
+        return project_surface(rel, text.splitlines())
+    node = _docstring_expression(text)
+    if node is None:
+        return ActiveProjection(
+            (f"{rel}: has no module docstring, as Python parses the module, to carry its role declaration",), ()
+        )
+    return project_surface(rel, [""] * (node.lineno - 1) + str(node.value.value).splitlines())
+
+
 def surface_view(root: Path, ctx: dict[str, object], rel: str) -> ActiveProjection | None:
     """The one projection of a surface: built once per validation run and shared by every consumer."""
     views: dict[str, ActiveProjection | None] = ctx["views"]  # type: ignore[assignment]
     if rel not in views:
-        text = read_text(root, rel)
-        views[rel] = None if text is None else project_surface(rel, text.splitlines())
+        views[rel] = read_projection(root, rel)
     return views[rel]
+
+
+def authority_surfaces(ctx: dict[str, object]) -> list[tuple[str, str]]:
+    """Every surface that carries authority markers, with the role it must declare.
+
+    The registered doctrine surfaces and the executable subordinates. Every authority reader - roles and
+    references, projection structure, declarations and routing rows - iterates THIS, so no kind of surface is
+    judged by a reader of its own.
+    """
+    registered: list[tuple[str, str]] = list(ctx["surfaces"])  # type: ignore[arg-type]
+    return registered + [(rel, EXECUTABLE_ROLE) for rel in EXECUTABLE_SUBORDINATE_PATHS]
 
 
 def active_authority_failures(authority_text: str) -> list[str]:
@@ -739,7 +858,11 @@ def parse_surface_registry(text: str, name: str) -> list[tuple[str, str]] | None
 
 
 def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | None:
-    raw_canonical = read_text(root, CANONICAL)
+    try:
+        raw_canonical = read_text(root, CANONICAL)
+    except UnreadableTextError as exc:
+        failures.append(f"canonical authority unreadable: {CANONICAL}: {exc}")
+        return None
     if raw_canonical is None:
         failures.append(f"canonical authority missing: {CANONICAL}")
         return None
@@ -861,30 +984,22 @@ def _check_existence(root: Path, ctx: dict[str, object], failures: list[str]) ->
 
 
 def _check_roles(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
-    surfaces: list[tuple[str, str]] = ctx["surfaces"]  # type: ignore[assignment]
-    role_re = re.compile(r"<!--\s*CONTROL_PLANE_ROLE:\s*([A-Z_]+)\s*-->")
-
-    canonical_count = 0
-    for path, expected_role in surfaces:
+    """Every authority surface - doctrine and executable alike - through the one marker reading."""
+    for path, expected_role in ctx["surfaces"]:  # type: ignore[union-attr]
         if expected_role not in ROLE_VOCABULARY:
             failures.append(f"{path}: role {expected_role} is not in the role vocabulary")
+
+    canonical_count = 0
+    for path, expected_role in authority_surfaces(ctx):
         view = surface_view(root, ctx, path)
         if view is None:
             continue
-        text = view.text
-        found = role_re.findall(text)
-        if len(found) != 1:
-            failures.append(f"{path}: expected exactly one CONTROL_PLANE_ROLE marker, found {len(found)}")
-            continue
-        if found[0] != expected_role:
-            failures.append(
-                f"{path}: CONTROL_PLANE_ROLE marker is {found[0]} but the registry declares {expected_role}"
-            )
-        if found[0] == "CANONICAL_AUTHORITY":
+        found, role = authority_marker_failures(path, view.text, expected_role)
+        failures.extend(found)
+        if role == "CANONICAL_AUTHORITY":
             canonical_count += 1
             if path != CANONICAL:
                 failures.append(f"{path}: only {CANONICAL} may declare CANONICAL_AUTHORITY")
-        failures.extend(authority_reference_failures(path, text))
 
     if canonical_count != 1:
         failures.append(f"expected exactly one CANONICAL_AUTHORITY surface, found {canonical_count}")
@@ -899,7 +1014,7 @@ def declaration_sites(root: Path, ctx: dict[str, object], failures: list[str]) -
     single token the contract compares.
     """
     sites: dict[str, list[tuple[str, str]]] = {name: [] for name in DECLARATION_NAMES}
-    for path, _role in ctx["surfaces"]:  # type: ignore[union-attr]
+    for path, _role in authority_surfaces(ctx):
         view = surface_view(root, ctx, path)
         if view is None:
             continue
@@ -918,6 +1033,41 @@ def declaration_sites(root: Path, ctx: dict[str, object], failures: list[str]) -
     return sites
 
 
+def marker_values(rel: str, active_text: str, marker: str) -> tuple[list[str], list[str]]:
+    """(values, failures) for every ACTIVE marker of one kind: the ONE marker collector of the control plane.
+
+    Every marker the any-spelling recognizer finds counts, and each is read by the exact form. A marker the exact
+    form cannot read is refused as malformed rather than ignored, so a second role or authority reference can
+    never hide behind a spelling.
+    """
+    recognizer, reader = MARKER_GRAMMAR[marker]
+    values: list[str] = []
+    failures: list[str] = []
+    for hit in recognizer.finditer(active_text):
+        exact = reader.match(active_text, hit.start())
+        if exact is None:
+            lineno = active_text.count("\n", 0, hit.start()) + 1
+            failures.append(
+                f"{rel}:{lineno}: malformed {marker} marker; a marker is read in its one exact spelling, and "
+                f"any other spelling is refused rather than silently ignored"
+            )
+        else:
+            values.append(exact.group("value"))
+    return values, failures
+
+
+def authority_marker_failures(rel: str, active_text: str, expected_role: str) -> tuple[list[str], str | None]:
+    """ONE reading of a surface's role and authority reference: (failures, the single role read, or None)."""
+    roles, failures = marker_values(rel, active_text, ROLE_MARKER)
+    role = roles[0] if len(roles) == 1 else None
+    if role is None:
+        failures.append(f"{rel}: expected exactly one {ROLE_MARKER} marker, found {len(roles)}")
+    elif role != expected_role:
+        failures.append(f"{rel}: {ROLE_MARKER} marker is {role} but the registry declares {expected_role}")
+    failures.extend(authority_reference_failures(rel, active_text))
+    return failures, role
+
+
 def authority_reference_failures(rel: str, active_text: str) -> list[str]:
     """Exactly one ACTIVE authority reference per subordinate surface, and it resolves to the canonical file.
 
@@ -926,15 +1076,14 @@ def authority_reference_failures(rel: str, active_text: str) -> list[str]:
     advertised a rival. Markers are collected structurally - indentation and inner spacing are irrelevant -
     and the canonical authority itself references no other authority.
     """
-    targets = [match.group("target") for match in AUTHORITY_REF_RE.finditer(active_text)]
+    targets, failures = marker_values(rel, active_text, AUTHORITY_REF_MARKER)
     if rel == CANONICAL:
         if targets:
-            return [
+            failures.append(
                 f"{rel}: carries {len(targets)} CONTROL_PLANE_AUTHORITY_REF marker(s); the canonical "
                 f"authority references no other authority"
-            ]
-        return []
-    failures: list[str] = []
+            )
+        return failures
     if not targets:
         failures.append(f"{rel}: missing CONTROL_PLANE_AUTHORITY_REF marker to {CANONICAL}")
     elif len(targets) != 1:
@@ -986,7 +1135,6 @@ def _check_declarations(root: Path, ctx: dict[str, object], failures: list[str])
 
 
 def _check_routing(root: Path, ctx: dict[str, object], max_effort_classes: frozenset[str], failures: list[str]) -> None:
-    surfaces: list[tuple[str, str]] = ctx["surfaces"]  # type: ignore[assignment]
     authority_text: str = ctx["authority_text"]  # type: ignore[assignment]
 
     # 1) No ROUTE: line may exist outside the canonical routing-matrix block. A ROUTE line inside an
@@ -998,7 +1146,7 @@ def _check_routing(root: Path, ctx: dict[str, object], max_effort_classes: froze
         return
     allowed = set(range(span[0], span[1]))
 
-    for path, _role in surfaces:
+    for path, _role in authority_surfaces(ctx):
         view = surface_view(root, ctx, path)
         if view is None:
             continue
@@ -1408,12 +1556,12 @@ def _check_required_tokens(root: Path, ctx: dict[str, object], failures: list[st
 
 
 def _check_marker_regions(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
-    """Structural failures of every registered surface's one projection.
+    """Structural failures of every authority surface's one projection, doctrine and executable alike.
 
     The canonical authority's own were reported by _check_registries, before any registry was read from it.
+    An unreadable surface, or an executable without a docstring, reports its reason here too.
     """
-    surfaces: list[tuple[str, str]] = ctx["surfaces"]  # type: ignore[assignment]
-    for path, _role in surfaces:
+    for path, _role in authority_surfaces(ctx):
         if path == CANONICAL:
             continue
         view = surface_view(root, ctx, path)
@@ -1501,31 +1649,14 @@ def _check_prohibited_sizing(root: Path, ctx: dict[str, object], failures: list[
                     )
 
 
-EXECUTABLE_SUBORDINATE_PATHS = (
-    "scripts/crypto_core/validate_agent_os_v2.py",
-    "tests/crypto_core/test_agent_os_v2_contract.py",
-)
-BLOCK_NEGATIVE_BOUNDARY = "EXECUTABLE_NEGATIVE_BOUNDARY"
-EXECUTABLE_ROLE = "EXECUTABLE_SUBORDINATE"
-
-
-def module_docstring(text: str) -> str | None:
-    """The first triple-quoted block of a Python source file, or None."""
-    opening = text.find('"""')
-    if opening == -1:
-        return None
-    closing = text.find('"""', opening + 3)
-    if closing == -1:
-        return None
-    return text[opening + 3 : closing]
-
-
 def _check_executable_subordinates(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
-    """Both executables declare a subordinate role, an authority reference and the exact boundary.
+    """Both executables exist and reproduce the exact canonical boundary in their ACTIVE module docstring.
 
-    Only the module DOCSTRING is scanned. This module also mentions these marker strings in its own
-    code, and scanning the whole file would let it satisfy the check trivially - a presence check
-    that cannot fail is not a check.
+    Their role marker, authority reference, exemption structure, declarations and routing rows are judged with
+    every other authority surface, over the one projection of the docstring (`authority_surfaces`). Only the
+    module DOCSTRING is authority text. This module also mentions these marker strings in its own code, and
+    scanning the whole file would let it satisfy the check trivially - a presence check that cannot fail is not
+    a check.
 
     This proves the declaration is present. It does NOT and cannot prove that no differently-worded
     self-enforcement claim appears elsewhere in the prose; that is the independent semantic audit's
@@ -1538,25 +1669,12 @@ def _check_executable_subordinates(root: Path, ctx: dict[str, object], failures:
         return
     boundary = declared[0].strip()
 
-    role_re = re.compile(r"<!--\s*CONTROL_PLANE_ROLE:\s*([A-Z_]+)\s*-->")
-    ref_marker = f"<!-- CONTROL_PLANE_AUTHORITY_REF: {CANONICAL} -->"
     for rel in EXECUTABLE_SUBORDINATE_PATHS:
-        text = read_text(root, rel)
-        if text is None:
+        view = surface_view(root, ctx, rel)
+        if view is None:
             failures.append(f"executable surface missing: {rel}")
             continue
-        docstring = module_docstring(text)
-        if docstring is None:
-            failures.append(f"{rel}: has no module docstring to carry its role declaration")
-            continue
-        roles = role_re.findall(docstring)
-        if len(roles) != 1:
-            failures.append(f"{rel}: expected exactly one CONTROL_PLANE_ROLE marker, found {len(roles)}")
-        elif roles[0] != EXECUTABLE_ROLE:
-            failures.append(f"{rel}: CONTROL_PLANE_ROLE is {roles[0]}, expected {EXECUTABLE_ROLE}")
-        if docstring.count(ref_marker) != 1:
-            failures.append(f"{rel}: expected exactly one CONTROL_PLANE_AUTHORITY_REF marker to {CANONICAL}")
-        if _normalize_ws(boundary) not in _normalize_ws(docstring):
+        if _normalize_ws(boundary) not in _normalize_ws(view.text):
             failures.append(f"{rel}: does not reproduce the canonical {BLOCK_NEGATIVE_BOUNDARY} declaration verbatim")
 
 
@@ -1716,7 +1834,11 @@ def _check_host_discovery(root: Path, ctx: dict[str, object], failures: list[str
                 f"{CANONICAL}: historical host surface {path} lies in no declared discovery location, so "
                 f"its allowance is not scoped to a scanned host root"
             )
-        text = read_text(root, path)
+        try:
+            text = read_text(root, path)
+        except UnreadableTextError as exc:
+            failures.append(f"{path}: {exc}; an unreadable host surface proves nothing, so it is not non-applying")
+            continue
         if text is None or role != "NON_APPLYING":
             continue
         failures.extend(non_applying_failures(path, text))
@@ -2478,12 +2600,36 @@ def load_strict_json(text: str) -> object:
 
 
 def load_strict_json_file(path: Path | str) -> object:
-    """Read a JSON file as UTF-8 (a BOM is tolerated) and parse it through `load_strict_json`."""
+    """Read a JSON file through the one text boundary and parse it through `load_strict_json`."""
+    source = Path(path)
+    if not source.is_file():
+        raise StrictJsonError("cannot be read as UTF-8 text (missing: not an existing file)")
     try:
-        text = Path(path).read_text(encoding="utf-8-sig")
-    except (OSError, ValueError) as exc:
+        text = decode_text_file(source)
+    except UnreadableTextError as exc:
         raise StrictJsonError(f"cannot be read as UTF-8 text ({exc})") from None
     return load_strict_json(text)
+
+
+def committed_json(root: Path, rel: str, failures: list[str]) -> tuple[str, object] | None:
+    """A committed Agent OS JSON artifact through the text and strict JSON boundaries: (raw text, value).
+
+    None after exactly one structured failure - missing, unreadable or refused - so no committed document can
+    reach a comparison or a relation, or raise past the gate, without a verdict.
+    """
+    try:
+        raw = read_text(root, rel)
+    except UnreadableTextError as exc:
+        failures.append(f"{rel}: {STRICT_JSON_REJECTED}: {exc}")
+        return None
+    if raw is None:
+        failures.append(f"{rel}: missing")
+        return None
+    try:
+        return raw, load_strict_json(raw)
+    except StrictJsonError as exc:
+        failures.append(f"{rel}: {STRICT_JSON_REJECTED}: {exc}")
+        return None
 
 
 def canonical_json(value: object) -> str:
@@ -3241,17 +3387,11 @@ def _check_manifest_grammar(root: Path, ctx: dict[str, object], failures: list[s
     # parsed STRICTLY first: a duplicate member whose last occurrence happens to equal the generated
     # value is still an ambiguous document, and equality must never be proven on one.
     schema_path = "docs/crypto_core/continuity/state_manifest.schema.json"
-    raw = read_text(root, schema_path)
-    if raw is None:
-        failures.append(f"{schema_path}: missing")
+    loaded = committed_json(root, schema_path, failures)
+    if loaded is None:
         return
     try:
-        committed = load_strict_json(raw)
-    except StrictJsonError as exc:
-        failures.append(f"{schema_path}: {STRICT_JSON_REJECTED}: {exc}")
-        return
-    try:
-        committed_text = canonical_json(committed)
+        committed_text = canonical_json(loaded[1])
     except (ValueError, RecursionError) as exc:
         failures.append(f"{schema_path}: not a JSON specification artifact: {exc}")
         return
@@ -3266,17 +3406,12 @@ def _check_manifest_grammar(root: Path, ctx: dict[str, object], failures: list[s
 def _check_continuity_example(root: Path, failures: list[str]) -> None:
     """The committed fixture is judged by the SAME executable gate the contract publishes."""
     example_path = "docs/crypto_core/continuity/state_manifest.example.json"
-    raw = read_text(root, example_path)
-    if raw is None:
-        failures.append(f"{example_path}: missing")
+    loaded = committed_json(root, example_path, failures)
+    if loaded is None:
         return
+    raw, example = loaded
     if "EXAMPLE_ONLY" not in raw:
         failures.append(f"{example_path}: a committed fixture must declare EXAMPLE_ONLY")
-    try:
-        example = load_strict_json(raw)
-    except StrictJsonError as exc:
-        failures.append(f"{example_path}: {STRICT_JSON_REJECTED}: {exc}")
-        return
     failures.extend(check_manifest_instance(example_path, example))
 
 

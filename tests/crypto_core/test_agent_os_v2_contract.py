@@ -6952,3 +6952,414 @@ def test_the_structural_completeness_rules_are_documented() -> None:
     assert "ACTIVE_AUTHORITY_STRUCTURAL_COMPLETENESS" in text
     assert "regardless of indentation" in text
     assert "exactly one authority reference" in text
+
+
+# ===========================================================================================
+# ONE_AUTHORITY_READING and the ONE FILE-TO-TEXT BOUNDARY
+#
+# Two root causes, closed together. The executable subordinates had a reader of their own - a raw count of one
+# exact marker string inside the first raw triple-quote span - so a second authority, a reference that existed
+# only inside an exemption region, a malformed exemption and a decoy string were all certified. And a committed
+# file carrying a byte that is not UTF-8 raised past the gate instead of producing a verdict. Every expected
+# verdict below is written out literally and never derived from the validator.
+# ===========================================================================================
+
+ORACLE_EXECUTABLE_SUBORDINATES = [
+    "scripts/crypto_core/validate_agent_os_v2.py",
+    "tests/crypto_core/test_agent_os_v2_contract.py",
+]
+ORACLE_CANONICAL_REF = "<!-- CONTROL_PLANE_AUTHORITY_REF: docs/crypto_core/agent_os_v2.md -->"
+ORACLE_FOREIGN_TARGET = "docs/crypto_core/shadow_authority.md"
+ORACLE_FOREIGN_REF = "<!-- CONTROL_PLANE_AUTHORITY_REF: " + ORACLE_FOREIGN_TARGET + " -->"
+ORACLE_BOUNDARY_OPENING = "NEGATIVE_BOUNDARY: The repository validator proves repository-provable structure only."
+# One doctrine surface beside the two executables: the same mutation must earn the same verdict whichever KIND of
+# surface carries it. That is what "one reading" means, and a per-kind reader cannot pass it.
+ORACLE_AUTHORITY_SURFACE_ROLES = {
+    "CLAUDE.md": "CLAUDE_ADAPTER",
+    "scripts/crypto_core/validate_agent_os_v2.py": "EXECUTABLE_SUBORDINATE",
+    "tests/crypto_core/test_agent_os_v2_contract.py": "EXECUTABLE_SUBORDINATE",
+}
+
+
+def _authority_span(rel: str, text: str) -> tuple[int, int]:
+    """Where a surface's authority text lives, by the oracle's own reading of the committed layout.
+
+    The whole file for a doctrine surface; the leading triple-quoted module docstring for an executable.
+    """
+    if rel not in ORACLE_EXECUTABLE_SUBORDINATES:
+        return 0, len(text)
+    start = text.index('"""')
+    return start, text.index('"""', start + 3) + 3
+
+
+def _mutate_authority_text(root: Path, rel: str, old: str, new: str) -> None:
+    """Replace ``old`` exactly once inside the surface's authority text, proving it was there first."""
+    text = read(root, rel)
+    start, end = _authority_span(rel, text)
+    region = text[start:end]
+    assert region.count(old) == 1, (rel, old)
+    write(root, rel, text[:start] + region.replace(old, new) + text[end:])
+
+
+def _role_line(rel: str) -> str:
+    return "<!-- CONTROL_PLANE_ROLE: {} -->".format(ORACLE_AUTHORITY_SURFACE_ROLES[rel])
+
+
+def _assert_names(found: list[str], rel: str, fragment: str) -> None:
+    joined = "\n".join(found)
+    assert any(rel in item and fragment in item for item in found), "{} / {}:\n{}".format(rel, fragment, joined)
+
+
+_REF = ORACLE_CANONICAL_REF
+_HR = ("<!-- HISTORICAL_RECORD_BEGIN -->", "<!-- HISTORICAL_RECORD_END -->")
+_EO = ("<!-- EXAMPLE_ONLY_BEGIN -->", "<!-- EXAMPLE_ONLY_END -->")
+_FOUND_TWO_REFS = "expected exactly one CONTROL_PLANE_AUTHORITY_REF marker, found 2"
+_NAMES_FOREIGN = "CONTROL_PLANE_AUTHORITY_REF names '" + ORACLE_FOREIGN_TARGET + "'"
+_MISSING_REF = "missing CONTROL_PLANE_AUTHORITY_REF marker to docs/crypto_core/agent_os_v2.md"
+_RESERVED_IN = "a control-plane role or authority-reference marker inside the {} region"
+
+# (label, anchor kind, replacement builder, required failure fragments). The anchor is the surface's own
+# canonical reference ("REF") or its own role marker ("ROLE").
+ORACLE_ONE_READING_MUTATIONS = [
+    (
+        "canonical plus foreign reference",
+        "REF",
+        lambda a: a + "\n" + ORACLE_FOREIGN_REF,
+        [_FOUND_TWO_REFS, _NAMES_FOREIGN],
+    ),
+    ("duplicate canonical reference", "REF", lambda a: a + "\n" + a, [_FOUND_TWO_REFS]),
+    ("foreign reference only", "REF", lambda a: ORACLE_FOREIGN_REF, [_NAMES_FOREIGN]),
+    ("missing reference", "REF", lambda a: "", [_MISSING_REF]),
+    ("indented duplicate reference", "REF", lambda a: a + "\n    " + a, [_FOUND_TWO_REFS]),
+    (
+        "spaced duplicate reference",
+        "REF",
+        lambda a: a + "\n<!--  CONTROL_PLANE_AUTHORITY_REF:  docs/crypto_core/agent_os_v2.md  -->",
+        [_FOUND_TWO_REFS],
+    ),
+    (
+        "lowercase foreign reference beside the canonical one",
+        "REF",
+        lambda a: a + "\n" + ORACLE_FOREIGN_REF.lower(),
+        ["malformed CONTROL_PLANE_AUTHORITY_REF marker"],
+    ),
+    (
+        "reference only inside HISTORICAL_RECORD",
+        "REF",
+        lambda a: _HR[0] + "\n" + a + "\n" + _HR[1],
+        [_RESERVED_IN.format("HISTORICAL_RECORD"), _MISSING_REF],
+    ),
+    (
+        "reference only inside EXAMPLE_ONLY",
+        "REF",
+        lambda a: _EO[0] + "\n" + a + "\n" + _EO[1],
+        [_RESERVED_IN.format("EXAMPLE_ONLY"), _MISSING_REF],
+    ),
+    (
+        "foreign reference inside an exemption beside the canonical one",
+        "REF",
+        lambda a: a + "\n" + _HR[0] + "\n" + ORACLE_FOREIGN_REF + "\n" + _HR[1],
+        [_RESERVED_IN.format("HISTORICAL_RECORD")],
+    ),
+    (
+        "malformed exemption marker",
+        "REF",
+        lambda a: a + "\n<!--HISTORICAL_RECORD_BEGIN-->",
+        ["malformed exemption marker"],
+    ),
+    ("unterminated exemption region", "REF", lambda a: a + "\n" + _EO[0], ["unterminated EXAMPLE_ONLY_BEGIN"]),
+    (
+        "role marker only inside HISTORICAL_RECORD",
+        "ROLE",
+        lambda a: _HR[0] + "\n" + a + "\n" + _HR[1],
+        ["expected exactly one CONTROL_PLANE_ROLE marker, found 0"],
+    ),
+    (
+        "lowercase second role marker",
+        "ROLE",
+        lambda a: a + "\n<!-- control_plane_role: CANONICAL_AUTHORITY -->",
+        ["malformed CONTROL_PLANE_ROLE marker"],
+    ),
+    (
+        "second role marker with a lowercase value",
+        "ROLE",
+        lambda a: a + "\n<!-- CONTROL_PLANE_ROLE: canonical_authority -->",
+        ["malformed CONTROL_PLANE_ROLE marker"],
+    ),
+    (
+        "indented rival canonical declaration",
+        "REF",
+        lambda a: a + "\n  MERGE_AUTHORITY_SOURCE: AGENT_SELF",
+        ["MERGE_AUTHORITY_SOURCE must be declared exactly once"],
+    ),
+    (
+        "indented competing routing row",
+        "REF",
+        lambda a: a + "\n  ROUTE: T4 | CLASS_C_CROSS_CONTRACT | Claude Opus 5 | claude-opus-5 | low | READ_ONLY",
+        ["ROUTE line outside the canonical routing matrix"],
+    ),
+]
+
+_ONE_READING_CASES = [
+    (rel, label, kind, build, fragments)
+    for rel in ORACLE_AUTHORITY_SURFACE_ROLES
+    for label, kind, build, fragments in ORACLE_ONE_READING_MUTATIONS
+]
+
+
+@pytest.mark.parametrize(
+    ("rel", "label", "kind", "build", "fragments"),
+    _ONE_READING_CASES,
+    ids=["{} - {}".format(case[0], case[1]) for case in _ONE_READING_CASES],
+)
+def test_authority_reading_gives_every_surface_kind_the_same_verdict(
+    sandbox: Path, rel: str, label: str, kind: str, build, fragments: list[str]
+) -> None:
+    """P2-01 at its root: an executable docstring and a doctrine surface are judged by ONE reading."""
+    anchor = _REF if kind == "REF" else _role_line(rel)
+    _mutate_authority_text(sandbox, rel, anchor + ("\n" if label == "missing reference" else ""), build(anchor))
+    found = failures(sandbox)
+    for fragment in fragments:
+        _assert_names(found, rel, fragment)
+
+
+@pytest.mark.parametrize("rel", sorted(ORACLE_AUTHORITY_SURFACE_ROLES))
+def test_authority_reading_accepts_every_committed_surface_kind(rel: str) -> None:
+    """The POSITIVE anchor of the matrix: each committed surface reads cleanly through the one reading."""
+    view = validator.read_projection(REPO_ROOT, rel)
+    assert view is not None and view.failures == (), view
+    found, role = validator.authority_marker_failures(rel, view.text, ORACLE_AUTHORITY_SURFACE_ROLES[rel])
+    assert (found, role) == ([], ORACLE_AUTHORITY_SURFACE_ROLES[rel])
+
+
+@pytest.mark.parametrize("rel", ORACLE_EXECUTABLE_SUBORDINATES)
+def test_authority_reading_keeps_an_executable_line_numbers(rel: str) -> None:
+    """The docstring projection is line-preserving, so every diagnostic names the real source line."""
+    view = validator.read_projection(REPO_ROOT, rel)
+    assert view is not None
+    source_lines = (REPO_ROOT / rel).read_text(encoding="utf-8-sig").split("\n")
+    expected = [index + 1 for index, line in enumerate(source_lines) if line == ORACLE_CANONICAL_REF]
+    assert len(expected) == 1, expected
+    assert [lineno for lineno, line in view.numbered if line == ORACLE_CANONICAL_REF] == expected
+
+
+@pytest.mark.parametrize("rel", ORACLE_EXECUTABLE_SUBORDINATES)
+def test_authority_reading_requires_an_active_boundary_sentence(sandbox: Path, rel: str) -> None:
+    """The canonical boundary sentence inside EXAMPLE_ONLY is inert and never satisfies the requirement."""
+    text = read(sandbox, rel)
+    start, end = _authority_span(rel, text)
+    line = next(item for item in text[start:end].split("\n") if item.startswith(ORACLE_BOUNDARY_OPENING))
+    _mutate_authority_text(sandbox, rel, line, _EO[0] + "\n" + line + "\n" + _EO[1])
+    _assert_names(
+        failures(sandbox), rel, "does not reproduce the canonical EXECUTABLE_NEGATIVE_BOUNDARY declaration verbatim"
+    )
+
+
+@pytest.mark.parametrize("rel", ORACLE_EXECUTABLE_SUBORDINATES)
+def test_authority_reading_uses_the_real_docstring_not_a_decoy(sandbox: Path, rel: str) -> None:
+    """The real docstring, quoted differently, names a foreign authority; a later string carries the markers."""
+    text = read(sandbox, rel)
+    start, end = _authority_span(rel, text)
+    docstring = text[start + 3 : end - 3]
+    boundary = next(item for item in docstring.split("\n") if item.startswith(ORACLE_BOUNDARY_OPENING))
+    rest = text[end:]
+    future = "from __future__ import annotations\n"
+    assert rest.count(future) == 1
+    decoy = '\n_DECOY = """\n' + _role_line(rel) + "\n" + _REF + "\n\n" + boundary + '\n"""\n'
+    rest = rest.replace(future, future + decoy)
+    write(sandbox, rel, text[:start] + "'''" + docstring.replace(_REF, ORACLE_FOREIGN_REF) + "'''" + rest)
+    _assert_names(failures(sandbox), rel, _NAMES_FOREIGN)
+
+
+@pytest.mark.parametrize("rel", ORACLE_EXECUTABLE_SUBORDINATES)
+def test_authority_reading_refuses_an_executable_without_a_module_docstring(sandbox: Path, rel: str) -> None:
+    text = read(sandbox, rel)
+    start, _end = _authority_span(rel, text)
+    write(sandbox, rel, text[:start] + "_DEMOTED = " + text[start:])
+    _assert_names(failures(sandbox), rel, "has no module docstring, as Python parses the module")
+
+
+def test_authority_reading_recognizes_a_marker_with_the_reserved_rule_pattern() -> None:
+    """One prefix recognizes a marker for the active reader AND for the reserved-syntax rule."""
+    reserved = [pattern for _label, pattern in validator.RESERVED_AUTHORITY_SYNTAX]
+    assert validator.ROLE_MARKER_ANY_SPELLING_RE in reserved
+    assert validator.AUTHORITY_REF_ANY_SPELLING_RE in reserved
+    for spelling in ("<!-- CONTROL_PLANE_ROLE: X -->", "<!-- control_plane_role: X -->", "<!--Control_Plane_Role:X-->"):
+        assert validator.ROLE_MARKER_ANY_SPELLING_RE.match(spelling), spelling
+    assert validator.ROLE_MARKER_RE.match("<!-- CONTROL_PLANE_ROLE: CLAUDE_ADAPTER -->")
+    assert not validator.ROLE_MARKER_RE.match("<!-- control_plane_role: CLAUDE_ADAPTER -->")
+    assert not validator.ROLE_MARKER_RE.match("<!-- CONTROL_PLANE_ROLE: claude_adapter -->")
+    assert validator.AUTHORITY_REF_ANY_SPELLING_RE.match(ORACLE_FOREIGN_REF.lower())
+    assert not validator.AUTHORITY_REF_RE.match(ORACLE_FOREIGN_REF.lower())
+
+
+def test_authority_reading_is_shared_by_every_surface_kind() -> None:
+    """STRUCTURAL: the executable check keeps no marker reader of its own, and both executables are surfaces."""
+    registered = [("CLAUDE.md", "CLAUDE_ADAPTER")]
+    assert validator.authority_surfaces({"surfaces": registered}) == registered + [
+        (rel, "EXECUTABLE_SUBORDINATE") for rel in ORACLE_EXECUTABLE_SUBORDINATES
+    ]
+    tree = ast.parse(VALIDATOR_PATH.read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_check_executable_subordinates"
+    )
+    code = "\n".join(
+        ast.unparse(statement)
+        for statement in function.body
+        if not (isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant))
+    )
+    for retired in (
+        "module_docstring",
+        "role_re",
+        ".count(",
+        "CONTROL_PLANE_AUTHORITY_REF",
+        "CONTROL_PLANE_ROLE",
+        "read_text",
+    ):
+        assert retired not in code, retired
+
+
+ORACLE_TEXT_READ_SURFACES = sorted(
+    set(ORACLE_ACTIVE_DOCTRINE_SURFACES)
+    | set(ORACLE_EXECUTABLE_SUBORDINATES)
+    | {_STRICT_SCHEMA_REL, _STRICT_EXAMPLE_REL, _ORACLE_HISTORICAL_RULE}
+)
+ORACLE_EXISTENCE_ONLY_ARTIFACTS = sorted(ORACLE_REQUIRED_CONTROL_PLANE_ARTIFACTS - set(ORACLE_TEXT_READ_SURFACES))
+ORACLE_UNDECODABLE = "UNREADABLE_TEXT: not valid UTF-8"
+
+
+def _stray_byte(data: bytes) -> bytes:
+    return data[:40] + b"\xff" + data[40:]
+
+
+def _utf16(data: bytes) -> bytes:
+    return data.decode("utf-8-sig").encode("utf-16")
+
+
+def _undecodable_prefix(rel: str) -> str:
+    if rel == CANONICAL:
+        return "canonical authority unreadable: {}: {}".format(CANONICAL, ORACLE_UNDECODABLE)
+    if rel in (_STRICT_SCHEMA_REL, _STRICT_EXAMPLE_REL):
+        return "{}: STRICT_JSON_REJECTED: {}".format(rel, ORACLE_UNDECODABLE)
+    return "{}: {}".format(rel, ORACLE_UNDECODABLE)
+
+
+_UNDECODABLE_CASES = [
+    (rel, label, corrupt)
+    for rel in ORACLE_TEXT_READ_SURFACES
+    for label, corrupt in (("a stray 0xFF byte", _stray_byte), ("UTF-16", _utf16))
+]
+
+
+@pytest.mark.parametrize(
+    ("rel", "label", "corrupt"),
+    _UNDECODABLE_CASES,
+    ids=["{} as {}".format(rel, label) for rel, label, _corrupt in _UNDECODABLE_CASES],
+)
+def test_text_boundary_makes_an_undecodable_file_a_structured_rejection(
+    sandbox: Path, rel: str, label: str, corrupt
+) -> None:
+    """P2-02 at its root: every file the gate reads yields a verdict naming it, never a traceback."""
+    target = sandbox / rel
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_bytes(corrupt((REPO_ROOT / rel).read_bytes()))
+    found = failures(sandbox)
+    prefix = _undecodable_prefix(rel)
+    assert any(item.startswith(prefix) for item in found), "{}:\n{}".format(prefix, "\n".join(found))
+
+
+@pytest.mark.parametrize("rel", ORACLE_EXISTENCE_ONLY_ARTIFACTS)
+def test_text_boundary_never_raises_for_an_existence_only_artifact(sandbox: Path, rel: str) -> None:
+    """An artifact whose existence alone is required is not read, so its bytes can neither raise nor fail."""
+    target = sandbox / rel
+    target.write_bytes(_stray_byte(target.read_bytes()))
+    assert failures(sandbox) == []
+
+
+def test_text_boundary_names_a_missing_or_utf16_compiled_manifest(tmp_path: Path) -> None:
+    absent = validator.check_manifest_file(REPO_ROOT, tmp_path / "absent.json")
+    assert len(absent) == 1 and "STRICT_JSON_REJECTED: cannot be read as UTF-8 text (missing" in absent[0], absent
+    utf16 = tmp_path / "utf16.json"
+    utf16.write_bytes(_utf16((REPO_ROOT / _STRICT_EXAMPLE_REL).read_bytes()))
+    found = validator.check_manifest_file(REPO_ROOT, utf16)
+    assert len(found) == 1 and ORACLE_UNDECODABLE in found[0], found
+
+
+ORACLE_COMMITTED_JSON_REFUSALS = [
+    ("a stray 0xFF byte", _stray_byte, "STRICT_JSON_REJECTED: " + ORACLE_UNDECODABLE),
+    ("UTF-16", _utf16, "STRICT_JSON_REJECTED: " + ORACLE_UNDECODABLE),
+    ("malformed JSON", lambda data: data.replace(b"{", b"{,", 1), "STRICT_JSON_REJECTED: malformed JSON"),
+    (
+        "a duplicate member",
+        lambda data: data.replace(b"{", b'{"title": "x", "title": "y",', 1),
+        "STRICT_JSON_REJECTED: duplicate object member name 'title'",
+    ),
+    (
+        "NaN",
+        lambda data: data.replace(b"{", b'{"nan_probe": NaN,', 1),
+        "STRICT_JSON_REJECTED: non-finite number NaN is not JSON",
+    ),
+]
+_COMMITTED_JSON_CASES = [
+    (rel, label, corrupt, fragment)
+    for rel in (_STRICT_SCHEMA_REL, _STRICT_EXAMPLE_REL)
+    for label, corrupt, fragment in ORACLE_COMMITTED_JSON_REFUSALS
+]
+
+
+@pytest.mark.parametrize(
+    ("rel", "label", "corrupt", "fragment"),
+    _COMMITTED_JSON_CASES,
+    ids=["{} with {}".format(rel, label) for rel, label, _c, _f in _COMMITTED_JSON_CASES],
+)
+def test_text_boundary_refuses_a_committed_json_artifact_exactly_once(
+    sandbox: Path, rel: str, label: str, corrupt, fragment: str
+) -> None:
+    target = sandbox / rel
+    target.write_bytes(corrupt(target.read_bytes()))
+    found = failures(sandbox)
+    assert len(found) == 1 and found[0].startswith(rel + ": " + fragment), found
+
+
+def test_text_boundary_keeps_a_bool_out_of_an_integer_field(sandbox: Path) -> None:
+    target = sandbox / _STRICT_EXAMPLE_REL
+    text = target.read_text(encoding="utf-8")
+    mutated, count = re.subn(r'("open_pr_count":\s*)\d+', r"\1true", text, count=1)
+    assert count == 1
+    target.write_text(mutated, encoding="utf-8")
+    assert_rejects(sandbox, "open_pr_count: must be an integer")
+
+
+def test_text_boundary_is_the_single_decode_site() -> None:
+    """STRUCTURAL: no reader decodes a file on its own, so no future reader can bypass the boundary by accident."""
+    tree = ast.parse(VALIDATOR_PATH.read_text(encoding="utf-8"))
+    decoders: set[str] = set()
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        for node in ast.walk(function):
+            if not isinstance(node, ast.Call):
+                continue
+            if isinstance(node.func, ast.Attribute) and node.func.attr in ("read_text", "read_bytes", "open"):
+                decoders.add(function.name)
+            if isinstance(node.func, ast.Name) and node.func.id == "open":
+                decoders.add(function.name)
+    assert decoders == {"decode_text_file"}, decoders
+
+
+def test_authority_reading_and_text_boundary_are_documented() -> None:
+    canonical = _normalized(REPO_ROOT / CANONICAL)
+    for token in (
+        "ONE_AUTHORITY_READING",
+        "the module docstring as Python parses the module",
+        "recognized in any spelling",
+        "UNREADABLE_TEXT",
+        "never a traceback",
+        "it never makes a level legal for a family",
+    ):
+        assert token in canonical, token
+    agents = _normalized(REPO_ROOT / "AGENTS.md")
+    assert "keeps the allowed set in each of them empty" not in agents
+    assert "a historical host surface proven non-applying" in agents

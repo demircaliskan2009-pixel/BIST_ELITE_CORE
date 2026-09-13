@@ -305,6 +305,11 @@ importance of the project and never from the size of the diff:
   varies per family is which intent may reach it and what trigger must be named. The per-family
   legality table is `MAX_EFFORT_FAMILY_TRIGGERS` in section 20, and it is the authority.
 
+The ladder says what each level is FOR; it never makes a level legal for a family. The legal efforts of a
+family are exactly the `EFFORT` values of its routing rows in section 3, and `max` additionally needs that
+family's `MAX_EFFORT_FAMILY_TRIGGERS` row. Where this general guidance and a family's rows appear to differ,
+the rows win.
+
 `PER_FAMILY_EFFORT_LEGALITY` — the previous regime restricted `max` to implementation and repair
 globally, which silently made the documented T3D, T3E and T4 `max` branches unreachable. That was a
 T3B-specific rule written as a universal one. It is retired: a restriction that belongs to one family
@@ -997,6 +1002,16 @@ whitespace-only or comment-only body is not authority, so every block is either 
 parser that consumes it or, where none does, by the contract its own section already states - the
 independence vocabulary of section 3.3 and the tested-revision evidence bundle of section 17.2.
 
+`ONE_AUTHORITY_READING` - every surface that carries authority markers is read the same way. A registered
+doctrine surface and an executable subordinate differ only in WHERE their authority text lives - the whole
+file, or the module docstring as Python parses the module - and both pass through the one exemption parser,
+the one active projection, the one marker collector, and the same reserved-syntax, authority-reference,
+declaration and routing checks. A role or authority-reference marker is recognized in any spelling and read
+only in its one exact spelling, so a marker in another spelling is refused, never ignored. Every file the
+control plane judges is decoded through ONE text boundary: a doctrine surface, an executable, a host surface
+or a committed JSON artifact that is not UTF-8 is a structured rejection (`UNREADABLE_TEXT`), never a
+traceback and never a silently skipped surface.
+
 ### 15.1 FRESH_CHAT_BOOTSTRAP
 
 Canonical startup order for any new session:
@@ -1597,6 +1612,10 @@ EXECUTABLE surfaces, not doctrine. They carry exactly one `CONTROL_PLANE_ROLE: E
 marker and exactly one `CONTROL_PLANE_AUTHORITY_REF` to this file, and they describe only what they
 actually do. They hold no independent semantic authority: where an executable's own prose and this
 file appear to differ, this file wins.
+
+Their authority text is the module docstring, as Python parses the module, and it is read exactly as a
+doctrine surface is: one projection, one marker collector, and the same reserved-syntax, reference,
+declaration and routing checks (section 15, `ONE_AUTHORITY_READING`).
 
 They were previously outside the role/authority marker system entirely, which is why their headers
 could drift into asserting a CI self-enforcement capability that no repository can hold.
