@@ -29,7 +29,8 @@ STRUCTURE and BOUNDED LEXICAL CONTRACTS over the control-plane surfaces register
   inside an exemption region, and every canonical block is required in the active projection;
 * ONE authority reading: a registered doctrine surface and an executable subordinate's module docstring
   pass through the same projection, marker collector, reference, declaration and routing checks;
-* ONE file-to-text boundary: a file that is not UTF-8 is a structured rejection, never a traceback;
+* ONE file-access boundary: the status, discovery listing, read and decoding of every file the gate judges; a
+  permission, I/O or decode failure is a structured rejection, never a traceback, a silent skip or "missing";
 * the positive NON_APPLYING front-matter contract for a historical host surface;
 * ACTIVE_AUTHORITY_STRUCTURAL_COMPLETENESS: authority syntax is recognized structurally rather than at
   column zero, a subordinate surface carries exactly one authority reference and it resolves to the
@@ -55,12 +56,15 @@ from __future__ import annotations
 
 import argparse
 import ast
+import errno
 import json
+import os
 import re
 import sys
 import unicodedata
 import warnings
 from pathlib import Path
+from stat import S_ISREG
 from typing import NamedTuple
 
 CANONICAL = "docs/crypto_core/agent_os_v2.md"
@@ -531,37 +535,121 @@ def _end(name: str) -> str:
     return f"<!-- {name}_END -->"
 
 
-# ONE FILE-TO-TEXT BOUNDARY (agent_os_v2.md section 15). Every surface, executable and JSON document the control
-# plane judges is decoded HERE. A committed schema, a committed example or any registered surface carrying a
-# byte that is not UTF-8 escaped as an uncaught UnicodeDecodeError, so the gate produced a traceback instead of
-# a verdict; only the compiled-manifest path refused it. A read or decode failure is now one typed error that
-# every reader turns into a structured rejection - never a traceback, and never a silently skipped surface.
+# ONE FILE-ACCESS BOUNDARY (agent_os_v2.md section 15). Every file the control plane judges - its status, its
+# listing in a host discovery location, its read and its decoding - is observed HERE and nowhere else. Decoding
+# alone was not enough: `Path.is_file()` and `Path.exists()` re-raise a permission or I/O error, so an unreadable
+# status escaped every entrypoint as a traceback, and `Path.glob` silently skipped a discovery directory it could
+# not list, which accepted an unregistered host surface behind it. An observation has exactly four outcomes, and
+# no filesystem failure is ever a traceback, a silent skip, or reported as missing.
+FILE_PRESENT = "PRESENT"
+FILE_MISSING = "MISSING"
+FILE_NOT_REGULAR = "NOT_A_FILE"
+FILE_UNREADABLE = "UNREADABLE"
+UNREADABLE_FILE = "UNREADABLE_FILE"
 UNREADABLE_TEXT = "UNREADABLE_TEXT"
+# Exactly what pathlib itself treats as "does not exist". Every other OSError is an access failure, never absence.
+_ABSENT_ERRNOS = frozenset({errno.ENOENT, errno.ENOTDIR, errno.EBADF, errno.ELOOP})
+_ABSENT_WINERRORS = frozenset({21, 123, 1921})
 
 
-class UnreadableTextError(ValueError):
-    """An existing file the control plane cannot read as UTF-8 text. Raised only by `decode_text_file`."""
+class FileAccess(NamedTuple):
+    """One observation of one file: ``text`` only from `read_file` when PRESENT, ``reason`` only when UNREADABLE."""
+
+    status: str
+    text: str | None = None
+    reason: str | None = None
 
 
-def decode_text_file(path: Path) -> str:
-    """Decode one file as UTF-8, tolerating a BOM, or raise UnreadableTextError carrying a bounded reason."""
+def _is_absence(exc: OSError) -> bool:
+    return exc.errno in _ABSENT_ERRNOS or getattr(exc, "winerror", None) in _ABSENT_WINERRORS
+
+
+def _os_reason(exc: OSError) -> str:
+    return exc.strerror or type(exc).__name__
+
+
+def file_status(path: Path) -> FileAccess:
+    """The status of one path: PRESENT (a regular file), MISSING, NOT_A_FILE, or UNREADABLE with its reason."""
     try:
-        return path.read_text(encoding="utf-8-sig")
-    except UnicodeDecodeError as exc:
-        raise UnreadableTextError(f"{UNREADABLE_TEXT}: not valid UTF-8 ({exc.reason} at byte {exc.start})") from None
+        mode = os.stat(path).st_mode
     except OSError as exc:
-        raise UnreadableTextError(f"{UNREADABLE_TEXT}: cannot be read ({exc.strerror or type(exc).__name__})") from None
+        if _is_absence(exc):
+            return FileAccess(FILE_MISSING)
+        return FileAccess(FILE_UNREADABLE, reason=f"{UNREADABLE_FILE}: status cannot be read ({_os_reason(exc)})")
+    except ValueError:
+        # A path the platform cannot even name (an embedded NUL) names no file, exactly as pathlib treats it.
+        return FileAccess(FILE_MISSING)
+    return FileAccess(FILE_PRESENT) if S_ISREG(mode) else FileAccess(FILE_NOT_REGULAR)
 
 
-def read_text(root: Path, rel: str) -> str | None:
-    """A repository-relative file through the one text boundary.
+def read_file(path: Path) -> FileAccess:
+    """Status, then read and decode as UTF-8 (a BOM is tolerated), as ONE observation.
 
-    None when absent - the caller names the absence. UnreadableTextError when present but not readable text.
+    A failure after the status was read - the file vanished, became unreadable or became a directory - is
+    UNREADABLE, never MISSING: the status already said the file was there, so the race fails closed.
     """
-    path = root / rel
-    if not path.is_file():
-        return None
-    return decode_text_file(path)
+    observed = file_status(path)
+    if observed.status != FILE_PRESENT:
+        return observed
+    try:
+        return FileAccess(FILE_PRESENT, text=path.read_text(encoding="utf-8-sig"))
+    except UnicodeDecodeError as exc:
+        return FileAccess(
+            FILE_UNREADABLE, reason=f"{UNREADABLE_TEXT}: not valid UTF-8 ({exc.reason} at byte {exc.start})"
+        )
+    except OSError as exc:
+        return FileAccess(FILE_UNREADABLE, reason=f"{UNREADABLE_FILE}: cannot be read ({_os_reason(exc)})")
+
+
+def discover_files(root: Path, pattern: str) -> tuple[list[str], list[str]]:
+    """(regular files matching one discovery glob, access failures): a host location listed through the boundary.
+
+    The fixed leading directories of the pattern are walked and every entry is matched by `host_glob_regex`, the
+    same pathlib meaning of `*` and `**` the registries are classified with. A directory that cannot be listed and
+    an entry whose status cannot be read are failures: an unlisted location cannot be proven free of unregistered
+    surfaces. An absent location holds nothing.
+    """
+    segments = pattern.split("/")
+    fixed: list[str] = []
+    for segment in segments:
+        if "*" in segment or "?" in segment:
+            break
+        fixed.append(segment)
+    failures: list[str] = []
+    candidates: list[str] = []
+    if len(fixed) == len(segments):
+        candidates.append(pattern)
+    else:
+        errors: list[OSError] = []
+        for directory, _subdirectories, names in os.walk(root.joinpath(*fixed), onerror=errors.append):
+            base = Path(directory).relative_to(root).as_posix()
+            candidates.extend(name if base == "." else f"{base}/{name}" for name in names)
+        for exc in errors:
+            if _is_absence(exc):
+                continue
+            where = "/".join(fixed)
+            if exc.filename is not None:
+                listed = Path(os.fsdecode(exc.filename))
+                where = listed.relative_to(root).as_posix() if listed.is_relative_to(root) else listed.as_posix()
+            failures.append(
+                f"host auto-discovery location cannot be listed: {where} (scanning {pattern}): {UNREADABLE_FILE}: "
+                f"listing failed ({_os_reason(exc)}); an unlisted location cannot be proven free of unregistered "
+                f"surfaces"
+            )
+    matcher = host_glob_regex(pattern)
+    found: list[str] = []
+    for rel in sorted(candidates):
+        if not matcher.match(rel):
+            continue
+        observed = file_status(root / rel)
+        if observed.status == FILE_PRESENT:
+            found.append(rel)
+        elif observed.status == FILE_UNREADABLE:
+            failures.append(
+                f"host auto-discovery surface status cannot be read: {rel} (matched {pattern}): {observed.reason}; "
+                f"a surface whose status is unknown cannot be proven registered or absent"
+            )
+    return found, failures
 
 
 def block_span(lines: list[str], name: str) -> tuple[int, int] | None:
@@ -734,16 +822,18 @@ def read_projection(root: Path, rel: str) -> ActiveProjection | None:
     """Read and project one authority surface. None when the file is absent.
 
     A doctrine surface is projected whole. An executable subordinate is projected from its module docstring,
-    padded so every line keeps its original number. A surface whose authority text cannot be obtained - a file
-    that is not UTF-8, or an executable with no docstring - is an EMPTY projection carrying that reason, so it
-    fails structurally and no reader can find authority in it.
+    padded so every line keeps its original number. A surface whose authority text cannot be obtained - a path
+    that is not a regular file, a status, read or decode failure, or an executable with no docstring - is an EMPTY
+    projection carrying that reason, so it fails structurally and no reader can find authority in it.
     """
-    try:
-        text = read_text(root, rel)
-    except UnreadableTextError as exc:
-        return ActiveProjection((f"{rel}: {exc}",), ())
-    if text is None:
+    observed = read_file(root / rel)
+    if observed.status == FILE_MISSING:
         return None
+    if observed.status == FILE_NOT_REGULAR:
+        return ActiveProjection((f"{rel}: not a regular file, so it carries no authority text",), ())
+    if observed.text is None:
+        return ActiveProjection((f"{rel}: {observed.reason}",), ())
+    text = observed.text
     if rel not in EXECUTABLE_SUBORDINATE_PATHS:
         return project_surface(rel, text.splitlines())
     node = _docstring_expression(text)
@@ -858,14 +948,17 @@ def parse_surface_registry(text: str, name: str) -> list[tuple[str, str]] | None
 
 
 def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | None:
-    try:
-        raw_canonical = read_text(root, CANONICAL)
-    except UnreadableTextError as exc:
-        failures.append(f"canonical authority unreadable: {CANONICAL}: {exc}")
-        return None
-    if raw_canonical is None:
+    observed = read_file(root / CANONICAL)
+    if observed.status == FILE_MISSING:
         failures.append(f"canonical authority missing: {CANONICAL}")
         return None
+    if observed.status == FILE_NOT_REGULAR:
+        failures.append(f"canonical authority is not a regular file: {CANONICAL}")
+        return None
+    if observed.text is None:
+        failures.append(f"canonical authority unreadable: {CANONICAL}: {observed.reason}")
+        return None
+    raw_canonical = observed.text
 
     # The canonical structure is judged, and its ACTIVE projection derived, before any registry is read. No
     # authority reader below ever sees the raw text: an exempt block cannot satisfy anything.
@@ -962,25 +1055,43 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
     }
 
 
+def required_file_failures(root: Path, rel: str, label: str) -> list[str]:
+    """A file required only to EXIST, judged by its status alone: its content is never read."""
+    observed = file_status(root / rel)
+    if observed.status == FILE_MISSING:
+        return [f"{label} missing from the tree: {rel}"]
+    if observed.status == FILE_NOT_REGULAR:
+        return [f"{label} is not a regular file: {rel}"]
+    if observed.status == FILE_UNREADABLE:
+        return [f"{label} status cannot be read: {rel}: {observed.reason}"]
+    return []
+
+
 def _check_existence(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
     surfaces: list[tuple[str, str]] = ctx["surfaces"]  # type: ignore[assignment]
+    # A doctrine surface's existence is judged on the SAME observation its content is read from, so no second
+    # status can disagree with the read: a surface that vanishes in between still fails and is never skipped.
     for path, _role in surfaces:
-        if not (root / path).is_file():
+        if surface_view(root, ctx, path) is None:
             failures.append(f"active doctrine surface missing from the tree: {path}")
     for path in ctx["artifacts"]:  # type: ignore[union-attr]
-        if not (root / path).is_file():
-            failures.append(f"required control-plane artifact missing from the tree: {path}")
+        failures.extend(required_file_failures(root, path, "required control-plane artifact"))
     for path in ctx["retired"]:  # type: ignore[union-attr]
-        if (root / path).exists():
+        observed = file_status(root / path)
+        if observed.status == FILE_UNREADABLE:
+            failures.append(f"retired control-plane path cannot be proven absent: {path}: {observed.reason}")
+        elif observed.status != FILE_MISSING:
             failures.append(f"retired control-plane path still present in the tree: {path}")
 
     # Anchored on a literal constant, NOT on the mutable required-artifact registry, so removing the
     # registry entry does not remove the requirement.
-    if not (root / BOOTSTRAP_ORACLE_PATH).is_file():
+    if file_status(root / BOOTSTRAP_ORACLE_PATH).status == FILE_MISSING:
         failures.append(
             f"independent contract oracle missing: {BOOTSTRAP_ORACLE_PATH} "
             f"(required by the external bootstrap anchor, independently of any registry entry)"
         )
+    else:
+        failures.extend(required_file_failures(root, BOOTSTRAP_ORACLE_PATH, "independent contract oracle"))
 
 
 def _check_roles(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
@@ -1806,11 +1917,12 @@ def _check_host_discovery(root: Path, ctx: dict[str, object], failures: list[str
         | historical_paths
     )
 
+    discovered: set[str] = set()
     for pattern in globs:
-        for found in sorted(root.glob(pattern)):
-            if not found.is_file():
-                continue
-            rel = found.relative_to(root).as_posix()
+        found, unlisted = discover_files(root, pattern)
+        failures.extend(unlisted)
+        discovered.update(found)
+        for rel in found:
             if rel in registered:
                 continue
             failures.append(
@@ -1834,14 +1946,21 @@ def _check_host_discovery(root: Path, ctx: dict[str, object], failures: list[str
                 f"{CANONICAL}: historical host surface {path} lies in no declared discovery location, so "
                 f"its allowance is not scoped to a scanned host root"
             )
-        try:
-            text = read_text(root, path)
-        except UnreadableTextError as exc:
-            failures.append(f"{path}: {exc}; an unreadable host surface proves nothing, so it is not non-applying")
+        observed = read_file(root / path)
+        if observed.status == FILE_UNREADABLE:
+            failures.append(
+                f"{path}: {observed.reason}; an unreadable host surface proves nothing, so it is not non-applying"
+            )
             continue
-        if text is None or role != "NON_APPLYING":
+        if observed.text is None and path in discovered:
+            failures.append(
+                f"{path}: discovered as a present file but no longer readable as one; its NON_APPLYING proof was "
+                f"never read"
+            )
             continue
-        failures.extend(non_applying_failures(path, text))
+        if observed.text is None or role != "NON_APPLYING":
+            continue
+        failures.extend(non_applying_failures(path, observed.text))
 
     host_directories = {pattern.split("/", 1)[0] for pattern in globs if "/" in pattern}
     named = registered | set(ctx["retired"])  # type: ignore[arg-type]
@@ -2600,15 +2719,15 @@ def load_strict_json(text: str) -> object:
 
 
 def load_strict_json_file(path: Path | str) -> object:
-    """Read a JSON file through the one text boundary and parse it through `load_strict_json`."""
-    source = Path(path)
-    if not source.is_file():
+    """Read a JSON file through the one file-access boundary and parse it through `load_strict_json`."""
+    observed = read_file(Path(path))
+    if observed.status == FILE_MISSING:
         raise StrictJsonError("cannot be read as UTF-8 text (missing: not an existing file)")
-    try:
-        text = decode_text_file(source)
-    except UnreadableTextError as exc:
-        raise StrictJsonError(f"cannot be read as UTF-8 text ({exc})") from None
-    return load_strict_json(text)
+    if observed.status == FILE_NOT_REGULAR:
+        raise StrictJsonError("cannot be read as UTF-8 text (not a regular file)")
+    if observed.text is None:
+        raise StrictJsonError(f"cannot be read as UTF-8 text ({observed.reason})")
+    return load_strict_json(observed.text)
 
 
 def committed_json(root: Path, rel: str, failures: list[str]) -> tuple[str, object] | None:
@@ -2617,14 +2736,17 @@ def committed_json(root: Path, rel: str, failures: list[str]) -> tuple[str, obje
     None after exactly one structured failure - missing, unreadable or refused - so no committed document can
     reach a comparison or a relation, or raise past the gate, without a verdict.
     """
-    try:
-        raw = read_text(root, rel)
-    except UnreadableTextError as exc:
-        failures.append(f"{rel}: {STRICT_JSON_REJECTED}: {exc}")
-        return None
-    if raw is None:
+    observed = read_file(root / rel)
+    if observed.status == FILE_MISSING:
         failures.append(f"{rel}: missing")
         return None
+    if observed.status == FILE_NOT_REGULAR:
+        failures.append(f"{rel}: {STRICT_JSON_REJECTED}: not a regular file")
+        return None
+    if observed.text is None:
+        failures.append(f"{rel}: {STRICT_JSON_REJECTED}: {observed.reason}")
+        return None
+    raw = observed.text
     try:
         return raw, load_strict_json(raw)
     except StrictJsonError as exc:

@@ -1008,9 +1008,12 @@ file, or the module docstring as Python parses the module - and both pass throug
 the one active projection, the one marker collector, and the same reserved-syntax, authority-reference,
 declaration and routing checks. A role or authority-reference marker is recognized in any spelling and read
 only in its one exact spelling, so a marker in another spelling is refused, never ignored. Every file the
-control plane judges is decoded through ONE text boundary: a doctrine surface, an executable, a host surface
-or a committed JSON artifact that is not UTF-8 is a structured rejection (`UNREADABLE_TEXT`), never a
-traceback and never a silently skipped surface.
+control plane judges - its status, its listing in a host discovery location, its read and its decoding -
+passes through ONE file-access boundary with four outcomes: present, missing, not a regular file, or
+unreadable. A permission or I/O failure of a status, a listing or a read (`UNREADABLE_FILE`) and bytes that
+are not UTF-8 (`UNREADABLE_TEXT`) are structured rejections - never a traceback, never a silent skip, and never
+reported as missing. A doctrine surface's existence and content come from one observation, and a file required
+only to exist is judged by its status and never read.
 
 ### 15.1 FRESH_CHAT_BOOTSTRAP
 

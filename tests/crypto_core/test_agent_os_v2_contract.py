@@ -20,7 +20,9 @@ failure - deliberately not several wordings of the same failure.
 from __future__ import annotations
 
 import ast
+import errno
 import importlib.util
+import io
 import json
 import os
 import re
@@ -6410,8 +6412,10 @@ def test_only_the_registry_check_reads_the_raw_canonical_text() -> None:
             if (
                 isinstance(node, ast.Call)
                 and isinstance(node.func, ast.Name)
-                and node.func.id == "read_text"
-                and any(isinstance(arg, ast.Name) and arg.id == "CANONICAL" for arg in node.args)
+                and node.func.id == "read_file"
+                and any(
+                    isinstance(name, ast.Name) and name.id == "CANONICAL" for arg in node.args for name in ast.walk(arg)
+                )
             ):
                 readers.append(function.name)
     assert readers == ["_check_registries"]
@@ -7332,21 +7336,60 @@ def test_text_boundary_keeps_a_bool_out_of_an_integer_field(sandbox: Path) -> No
     assert_rejects(sandbox, "open_pr_count: must be an integer")
 
 
-def test_text_boundary_is_the_single_decode_site() -> None:
-    """STRUCTURAL: no reader decodes a file on its own, so no future reader can bypass the boundary by accident."""
-    tree = ast.parse(VALIDATOR_PATH.read_text(encoding="utf-8"))
-    decoders: set[str] = set()
-    for function in ast.walk(tree):
+ORACLE_FILESYSTEM_CALLS = (
+    "stat",
+    "lstat",
+    "is_file",
+    "is_dir",
+    "exists",
+    "read_text",
+    "read_bytes",
+    "open",
+    "glob",
+    "rglob",
+    "iterdir",
+    "scandir",
+    "walk",
+    "listdir",
+    "access",
+)
+ORACLE_FILE_ACCESS_BOUNDARY = {"file_status", "read_file", "discover_files"}
+ORACLE_FILESYSTEM_ERRORS = {
+    "OSError",
+    "PermissionError",
+    "FileNotFoundError",
+    "IsADirectoryError",
+    "NotADirectoryError",
+    "UnicodeDecodeError",
+}
+
+
+def test_file_access_boundary_is_the_single_filesystem_authority() -> None:
+    """STRUCTURAL: no function outside the boundary touches the filesystem or handles a filesystem error.
+
+    It generalizes the single-decode-site proof: status, listing and read are held to the same rule, so a
+    `Path.is_file()`, a `Path.glob()` or a private `except OSError` cannot reappear beside the boundary.
+    """
+    source = VALIDATOR_PATH.read_text(encoding="utf-8")
+    touching: set[str] = set()
+    handling: set[str] = set()
+    for function in ast.walk(ast.parse(source)):
         if not isinstance(function, ast.FunctionDef):
             continue
         for node in ast.walk(function):
-            if not isinstance(node, ast.Call):
-                continue
-            if isinstance(node.func, ast.Attribute) and node.func.attr in ("read_text", "read_bytes", "open"):
-                decoders.add(function.name)
-            if isinstance(node.func, ast.Name) and node.func.id == "open":
-                decoders.add(function.name)
-    assert decoders == {"decode_text_file"}, decoders
+            if isinstance(node, ast.Call):
+                if isinstance(node.func, ast.Attribute) and node.func.attr in ORACLE_FILESYSTEM_CALLS:
+                    touching.add(function.name)
+                if isinstance(node.func, ast.Name) and node.func.id == "open":
+                    touching.add(function.name)
+            if isinstance(node, ast.ExceptHandler) and node.type is not None:
+                names = {name.id for name in ast.walk(node.type) if isinstance(name, ast.Name)}
+                if names & ORACLE_FILESYSTEM_ERRORS:
+                    handling.add(function.name)
+    assert touching == ORACLE_FILE_ACCESS_BOUNDARY, touching
+    assert handling <= ORACLE_FILE_ACCESS_BOUNDARY, handling
+    for retired in ("UnreadableTextError", "decode_text_file", "def read_text"):
+        assert retired not in source, retired
 
 
 def test_authority_reading_and_text_boundary_are_documented() -> None:
@@ -7363,3 +7406,322 @@ def test_authority_reading_and_text_boundary_are_documented() -> None:
     agents = _normalized(REPO_ROOT / "AGENTS.md")
     assert "keeps the allowed set in each of them empty" not in agents
     assert "a historical host surface proven non-applying" in agents
+
+
+# ===========================================================================================
+# ONE FILE-ACCESS BOUNDARY
+#
+# Decoding was typed; STATUS was not. `Path.is_file()` and `Path.exists()` re-raise a permission or I/O error, so
+# an EACCES or EIO on a status escaped every entrypoint as a traceback, and `Path.glob` silently skipped a discovery
+# directory it could not list - accepting an unregistered host surface behind it. Faults are injected at the
+# syscall seams the standard library itself uses (os.stat, io.open, os.scandir), so these tests bind behaviour, not
+# the validator's call names. Every expected verdict below is written out literally.
+# ===========================================================================================
+
+ORACLE_RETIRED_PROBE_PATH = ".github/prompts/edge-discovery.prompt.md"
+ORACLE_EXISTENCE_ONLY_ARTIFACT = ".github/workflows/ci.yml"
+ORACLE_ORACLE_REL = "tests/crypto_core/test_agent_os_v2_contract.py"
+ORACLE_DISCOVERY_ROGUE = ".claude/skills/zz-oracle-rogue/SKILL.md"
+ORACLE_FS_CODES = [("EACCES", errno.EACCES), ("EIO", errno.EIO)]
+
+# category -> (path, failure naming a STATUS fault, failure naming a READ fault, failures that would mean "missing")
+ORACLE_FS_CATEGORIES = {
+    "canonical": (
+        CANONICAL,
+        "canonical authority unreadable: docs/crypto_core/agent_os_v2.md: UNREADABLE_FILE: status cannot be read",
+        "canonical authority unreadable: docs/crypto_core/agent_os_v2.md: UNREADABLE_FILE: cannot be read",
+        ["canonical authority missing: docs/crypto_core/agent_os_v2.md"],
+    ),
+    "doctrine": (
+        "CLAUDE.md",
+        "CLAUDE.md: UNREADABLE_FILE: status cannot be read",
+        "CLAUDE.md: UNREADABLE_FILE: cannot be read",
+        ["active doctrine surface missing from the tree: CLAUDE.md"],
+    ),
+    "executable": (
+        ORACLE_ORACLE_REL,
+        ORACLE_ORACLE_REL + ": UNREADABLE_FILE: status cannot be read",
+        ORACLE_ORACLE_REL + ": UNREADABLE_FILE: cannot be read",
+        [
+            "required control-plane artifact missing from the tree: " + ORACLE_ORACLE_REL,
+            "executable surface missing: " + ORACLE_ORACLE_REL,
+            "independent contract oracle missing: " + ORACLE_ORACLE_REL,
+        ],
+    ),
+    "historical host": (
+        _ORACLE_HISTORICAL_RULE,
+        _ORACLE_HISTORICAL_RULE + ": UNREADABLE_FILE: status cannot be read",
+        _ORACLE_HISTORICAL_RULE + ": UNREADABLE_FILE: cannot be read",
+        [],
+    ),
+    "committed schema": (
+        _STRICT_SCHEMA_REL,
+        _STRICT_SCHEMA_REL + ": STRICT_JSON_REJECTED: UNREADABLE_FILE: status cannot be read",
+        _STRICT_SCHEMA_REL + ": STRICT_JSON_REJECTED: UNREADABLE_FILE: cannot be read",
+        [
+            _STRICT_SCHEMA_REL + ": missing",
+            "required control-plane artifact missing from the tree: " + _STRICT_SCHEMA_REL,
+        ],
+    ),
+    "committed example": (
+        _STRICT_EXAMPLE_REL,
+        _STRICT_EXAMPLE_REL + ": STRICT_JSON_REJECTED: UNREADABLE_FILE: status cannot be read",
+        _STRICT_EXAMPLE_REL + ": STRICT_JSON_REJECTED: UNREADABLE_FILE: cannot be read",
+        [
+            _STRICT_EXAMPLE_REL + ": missing",
+            "required control-plane artifact missing from the tree: " + _STRICT_EXAMPLE_REL,
+        ],
+    ),
+    "existence-only artifact": (
+        ORACLE_EXISTENCE_ONLY_ARTIFACT,
+        "required control-plane artifact status cannot be read: .github/workflows/ci.yml: UNREADABLE_FILE: status "
+        "cannot be read",
+        None,
+        ["required control-plane artifact missing from the tree: .github/workflows/ci.yml"],
+    ),
+    "retired path": (
+        ORACLE_RETIRED_PROBE_PATH,
+        "retired control-plane path cannot be proven absent: " + ORACLE_RETIRED_PROBE_PATH + ": UNREADABLE_FILE: "
+        "status cannot be read",
+        None,
+        [],
+    ),
+}
+ORACLE_CONTENT_CATEGORIES = [name for name, spec in ORACLE_FS_CATEGORIES.items() if spec[2] is not None]
+
+
+def _fs_fault(code: int, path: str) -> OSError:
+    if code == errno.EACCES:
+        return PermissionError(code, "Permission denied (injected)", path)
+    if code == errno.ENOENT:
+        return FileNotFoundError(code, "No such file or directory (injected)", path)
+    return OSError(code, "Input/output error (injected)", path)
+
+
+def _inject_fs_fault(monkeypatch, seam: str, target: str, code: int, *, after: int = 0) -> None:
+    """Fail one syscall seam for paths ending in ``target``; the first ``after`` such calls still succeed."""
+    module = io if seam == "open" else os
+    real = getattr(module, seam)
+    calls = [0]
+
+    def faulty(path=".", *args, **kwargs):
+        if isinstance(path, (str, bytes, os.PathLike)):
+            name = os.fsdecode(path).replace("\\", "/")
+            if name.endswith("/" + target):
+                calls[0] += 1
+                if calls[0] > after:
+                    raise _fs_fault(code, name)
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(module, seam, faulty)
+
+
+def _fs_sandbox(sandbox: Path) -> Path:
+    """The registered file set plus the historical host rule, so every category is really present."""
+    target = sandbox / _ORACLE_HISTORICAL_RULE
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(REPO_ROOT / _ORACLE_HISTORICAL_RULE, target)
+    assert failures(sandbox) == []
+    return sandbox
+
+
+def _assert_fs_verdict(found: list[str], fragment: str, missing: list[str]) -> None:
+    joined = "\n".join(found)
+    assert any(fragment in item for item in found), "{}:\n{}".format(fragment, joined)
+    for wrong in missing:
+        assert wrong not in joined, "a filesystem fault was reported as missing: {}".format(wrong)
+
+
+_FS_STATUS_CASES = [(name, label, code) for name in ORACLE_FS_CATEGORIES for label, code in ORACLE_FS_CODES]
+
+
+@pytest.mark.parametrize(
+    ("category", "label", "code"), _FS_STATUS_CASES, ids=["{} {}".format(c, lab) for c, lab, _ in _FS_STATUS_CASES]
+)
+def test_file_access_boundary_types_a_status_fault(
+    monkeypatch, sandbox: Path, category: str, label: str, code: int
+) -> None:
+    """The reported P2: a permission or I/O error on a STATUS is a structured rejection, and never "missing"."""
+    root = _fs_sandbox(sandbox)
+    rel, status_fragment, _read, missing = ORACLE_FS_CATEGORIES[category]
+    _inject_fs_fault(monkeypatch, "stat", rel, code)
+    _assert_fs_verdict(failures(root), status_fragment, missing)
+
+
+_FS_READ_CASES = [
+    (name, label, code)
+    for name in ORACLE_CONTENT_CATEGORIES
+    for label, code in ORACLE_FS_CODES + [("vanished after its status", errno.ENOENT)]
+]
+
+
+@pytest.mark.parametrize(
+    ("category", "label", "code"), _FS_READ_CASES, ids=["{} {}".format(c, lab) for c, lab, _ in _FS_READ_CASES]
+)
+def test_file_access_boundary_types_a_read_fault(
+    monkeypatch, sandbox: Path, category: str, label: str, code: int
+) -> None:
+    """A read that fails after a good status - including a file that vanished - fails closed as UNREADABLE."""
+    root = _fs_sandbox(sandbox)
+    rel, _status, read_fragment, missing = ORACLE_FS_CATEGORIES[category]
+    _inject_fs_fault(monkeypatch, "open", rel, code)
+    _assert_fs_verdict(failures(root), read_fragment, missing)
+
+
+@pytest.mark.parametrize(("label", "code"), ORACLE_FS_CODES, ids=[label for label, _ in ORACLE_FS_CODES])
+def test_file_access_boundary_never_reads_an_existence_only_artifact(
+    monkeypatch, sandbox: Path, label: str, code: int
+) -> None:
+    root = _fs_sandbox(sandbox)
+    _inject_fs_fault(monkeypatch, "open", ORACLE_EXISTENCE_ONLY_ARTIFACT, code)
+    assert failures(root) == []
+
+
+@pytest.mark.parametrize("category", ORACLE_CONTENT_CATEGORIES)
+def test_file_access_boundary_fails_closed_when_a_file_vanishes_after_its_first_status(
+    monkeypatch, sandbox: Path, category: str
+) -> None:
+    """TOCTOU: a second, independent status must never turn a vanished required file into a silent skip."""
+    root = _fs_sandbox(sandbox)
+    rel = ORACLE_FS_CATEGORIES[category][0]
+    _inject_fs_fault(monkeypatch, "stat", rel, errno.ENOENT, after=1)
+    _inject_fs_fault(monkeypatch, "open", rel, errno.ENOENT)
+    found = failures(root)
+    assert any(rel in item for item in found), "\n".join(found)
+
+
+ORACLE_NOT_A_FILE = {
+    "canonical": "canonical authority is not a regular file: docs/crypto_core/agent_os_v2.md",
+    "doctrine": "CLAUDE.md: not a regular file",
+    "executable": "required control-plane artifact is not a regular file: " + ORACLE_ORACLE_REL,
+    "committed schema": _STRICT_SCHEMA_REL + ": STRICT_JSON_REJECTED: not a regular file",
+    "committed example": _STRICT_EXAMPLE_REL + ": STRICT_JSON_REJECTED: not a regular file",
+    "existence-only artifact": "required control-plane artifact is not a regular file: .github/workflows/ci.yml",
+    "retired path": "retired control-plane path still present in the tree: " + ORACLE_RETIRED_PROBE_PATH,
+}
+
+
+@pytest.mark.parametrize("category", sorted(ORACLE_NOT_A_FILE))
+def test_file_access_boundary_names_a_directory_where_a_file_is_required(sandbox: Path, category: str) -> None:
+    rel, _status, _read, missing = ORACLE_FS_CATEGORIES[category]
+    target = sandbox / rel
+    if target.exists():
+        target.unlink()
+    target.mkdir(parents=True)
+    _assert_fs_verdict(failures(sandbox), ORACLE_NOT_A_FILE[category], missing)
+
+
+def _plant_rogue(root: Path) -> None:
+    rogue = root / ORACLE_DISCOVERY_ROGUE
+    rogue.parent.mkdir(parents=True)
+    rogue.write_text("# rogue\n", encoding="utf-8", newline="\n")
+
+
+def test_file_access_boundary_discovers_a_planted_host_surface(sandbox: Path) -> None:
+    """The positive anchor of the listing matrix: with no fault, the rogue is found and refused."""
+    _plant_rogue(sandbox)
+    assert_rejects(sandbox, "host auto-discovery surface present but not registered: " + ORACLE_DISCOVERY_ROGUE)
+
+
+_LISTING_CASES = [
+    (where, label, code)
+    for where in (".claude/skills", ".claude/skills/zz-oracle-rogue")
+    for label, code in ORACLE_FS_CODES
+]
+
+
+@pytest.mark.parametrize(
+    ("where", "label", "code"), _LISTING_CASES, ids=["{} {}".format(w, lab) for w, lab, _ in _LISTING_CASES]
+)
+def test_file_access_boundary_refuses_an_unlistable_discovery_location(
+    monkeypatch, sandbox: Path, where: str, label: str, code: int
+) -> None:
+    """The fail-OPEN sibling: `Path.glob` skipped an unlistable directory, so the rogue behind it passed."""
+    _plant_rogue(sandbox)
+    _inject_fs_fault(monkeypatch, "scandir", where, code)
+    assert_rejects(sandbox, "host auto-discovery location cannot be listed: {} (scanning".format(where))
+
+
+@pytest.mark.parametrize(("label", "code"), ORACLE_FS_CODES, ids=[label for label, _ in ORACLE_FS_CODES])
+def test_file_access_boundary_refuses_a_discovered_surface_whose_status_fails(
+    monkeypatch, sandbox: Path, label: str, code: int
+) -> None:
+    _plant_rogue(sandbox)
+    _inject_fs_fault(monkeypatch, "stat", ORACLE_DISCOVERY_ROGUE, code)
+    assert_rejects(sandbox, "host auto-discovery surface status cannot be read: " + ORACLE_DISCOVERY_ROGUE)
+
+
+@pytest.mark.parametrize(
+    ("pattern", "path", "matches"),
+    ORACLE_GLOB_MATCHES,
+    ids=["{} vs {}".format(pattern, path) for pattern, path, _m in ORACLE_GLOB_MATCHES],
+)
+def test_file_access_boundary_lists_what_the_scan_glob_meaning_lists(
+    tmp_path: Path, pattern: str, path: str, matches: bool
+) -> None:
+    """Listing through the boundary finds exactly what pathlib's glob meaning finds, and reports nothing else."""
+    target = tmp_path / path
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("x", encoding="utf-8")
+    found, problems = validator.discover_files(tmp_path, pattern)
+    assert problems == []
+    assert (path in found) is matches
+
+
+ORACLE_MANIFEST_FAULTS = [
+    ("status EACCES", "stat", errno.EACCES, "cannot be read as UTF-8 text (UNREADABLE_FILE: status cannot be read"),
+    ("status EIO", "stat", errno.EIO, "cannot be read as UTF-8 text (UNREADABLE_FILE: status cannot be read"),
+    ("read EACCES", "open", errno.EACCES, "cannot be read as UTF-8 text (UNREADABLE_FILE: cannot be read"),
+    ("read EIO", "open", errno.EIO, "cannot be read as UTF-8 text (UNREADABLE_FILE: cannot be read"),
+    (
+        "vanished after its status",
+        "open",
+        errno.ENOENT,
+        "cannot be read as UTF-8 text (UNREADABLE_FILE: cannot be read",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "seam", "code", "fragment"), ORACLE_MANIFEST_FAULTS, ids=[case[0] for case in ORACLE_MANIFEST_FAULTS]
+)
+def test_file_access_boundary_types_a_compiled_manifest_fault(
+    monkeypatch, tmp_path: Path, label: str, seam: str, code: int, fragment: str
+) -> None:
+    probe = tmp_path / "probe.json"
+    shutil.copyfile(REPO_ROOT / _STRICT_EXAMPLE_REL, probe)
+    _inject_fs_fault(monkeypatch, seam, "probe.json", code)
+    found = validator.check_manifest_file(REPO_ROOT, probe)
+    assert len(found) == 1 and fragment in found[0] and "(missing" not in found[0], found
+
+
+def test_file_access_boundary_names_a_directory_given_as_a_compiled_manifest(tmp_path: Path) -> None:
+    found = validator.check_manifest_file(REPO_ROOT, tmp_path)
+    assert len(found) == 1 and "cannot be read as UTF-8 text (not a regular file)" in found[0], found
+
+
+def test_file_access_boundary_holds_at_the_command_line(monkeypatch, capsys, sandbox: Path, tmp_path: Path) -> None:
+    """The real entrypoints return a structured verdict under a status fault; nothing escapes `main`."""
+    probe = tmp_path / "probe.json"
+    shutil.copyfile(REPO_ROOT / _STRICT_EXAMPLE_REL, probe)
+    _inject_fs_fault(monkeypatch, "stat", "probe.json", errno.EACCES)
+    assert validator.main(["--root", str(REPO_ROOT), "--manifest", str(probe), "--json"]) == 1
+    verdict = json.loads(capsys.readouterr().out)
+    assert verdict["ok"] is False and "UNREADABLE_FILE: status cannot be read" in verdict["failures"][0], verdict
+    _inject_fs_fault(monkeypatch, "stat", CANONICAL, errno.EIO)
+    assert validator.main(["--root", str(sandbox), "--json"]) == 1
+    verdict = json.loads(capsys.readouterr().out)
+    assert verdict["ok"] is False
+    assert any("canonical authority unreadable" in item for item in verdict["failures"]), verdict
+
+
+def test_file_access_boundary_is_documented() -> None:
+    canonical = _normalized(REPO_ROOT / CANONICAL)
+    for token in (
+        "ONE file-access boundary",
+        "UNREADABLE_FILE",
+        "UNREADABLE_TEXT",
+        "never reported as missing",
+        "judged by its status and never read",
+    ):
+        assert token in canonical, token
