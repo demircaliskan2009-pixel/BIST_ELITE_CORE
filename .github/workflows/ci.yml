@@ -16,7 +16,7 @@ jobs:
   tests:
     name: tests
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     env:
       PYTHONPATH: ${{ github.workspace }}/src
       PYTHONWARNINGS: error
@@ -48,6 +48,12 @@ jobs:
           fi
           python -m pip install ruff
 
+      - name: Agent OS contract oracle anchor
+        run: test -f tests/crypto_core/test_agent_os_v2_contract.py
+
+      - name: Agent OS control-plane contract
+        run: python scripts/crypto_core/validate_agent_os_v2.py
+
       - name: Ruff lint
         run: ruff check src/crypto_core tests/crypto_core scripts/crypto_core --output-format=github
 
@@ -57,13 +63,8 @@ jobs:
       - name: Run pytest
         run: |
           set -euo pipefail
-          python -m pytest -q -W error tests/crypto_core
-
-      - name: Coverage report
-        run: |
-          set -euo pipefail
           python -m pip install pytest-cov
-          python -m pytest --cov=src/crypto_core --cov-report=term --cov-fail-under=70 -q tests/crypto_core
+          python -m pytest -q -W error --cov=src/crypto_core --cov-report=term --cov-fail-under=70 tests/crypto_core
 
   slow-tests:
     name: slow-tests

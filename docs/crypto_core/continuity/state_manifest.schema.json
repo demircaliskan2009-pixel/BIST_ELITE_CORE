@@ -1,0 +1,1348 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://crypto-core.local/schemas/state_manifest_v1.json",
+  "title": "STATE_MANIFEST_V1",
+  "description": "Ephemeral per-session state manifest for crypto_core (CONTEXT_CONTINUITY_PROTOCOL_V2 layer 3, docs/crypto_core/agent_os_v2.md section 15). Compiled from live proof at the start of a session. NEVER committed as durable doctrine and never read as current truth by a later session. Every field listed in the PROOF_PAIRED_MANIFEST_FIELDS registry (agent_os_v2.md section 20) is proof-paired: the value is present and MEANINGFUL only when its _evidence companion says PROVEN, and is exactly null when the companion says UNKNOWN. A missing value, a missing companion, a value with UNKNOWN, null with PROVEN, or a populated-but-payload-empty value are all invalid. Fields NOT in that registry are static or descriptive metadata and are deliberately not paired. UNKNOWN is a first-class, expected outcome; it is never replaced by a plausible guess. Every proof-paired field is also bound to its TARGET by the PROOF_TARGET_BINDINGS registry (agent_os_v2.md section 20): a PROVEN observation whose target is not PROVEN is rejected, and a completed gate's evidence key must name the proven head_sha or head_tree. THIS FILE IS GENERATED from the canonical typed operational grammar in scripts/crypto_core/validate_agent_os_v2.py and is a published SPECIFICATION artifact: it is never executed as a runtime validation authority, and hand edits are rejected because the committed object must equal the generated object.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "authorization",
+    "base_sha",
+    "base_sha_evidence",
+    "base_tree",
+    "base_tree_evidence",
+    "blockers",
+    "blockers_evidence",
+    "branch",
+    "branch_evidence",
+    "capacity_routing_mode",
+    "capacity_routing_mode_evidence",
+    "ci_state",
+    "ci_state_evidence",
+    "claude_capacity",
+    "claude_capacity_evidence",
+    "compiled_at_evidence",
+    "completed_gates",
+    "completed_gates_evidence",
+    "head_sha",
+    "head_sha_evidence",
+    "head_tree",
+    "head_tree_evidence",
+    "invalidations",
+    "model_runtime",
+    "next_safe_action",
+    "next_safe_action_evidence",
+    "open_pr_count",
+    "open_pr_count_evidence",
+    "openai_agentic_capacity",
+    "openai_agentic_capacity_evidence",
+    "pr_number",
+    "pr_number_evidence",
+    "pr_state",
+    "pr_state_evidence",
+    "repo",
+    "review_threads_unresolved",
+    "review_threads_unresolved_evidence",
+    "schema",
+    "task_boundary"
+  ],
+  "properties": {
+    "$comment": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Optional documentation field. A committed fixture that is illustrative rather than real state MUST declare EXAMPLE_ONLY here."
+    },
+    "schema": {
+      "const": "STATE_MANIFEST_V1"
+    },
+    "repo": {
+      "type": "string",
+      "minLength": 1,
+      "description": "owner/name of the repository."
+    },
+    "compiled_at_evidence": {
+      "type": "string",
+      "pattern": "[A-Za-z0-9]",
+      "description": "How this manifest was compiled, for example the exact git and gh commands run. Free text, but it must describe real executed proof, never an assumption."
+    },
+    "task_boundary": {
+      "type": "string",
+      "pattern": "[A-Za-z0-9]",
+      "description": "The SEMANTIC_BOUNDARY of the work this session is authorized to do."
+    },
+    "branch": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Current checked-out branch."
+    },
+    "branch_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "base_sha": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{40}$"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Base commit this work was cut from."
+    },
+    "base_sha_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "base_tree": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{40}$"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Tree of the base commit."
+    },
+    "base_tree_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "head_sha": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{40}$"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Current head commit."
+    },
+    "head_sha_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "head_tree": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{40}$"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Tree of the current head commit."
+    },
+    "head_tree_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "pr_number": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 1
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Current pull-request number."
+    },
+    "pr_number_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "pr_state": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "OPEN",
+            "CLOSED",
+            "MERGED",
+            "DRAFT"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Current PR state."
+    },
+    "pr_state_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "open_pr_count": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Live open-PR count for the repository."
+    },
+    "open_pr_count_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "ci_state": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "GREEN",
+            "FAILING",
+            "PENDING",
+            "NO_CHECKS"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Terminal CI verdict. PENDING and NO_CHECKS both mean NOT_READY; only GREEN is a pass."
+    },
+    "ci_state_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "review_threads_unresolved": {
+      "anyOf": [
+        {
+          "type": "integer",
+          "minimum": 0
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Count of currently unresolved review threads."
+    },
+    "review_threads_unresolved_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "completed_gates": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "gate",
+              "evidence_key",
+              "result"
+            ],
+            "properties": {
+              "gate": {
+                "type": "string",
+                "pattern": "[A-Za-z0-9]"
+              },
+              "evidence_key": {
+                "type": "string",
+                "pattern": "[A-Za-z0-9]",
+                "description": "VALIDATION_BUDGET reuse key: head/tree + relevant path set + command/config + environment/toolchain + evidence id. A gate may be reused only while this key is unchanged, so the key must name this manifest's proven head_sha or head_tree; a key naming another revision is invalidated evidence."
+              },
+              "result": {
+                "type": "string",
+                "enum": [
+                  "PASS",
+                  "FAIL",
+                  "UNKNOWN"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Deterministic gates already proven at the current evidence key. An empty array means 'proven that none are complete', which is why it is proof-paired rather than merely optional."
+    },
+    "completed_gates_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "blockers": {
+      "anyOf": [
+        {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "id",
+              "severity",
+              "state",
+              "repair_count"
+            ],
+            "properties": {
+              "id": {
+                "type": "string",
+                "pattern": "[A-Za-z0-9]",
+                "description": "Stable blocker identity. It survives renaming and re-phasing; renaming a blocker never resets repair_count (agent_os_v2.md section 13)."
+              },
+              "severity": {
+                "type": "string",
+                "enum": [
+                  "P1",
+                  "P2",
+                  "P3"
+                ]
+              },
+              "state": {
+                "type": "string",
+                "enum": [
+                  "OPEN",
+                  "REPAIRED_PENDING_REAUDIT",
+                  "CLOSED",
+                  "FIXED_POINT_NOT_REACHED"
+                ]
+              },
+              "repair_count": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Current blocker set. An empty array means 'proven that none are open', not 'not checked'."
+    },
+    "blockers_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "openai_agentic_capacity": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "NORMAL",
+            "CONSERVE",
+            "CRITICAL",
+            "EXHAUSTED"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Shared OpenAI agentic pool state (Codex, the frontier audit lane and Work all draw on it). The conceptual UNKNOWN state is encoded structurally as null plus UNKNOWN evidence, never as a literal string, so a capacity fact has exactly one representation."
+    },
+    "openai_agentic_capacity_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "claude_capacity": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "NORMAL",
+            "CONSERVE",
+            "CRITICAL",
+            "EXHAUSTED"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Claude capacity state. UNKNOWN is encoded as null plus UNKNOWN evidence."
+    },
+    "claude_capacity_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "capacity_routing_mode": {
+      "anyOf": [
+        {
+          "type": "string",
+          "enum": [
+            "QUALITY_OPTIMAL",
+            "CLAUDE_FIRST_CONSERVATION",
+            "OPENAI_FIRST_CONSERVATION",
+            "CLAUDE_CONTINUITY",
+            "OPENAI_CONTINUITY",
+            "BOTH_EXHAUSTED_STOP"
+          ]
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Routing mode selected by USAGE_AWARE_CAPACITY_ROUTER_V1 (agent_os_v2.md section 10.2). It must be consistent with the two proven capacity values; an unproven capacity leaves this null."
+    },
+    "capacity_routing_mode_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "next_safe_action": {
+      "anyOf": [
+        {
+          "type": "string",
+          "pattern": "[A-Za-z0-9]"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "description": "Exactly one concrete next action. It is a live decision, not static metadata, so it is proof-paired: an action nobody has proven is UNKNOWN rather than a plausible suggestion."
+    },
+    "next_safe_action_evidence": {
+      "type": "string",
+      "enum": [
+        "PROVEN",
+        "UNKNOWN"
+      ]
+    },
+    "invalidations": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "pattern": "[A-Za-z0-9]"
+      },
+      "description": "Facts that stopped being true during this session and must not be reused. REQUIRED and never omitted: an absent list cannot be distinguished from 'the producer never said', which would leave stale completed-gate evidence quietly reusable. An EMPTY list is the truthful way to say nothing was invalidated, and is always valid - never fabricate an entry to satisfy shape. It is deliberately NOT proof-paired: this is a session narrative rather than an external fact, so pairing it would be ceremony, not proof."
+    },
+    "model_runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "model_id",
+        "model_requested",
+        "model_actual",
+        "model_evidence_source",
+        "requested_effort",
+        "observed_effort",
+        "effort_evidence_source",
+        "effort_mismatch_waiver",
+        "thinking_actual",
+        "capability_mode",
+        "host_setting_raw",
+        "environment",
+        "client_version",
+        "model_fallback"
+      ],
+      "properties": {
+        "model_id": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "[A-Za-z0-9]"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model_requested": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "[A-Za-z0-9]"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model_actual": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "[A-Za-z0-9]"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model_evidence_source": {
+          "type": "string",
+          "enum": [
+            "RUNTIME_TELEMETRY",
+            "USER_ATTESTED_UI_SELECTION",
+            "CONFIGURATION_EVIDENCE_ONLY",
+            "UNKNOWN",
+            "CONTRADICTED"
+          ]
+        },
+        "requested_effort": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "observed_effort": {
+          "anyOf": [
+            {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "effort_evidence_source": {
+          "type": "string",
+          "enum": [
+            "RUNTIME_TELEMETRY",
+            "USER_ATTESTED_UI_SELECTION",
+            "CONFIGURATION_EVIDENCE_ONLY",
+            "UNKNOWN",
+            "CONTRADICTED"
+          ]
+        },
+        "effort_mismatch_waiver": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "evidence"
+          ],
+          "properties": {
+            "status": {
+              "type": "string",
+              "enum": [
+                "NOT_APPLICABLE",
+                "NOT_GRANTED",
+                "HUMAN_GRANTED"
+              ]
+            },
+            "evidence": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "[A-Za-z0-9]"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "The exact task-specific HUMAN waiver, verbatim. Null unless status is HUMAN_GRANTED."
+            }
+          },
+          "description": "EFFORT_MISMATCH_WAIVER (agent_os_v2.md section 4.1). A human may waive an observed effort mismatch for a SPECIFIC task, and this block records that without erasing the mismatch. NOT_APPLICABLE: no effort mismatch is truthfully recorded, evidence null. NOT_GRANTED: a CONTRADICTED effort mismatch is recorded and no human waived it, evidence null, and the task stops. HUMAN_GRANTED: a CONTRADICTED effort mismatch is recorded and a human waived it for this task, evidence is the exact waiver. A waiver never changes requested_effort or observed_effort and exists only while they differ. It is not authority: it grants no merge, waives no T4 gate, repairs no model mismatch or fallback and cannot make an illegal requested effort legal. The validator checks representation only; live controller evidence must prove a human actually issued it."
+        },
+        "thinking_actual": {
+          "type": "string",
+          "enum": [
+            "ENABLED",
+            "DISABLED",
+            "UNKNOWN"
+          ]
+        },
+        "capability_mode": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "[A-Za-z0-9]"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_setting_raw": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "environment": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "[A-Za-z0-9]"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "client_version": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "[A-Za-z0-9]"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "model_fallback": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "[A-Za-z0-9]"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "description": "Runtime-proof block (agent_os_v2.md section 4). ALWAYS present, because a manifest that omits it entirely could silently satisfy a task claiming runtime proof. A host that exposes no runtime metadata says so with an UNKNOWN evidence source and null observations - absence is never the same statement as UNKNOWN. The block is DIMENSIONAL: model identity, effort and thinking are observed by different mechanisms and are known independently, so each carries its own evidence and a contradiction in one never erases valid evidence from another. A host that reports its model but exposes no effort setting records RUNTIME_TELEMETRY identity alongside UNKNOWN effort - truthfully, and without inventing telemetry. Within each dimension the class constrains what may be populated: RUNTIME_TELEMETRY requires a meaningful observation; USER_ATTESTED_UI_SELECTION requires the attested value in THAT dimension's own observation field and stays labelled an attestation, because one host selector string cannot attest two independent dimensions - host_setting_raw is verbatim context, never a fallback proof; CONTRADICTED is explicit contradictory runtime proof, so it records what actually ran or what effort actually applied; CONFIGURATION_EVIDENCE_ONLY and UNKNOWN prove no execution and leave that dimension's observation null. thinking_actual is its own dimension with an explicit UNKNOWN. Ultra is recorded in capability_mode ONLY and is never written into an effort field, and host_setting_raw stores the operator UI choice verbatim without inventing an API mapping. Effort is RELATIONAL like identity: under an execution-proving class an observed_effort that differs from requested_effort is CONTRADICTED, CONTRADICTED requires a real effort conflict, and effort_mismatch_waiver records whether a human waived that exact mismatch without ever rewriting the true observed effort. Execution proof is TARGET-BOUND: RUNTIME_TELEMETRY, USER_ATTESTED_UI_SELECTION and CONTRADICTED need a required identity (model_id, or model_requested where no API identity applies) in the identity dimension and a requested_effort in the effort dimension, because an observation with nothing to compare against proves nothing."
+    },
+    "authorization": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "mutation_scope",
+        "merge_authorized"
+      ],
+      "properties": {
+        "mutation_scope": {
+          "type": "string",
+          "pattern": "[A-Za-z0-9]",
+          "description": "Exact authorized mutation scope, or NONE."
+        },
+        "merge_authorized": {
+          "const": false,
+          "description": "A manifest never records merge authority. MERGE_AUTHORITY_SOURCE is HUMAN_ONLY_PER_PR and lives only in docs/crypto_core/agent_os_v2.md section 2.1; an authorization is granted per PR and per head by the human at the moment of merge, and is never carried in durable or ephemeral state."
+        },
+        "notes": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "required": [
+          "branch_evidence"
+        ],
+        "properties": {
+          "branch_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "branch"
+        ],
+        "properties": {
+          "branch": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Current checked-out branch."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "branch"
+        ],
+        "properties": {
+          "branch": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "base_sha_evidence"
+        ],
+        "properties": {
+          "base_sha_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "base_sha"
+        ],
+        "properties": {
+          "base_sha": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{40}$",
+            "description": "Base commit this work was cut from."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "base_sha"
+        ],
+        "properties": {
+          "base_sha": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "base_tree_evidence"
+        ],
+        "properties": {
+          "base_tree_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "base_tree"
+        ],
+        "properties": {
+          "base_tree": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{40}$",
+            "description": "Tree of the base commit."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "base_tree"
+        ],
+        "properties": {
+          "base_tree": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "head_sha_evidence"
+        ],
+        "properties": {
+          "head_sha_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "head_sha"
+        ],
+        "properties": {
+          "head_sha": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{40}$",
+            "description": "Current head commit."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "head_sha"
+        ],
+        "properties": {
+          "head_sha": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "head_tree_evidence"
+        ],
+        "properties": {
+          "head_tree_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "head_tree"
+        ],
+        "properties": {
+          "head_tree": {
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{40}$",
+            "description": "Tree of the current head commit."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "head_tree"
+        ],
+        "properties": {
+          "head_tree": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "pr_number_evidence"
+        ],
+        "properties": {
+          "pr_number_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "pr_number"
+        ],
+        "properties": {
+          "pr_number": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Current pull-request number."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "pr_number"
+        ],
+        "properties": {
+          "pr_number": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "pr_state_evidence"
+        ],
+        "properties": {
+          "pr_state_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "pr_state"
+        ],
+        "properties": {
+          "pr_state": {
+            "type": "string",
+            "enum": [
+              "OPEN",
+              "CLOSED",
+              "MERGED",
+              "DRAFT"
+            ],
+            "description": "Current PR state."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "pr_state"
+        ],
+        "properties": {
+          "pr_state": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "open_pr_count_evidence"
+        ],
+        "properties": {
+          "open_pr_count_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "open_pr_count"
+        ],
+        "properties": {
+          "open_pr_count": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Live open-PR count for the repository."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "open_pr_count"
+        ],
+        "properties": {
+          "open_pr_count": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "ci_state_evidence"
+        ],
+        "properties": {
+          "ci_state_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "ci_state"
+        ],
+        "properties": {
+          "ci_state": {
+            "type": "string",
+            "enum": [
+              "GREEN",
+              "FAILING",
+              "PENDING",
+              "NO_CHECKS"
+            ],
+            "description": "Terminal CI verdict. PENDING and NO_CHECKS both mean NOT_READY; only GREEN is a pass."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "ci_state"
+        ],
+        "properties": {
+          "ci_state": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "review_threads_unresolved_evidence"
+        ],
+        "properties": {
+          "review_threads_unresolved_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "review_threads_unresolved"
+        ],
+        "properties": {
+          "review_threads_unresolved": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Count of currently unresolved review threads."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "review_threads_unresolved"
+        ],
+        "properties": {
+          "review_threads_unresolved": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "completed_gates_evidence"
+        ],
+        "properties": {
+          "completed_gates_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "completed_gates"
+        ],
+        "properties": {
+          "completed_gates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "gate",
+                "evidence_key",
+                "result"
+              ],
+              "properties": {
+                "gate": {
+                  "type": "string",
+                  "pattern": "[A-Za-z0-9]"
+                },
+                "evidence_key": {
+                  "type": "string",
+                  "pattern": "[A-Za-z0-9]",
+                  "description": "VALIDATION_BUDGET reuse key: head/tree + relevant path set + command/config + environment/toolchain + evidence id. A gate may be reused only while this key is unchanged, so the key must name this manifest's proven head_sha or head_tree; a key naming another revision is invalidated evidence."
+                },
+                "result": {
+                  "type": "string",
+                  "enum": [
+                    "PASS",
+                    "FAIL",
+                    "UNKNOWN"
+                  ]
+                }
+              }
+            },
+            "description": "Deterministic gates already proven at the current evidence key. An empty array means 'proven that none are complete', which is why it is proof-paired rather than merely optional."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "completed_gates"
+        ],
+        "properties": {
+          "completed_gates": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "blockers_evidence"
+        ],
+        "properties": {
+          "blockers_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "blockers"
+        ],
+        "properties": {
+          "blockers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "severity",
+                "state",
+                "repair_count"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "pattern": "[A-Za-z0-9]",
+                  "description": "Stable blocker identity. It survives renaming and re-phasing; renaming a blocker never resets repair_count (agent_os_v2.md section 13)."
+                },
+                "severity": {
+                  "type": "string",
+                  "enum": [
+                    "P1",
+                    "P2",
+                    "P3"
+                  ]
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "OPEN",
+                    "REPAIRED_PENDING_REAUDIT",
+                    "CLOSED",
+                    "FIXED_POINT_NOT_REACHED"
+                  ]
+                },
+                "repair_count": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            },
+            "description": "Current blocker set. An empty array means 'proven that none are open', not 'not checked'."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "blockers"
+        ],
+        "properties": {
+          "blockers": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "openai_agentic_capacity_evidence"
+        ],
+        "properties": {
+          "openai_agentic_capacity_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "openai_agentic_capacity"
+        ],
+        "properties": {
+          "openai_agentic_capacity": {
+            "type": "string",
+            "enum": [
+              "NORMAL",
+              "CONSERVE",
+              "CRITICAL",
+              "EXHAUSTED"
+            ],
+            "description": "Shared OpenAI agentic pool state (Codex, the frontier audit lane and Work all draw on it). The conceptual UNKNOWN state is encoded structurally as null plus UNKNOWN evidence, never as a literal string, so a capacity fact has exactly one representation."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "openai_agentic_capacity"
+        ],
+        "properties": {
+          "openai_agentic_capacity": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "claude_capacity_evidence"
+        ],
+        "properties": {
+          "claude_capacity_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "claude_capacity"
+        ],
+        "properties": {
+          "claude_capacity": {
+            "type": "string",
+            "enum": [
+              "NORMAL",
+              "CONSERVE",
+              "CRITICAL",
+              "EXHAUSTED"
+            ],
+            "description": "Claude capacity state. UNKNOWN is encoded as null plus UNKNOWN evidence."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "claude_capacity"
+        ],
+        "properties": {
+          "claude_capacity": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "capacity_routing_mode_evidence"
+        ],
+        "properties": {
+          "capacity_routing_mode_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "capacity_routing_mode"
+        ],
+        "properties": {
+          "capacity_routing_mode": {
+            "type": "string",
+            "enum": [
+              "QUALITY_OPTIMAL",
+              "CLAUDE_FIRST_CONSERVATION",
+              "OPENAI_FIRST_CONSERVATION",
+              "CLAUDE_CONTINUITY",
+              "OPENAI_CONTINUITY",
+              "BOTH_EXHAUSTED_STOP"
+            ],
+            "description": "Routing mode selected by USAGE_AWARE_CAPACITY_ROUTER_V1 (agent_os_v2.md section 10.2). It must be consistent with the two proven capacity values; an unproven capacity leaves this null."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "capacity_routing_mode"
+        ],
+        "properties": {
+          "capacity_routing_mode": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "required": [
+          "next_safe_action_evidence"
+        ],
+        "properties": {
+          "next_safe_action_evidence": {
+            "const": "PROVEN"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "next_safe_action"
+        ],
+        "properties": {
+          "next_safe_action": {
+            "type": "string",
+            "pattern": "[A-Za-z0-9]",
+            "description": "Exactly one concrete next action. It is a live decision, not static metadata, so it is proof-paired: an action nobody has proven is UNKNOWN rather than a plausible suggestion."
+          }
+        }
+      },
+      "else": {
+        "required": [
+          "next_safe_action"
+        ],
+        "properties": {
+          "next_safe_action": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ]
+}
