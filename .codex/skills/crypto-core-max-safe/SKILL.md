@@ -17,14 +17,16 @@ engineering — paper-first, deterministic, fail-closed, audit-first — never g
   dependency tracing, clear-spec implementation where routed, mechanical refactor, test generation, static
   inspection, debugging, CI analysis — and the PRIMARY ordinary independent reviewer, including the exhaustive
   whole-contract audit and re-audit. Its host label `Ultra` is recorded literally.
-- When Sol is unavailable, quota-blocked, or stops on runtime proof before substantive audit, that reason is
-  recorded for the task and the ChatGPT controller may run the narrow `ORDINARY_INDEPENDENT_AUDIT_FALLBACK`
-  (section 24.4) under its independence conditions. A Sol session that cannot prove its identity or required
-  thinking stops before auditing and delivers no verdict.
+- Sol audits a candidate only when it neither implemented nor repaired that candidate lifecycle, is available,
+  and passes runtime proof (section 24.4: eligibility before availability). When Sol is independence-ineligible,
+  unavailable, quota-blocked, or stops on runtime proof before substantive audit, that reason is recorded for the
+  task and the ChatGPT controller may run the narrow `ORDINARY_INDEPENDENT_AUDIT_FALLBACK` under its independence
+  conditions; with no independent eligible reviewer the gate stops with proof. A Sol session that cannot prove its
+  identity or required thinking stops before auditing and delivers no verdict.
 - An ordinary Sol review never satisfies protected Class C. Protected T4 `CLASS_C_CROSS_CONTRACT` is the GPT-6
   Astra READ_ONLY terminal audit alone; when Astra is unavailable that gate waits and is never reassigned to
   Sol.
-- Sol never audits work it implemented in the same context.
+- Sol never audits a candidate it implemented or repaired, in any context.
 - Codex GPT-5.6 Terra and Codex GPT-5.6 Luna are `NOT_IN_ACTIVE_COUNCIL`. The ChatGPT controller
   (`CONTROLLER_READONLY_FIRST_POLICY`) routes, compiles prompts, judges evidence and owns accepted state.
   Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED`; Copilot is `INACTIVE_UNAVAILABLE`.

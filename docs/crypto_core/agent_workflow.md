@@ -712,7 +712,7 @@ restates it as authority. The council is closed: a model or tool not listed here
 |---|---|---|
 | **ChatGPT controller** | Controller and router; architecture adjudication; prompt compiler (24.6); evidence judge; live GitHub verification through the connector/`gh`; contradiction detection; merge-readiness judgement; exactly one next action; an ordinary independent audit only as the narrow `ORDINARY_INDEPENDENT_AUDIT_FALLBACK` (24.4) | Product implementation; any independent audit outside that fallback; auditing a candidate it implemented or repaired; the protected Class-C audit; a substitute for local tests or unverified repository state; GitHub mutation without an exact human action authorization; merge authority |
 | **Claude Opus 5** (`claude-opus-5`) | Primary deep semantic IMPLEMENTATION and REPAIR, including the single consolidated repair of a candidate (24.8) | Its own independent audit; the protected Class-C audit |
-| **Codex GPT-5.6 Sol** | Primary repo-native engineering accelerator — repo navigation, code search, dependency tracing, clear-spec implementation where routed, mechanical refactor, test generation, static inspection, debugging, CI analysis — and the PRIMARY ordinary independent reviewer (24.4), including the exhaustive audit and whole-contract re-audit of a candidate | Satisfying protected Class C (an ordinary Sol review is never a Class-C audit); auditing work it implemented in the same context |
+| **Codex GPT-5.6 Sol** | Primary repo-native engineering accelerator — repo navigation, code search, dependency tracing, clear-spec implementation where routed, mechanical refactor, test generation, static inspection, debugging, CI analysis — and the PRIMARY ordinary independent reviewer (24.4), including the exhaustive audit and whole-contract re-audit of a candidate | Satisfying protected Class C (an ordinary Sol review is never a Class-C audit); auditing a candidate it implemented or repaired |
 | **GPT-6 Astra** | Protected T4 `CLASS_C_CROSS_CONTRACT`: the READ_ONLY terminal frontier audit (24.4). Default protected effort `Extra High` or `Ultra` per controller task; `Ultra` for setup/control-plane terminal audits | Mutation; ordinary review; any reassignment of protected T4 to another lane |
 | **ChatGPT Work** | Substantial multi-step execution when a cloud browser/computer, many files, apps or evidence collection materially help, under the same prompt shape (24.6) and gates | Governance authority; accepted state; merge authority |
 | **Deep Research** | Current load-bearing external facts only (24.9) | Repository/PR/CI state; implementation; mutation; gate waivers |
@@ -735,18 +735,27 @@ any of them is a `MATERIAL_CAPABILITY_CHANGE` (24.13).
 
 ### 24.4 Independent audit, protected Class C and complete blocker collection
 
-- `ORDINARY_INDEPENDENT_AUDIT_PRIMARY` — Codex GPT-5.6 Sol: fresh context, exact pinned head, READ_ONLY, judging
-  the declared semantic contract of the candidate. Every PR candidate gets one ordinary independent audit (and,
-  after the one consolidated repair, one whole-contract re-audit) before any terminal gate.
-- `ORDINARY_INDEPENDENT_AUDIT_FALLBACK` — the ChatGPT controller, as a resilience mechanism and never as default
-  routing. It is legal only when ALL hold: (1) Codex GPT-5.6 Sol is unavailable, quota-blocked, or stops on
-  runtime proof (24.12) before any substantive audit; (2) that reason is recorded for this task in its handoff,
-  never as durable model state; (3) the ChatGPT controller, including through ChatGPT Work, neither implemented nor
-  repaired the candidate; (4) the audit is fresh-context, pinned to the exact head and READ_ONLY; (5) it meets the
-  same `COMPLETE_BLOCKER_COLLECTION` standard; (6) it returns P1/P2/P3 with concrete evidence; (7) it performs zero
-  repository or GitHub mutation; (8) it never satisfies protected T4. When ChatGPT or ChatGPT Work implemented or
-  repaired the candidate the fallback does not exist for it: the ordinary gate waits for Codex GPT-5.6 Sol or stops
-  with proof, and no other reviewer lane is added. Codex GPT-5.6 Sol stays PRIMARY.
+- `ORDINARY_AUDITOR_SELECTION` — independence eligibility is decided BEFORE operational availability, for the
+  audit and the re-audit alike. A reviewer that implemented or repaired any part of this candidate lifecycle is
+  independence-ineligible; implementation or repair by ChatGPT Work counts as the ChatGPT controller's own.
+  Every PR candidate gets one ordinary independent audit (and, after the one consolidated repair, one
+  whole-contract re-audit) before any terminal gate.
+  - `ORDINARY_INDEPENDENT_AUDIT_PRIMARY` — Codex GPT-5.6 Sol: fresh context, exact pinned head, READ_ONLY,
+    judging the declared semantic contract. Sol performs the ordinary audit only when (1) it neither implemented
+    nor repaired this candidate lifecycle, (2) it is operationally available, and (3) it passes runtime proof
+    (24.12). Codex GPT-5.6 Sol stays PRIMARY.
+  - `ORDINARY_INDEPENDENT_AUDIT_FALLBACK` — the ChatGPT controller, as a resilience mechanism and never as default
+    routing. It is legal only when Sol cannot legally perform the audit for a reason recorded in the task handoff
+    (never as durable model state) — `PRIMARY_INDEPENDENCE_INELIGIBLE`, `PRIMARY_UNAVAILABLE`,
+    `PRIMARY_QUOTA_BLOCKED` or `PRIMARY_RUNTIME_PROOF_STOPPED_BEFORE_SUBSTANTIVE_AUDIT` — AND all of these hold:
+    the ChatGPT controller neither implemented nor repaired the candidate; the audit is fresh-context, pinned to
+    the exact head and READ_ONLY; it meets `COMPLETE_BLOCKER_COLLECTION`; it returns evidence-backed P1/P2/P3; it
+    performs zero repository or GitHub mutation; and it never satisfies protected T4.
+  - Selection by author: Claude authored → Sol audits, and the controller fallback applies only on a recorded
+    Sol unavailability, quota block or runtime-proof stop; Sol authored → Sol is ineligible → the controller
+    fallback audits; the ChatGPT controller or ChatGPT Work authored → the fallback is ineligible → Sol audits;
+    no independent eligible reviewer (for example ChatGPT authored and Sol unavailable, or Sol and ChatGPT each
+    implemented or repaired part of the lifecycle) → `STOP_WITH_PROOF`, and no other reviewer lane is added.
 - `NO_SELF_AUDIT` — no model audits its own implementation or repair as independent evidence. A Claude
   implementer's self-review, like any same-model review of its own work, is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`.
 - `PROTECTED_CLASS_C` — the GPT-6 Astra terminal audit, fresh context, exact pinned head, READ_ONLY. Required
@@ -1179,3 +1188,9 @@ unavailable, quota-blocked or stopped by runtime proof before substantive audit,
 controller neither implemented nor repaired the candidate. The fallback never satisfies protected T4, and GPT-6
 Astra exclusivity is unchanged. Docs/setup only; no scripts, tests, workflows, hooks, validators or dependencies
 touched.*
+
+*v6.0 final known-blocker closeout (2026-09-14): closed `ORDINARY_AUDIT_SOL_AUTHORED_DEADLOCK`. Section 24.4
+now decides independence eligibility before operational availability: Codex GPT-5.6 Sol audits only a
+candidate it neither implemented nor repaired, and only when available and runtime-proven; a Sol-authored
+candidate goes to the ChatGPT controller fallback; a ChatGPT- or ChatGPT Work-authored candidate goes to Sol;
+with no independent eligible reviewer the gate stops with proof. Docs only.*

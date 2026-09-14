@@ -45,9 +45,10 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   acceptance — do not count); never issue a specialist sixth; never hide specialist work inside governance; apply
   `FIXED_POINT_STOP`; open a new attempt only through a `TASK_INTENT=ARCHITECTURE` `ROOT_CAUSE_ESCAPE` decision.
 - **Ordinary-audit fallback:** only under every section 24.4 `ORDINARY_INDEPENDENT_AUDIT_FALLBACK` condition —
-  Codex Sol unavailable, quota-blocked or stopped by runtime proof before substantive audit; reason recorded; the
-  controller neither implemented nor repaired the candidate; fresh pinned-head READ_ONLY; complete blocker
-  collection with evidence; zero mutation; never protected T4.
+  Codex Sol independence-ineligible (it implemented or repaired the candidate), unavailable, quota-blocked or
+  stopped by runtime proof before substantive audit; reason recorded; the controller, including through ChatGPT
+  Work, neither implemented nor repaired the candidate; fresh pinned-head READ_ONLY; complete blocker collection
+  with evidence; zero mutation; never protected T4. No independent eligible reviewer → `STOP_WITH_PROOF`.
 - **Never:** product implementation; the protected Class-C audit; an ordinary audit outside that fallback or of
   its own implementation or repair; a substitute for local tests; memory as repository state; GitHub mutation
   without an exact human action authorization; merge authority.
@@ -83,8 +84,8 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 - **Best tasks:** repo navigation, code search, dependency tracing, clear-spec implementation where routed,
   mechanical refactor, test generation, static inspection, debugging, CI analysis, and the PRIMARY ordinary
   independent large-codebase review — including the exhaustive audit and the one whole-contract re-audit.
-- **Rules:** host label `Ultra` recorded literally; never audits work it implemented in the same context; an
-  ordinary Sol review never satisfies protected Class C.
+- **Rules:** host label `Ultra` recorded literally; never audits a candidate it implemented or repaired (the
+  controller fallback covers that case); an ordinary Sol review never satisfies protected Class C.
 
 ### 2.6 GPT-6 Astra — protected T4 terminal audit
 

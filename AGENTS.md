@@ -80,10 +80,12 @@ post-merge verification.
   merge-readiness judgement, the human authorization request, an authorized mechanical merge, post-merge
   verification and fresh-chat acceptance — consumes none, and specialist work never hides inside it.
 - Every candidate gets one exhaustive independent audit that returns the COMPLETE current P1/P2 set in one
-  pass: Codex GPT-5.6 Sol as PRIMARY; the ChatGPT controller only as the narrow section 24.4 fallback (Sol
-  unavailable, quota-blocked or stopped by runtime proof before substantive audit, the reason recorded, and the
-  controller neither implemented nor repaired the candidate). No model audits its own work. Protected work and
-  control-plane changes also get the GPT-6 Astra terminal audit.
+  pass, with independence eligibility decided before availability (section 24.4): Codex GPT-5.6 Sol as PRIMARY
+  when it neither implemented nor repaired the candidate and is available and runtime-proven; otherwise the
+  ChatGPT controller as the narrow fallback, for a recorded reason and only when it neither implemented nor
+  repaired the candidate (ChatGPT Work's work counts as its own); with no independent eligible reviewer, stop with
+  proof. No model audits its own work. Protected work and control-plane changes also get the GPT-6 Astra terminal
+  audit.
 - At most ONE consolidated repair per candidate lifecycle — the complete blocker set, by root cause — then
   exactly ONE whole-contract re-audit. `FIXED_POINT_STOP`: any genuine P1/P2 that remains after it, or that
   the protected terminal audit finds, rejects and freezes the candidate; no further mutation on it.
