@@ -35,12 +35,13 @@ genuinely cannot reconstruct material operational state.
 - **ChatGPT controller** — controller and router, architecture adjudication, prompt compiler, evidence
   judge, live GitHub verification (connector/`gh`), contradiction detection, merge-readiness judgement, and
   exactly one next action; read-only first (`CONTROLLER_READONLY_FIRST_POLICY`, section 24.10). Never product
-  implementation, never an independent audit, never merge authority.
+  implementation, never merge authority, and never an independent audit except the narrow ordinary-audit
+  fallback of section 24.4 on a candidate it neither implemented nor repaired.
 - **Claude Opus 5** (`claude-opus-5`) — primary deep semantic IMPLEMENTATION and REPAIR.
 - **Codex GPT-5.6 Sol** — primary repo-native engineering accelerator (repo navigation, code search,
   dependency tracing, clear-spec implementation where routed, mechanical refactor, test generation, static
-  inspection, debugging, CI analysis) and ordinary independent review, including large-codebase review. An
-  ordinary Sol review never satisfies protected Class C.
+  inspection, debugging, CI analysis) and the PRIMARY ordinary independent reviewer, including large-codebase
+  review. An ordinary Sol review never satisfies protected Class C.
 - **GPT-6 Astra** — protected T4 `CLASS_C_CROSS_CONTRACT`: the READ_ONLY terminal frontier audit. Astra
   unavailability never reassigns protected T4; that gate waits.
 - **ChatGPT Work** — substantial multi-step execution when a cloud browser/computer, many files, apps or
@@ -59,10 +60,13 @@ GPT-6 Astra `Light` / `Medium` / `High` / `Extra High` / `Ultra`.
 Every serious routed task reports `MODEL_REQUESTED`, `MODEL_ID_REQUIRED`, `MODEL_ACTUAL`,
 `MODEL_EFFORT_REQUESTED`, `MODEL_EFFORT_ACTUAL`, `MODEL_FALLBACK`, `THINKING_ACTUAL`,
 `MODEL_IDENTITY_EVIDENCE` and `MODEL_EFFORT_EVIDENCE` (section 24.12), plus `SETUP_REQUESTED` /
-`SETUP_ACTUAL` / `SETUP_FILES_READ` / `SETUP_GAPS`. Configuration, defaults and caches are not execution
-proof; unobservable telemetry is `UNKNOWN`; a wrong model, a prohibited fallback or disabled required thinking
-stops with proof. Model strength is never proof; no model bypasses tests, terminal CI, valid P1/P2 blockers,
-explicit human merge authorization, or post-merge verification.
+`SETUP_ACTUAL` / `SETUP_FILES_READ` / `SETUP_GAPS`. Runtime proof fails closed (`FAIL_CLOSED_RUNTIME_PROOF`):
+`MODEL_ACTUAL` must positively equal `MODEL_ID_REQUIRED` on execution evidence and required thinking must be
+positively `ENABLED`; `UNKNOWN`, a mismatch, disabled required thinking, a known prohibited fallback, or a
+selector, configuration, default, cache or request text offered as the only proof stops with proof. Only
+`MODEL_EFFORT_ACTUAL` may stay `UNKNOWN` when the host exposes no effort telemetry. Model strength is never
+proof; no model bypasses tests, terminal CI, valid P1/P2 blockers, explicit human merge authorization, or
+post-merge verification.
 
 ### Audit, sizing and the PR lifecycle (sections 24.4 and 24.8)
 
@@ -70,10 +74,16 @@ explicit human merge authorization, or post-merge verification.
   module-count ceiling and no small-PR preference. Split only for unrelated contracts, different
   authorization, a protected boundary that cannot be audited together, inability to validate the whole
   result, or a real context/correctness risk.
-- Prompt budget per PR lifecycle: about **3** meaningful prompts normally and **5** at most — there is no
-  sixth. Controller GitHub reads and status polling are not meaningful prompts and never reset the count.
-- Every candidate gets one exhaustive independent audit (Codex GPT-5.6 Sol) that returns the COMPLETE current
-  P1/P2 set in one pass; protected work and control-plane changes also get the GPT-6 Astra terminal audit.
+- Prompt budget per PR lifecycle: about **3** specialist prompts normally and **5** at most — there is no
+  specialist sixth. A specialist prompt is an implementation, independent audit, repair, whole-contract re-audit
+  or protected terminal audit. Controller governance — state proof, CI/status reads, evidence adjudication,
+  merge-readiness judgement, the human authorization request, an authorized mechanical merge, post-merge
+  verification and fresh-chat acceptance — consumes none, and specialist work never hides inside it.
+- Every candidate gets one exhaustive independent audit that returns the COMPLETE current P1/P2 set in one
+  pass: Codex GPT-5.6 Sol as PRIMARY; the ChatGPT controller only as the narrow section 24.4 fallback (Sol
+  unavailable, quota-blocked or stopped by runtime proof before substantive audit, the reason recorded, and the
+  controller neither implemented nor repaired the candidate). No model audits its own work. Protected work and
+  control-plane changes also get the GPT-6 Astra terminal audit.
 - At most ONE consolidated repair per candidate lifecycle — the complete blocker set, by root cause — then
   exactly ONE whole-contract re-audit. `FIXED_POINT_STOP`: any genuine P1/P2 that remains after it, or that
   the protected terminal audit finds, rejects and freezes the candidate; no further mutation on it.

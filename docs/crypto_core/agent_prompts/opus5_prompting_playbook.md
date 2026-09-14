@@ -17,15 +17,17 @@ grants merge authority, or satisfies an independent or protected audit.
 - **Runtime proof before mutation.** Report `MODEL_REQUESTED`, `MODEL_ID_REQUIRED`, `MODEL_ACTUAL`,
   `MODEL_EFFORT_REQUESTED`, `MODEL_EFFORT_ACTUAL`, `MODEL_FALLBACK`, `THINKING_ACTUAL`,
   `MODEL_IDENTITY_EVIDENCE` and `MODEL_EFFORT_EVIDENCE` from session evidence (runtime metadata, `/model`,
-  `/status`, or an equivalent diagnostic). A settings file, default, cache or the bare alias `opus` is not
-  execution proof. Unobservable telemetry is `UNKNOWN`, never restated from the request.
+  `/status`, or an equivalent diagnostic). A selector, settings file, default, cache, request text or the bare
+  alias `opus` is not execution proof. `MODEL_ACTUAL` must positively be `claude-opus-5` and `THINKING_ACTUAL`
+  positively `ENABLED`; either one `UNKNOWN` stops. Only `MODEL_EFFORT_ACTUAL` may be `UNKNOWN` when the host
+  exposes no effort telemetry, and it is never restated from the request.
 - **Literal host label.** The Opus 5 host effort label is `xhighultracode`. It is recorded verbatim, never
   decomposed, never mapped to an API effort enum, and never equated with `max` or with another model's label.
 - **Thinking.** Adaptive thinking stays enabled for implementation and repair. Control cost through scope and
   context, never by suppressing reasoning.
-- **Stops.** A wrong model, a prohibited fallback, or disabled required thinking is `STOP_WITH_PROOF` before
-  mutation. A human may waive an effort mismatch for one task; the waiver and the true actual effort are both
-  recorded.
+- **Stops.** A wrong or `UNKNOWN` model, `UNKNOWN` or disabled required thinking, or a known prohibited fallback
+  is `STOP_WITH_PROOF` before mutation. A human may waive an effort mismatch for one task; the waiver and the
+  true actual effort are both recorded.
 - **De-escalation.** Effort follows the work: when the remaining work is narrower than expected, the controller
   routes it to a lighter setting or lane rather than finishing at the original one.
 
@@ -76,7 +78,8 @@ follows the section 24.6 serious prompt shape:
   parallelizable investigation; only one agent mutates a branch, and the primary agent validates every
   subagent conclusion.
 - **Independence:** a same-model self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`; ordinary independent review
-  is Codex GPT-5.6 Sol and the protected terminal audit is GPT-6 Astra.
+  is Codex GPT-5.6 Sol as PRIMARY (the ChatGPT controller only as the section 24.4 fallback) and the protected
+  terminal audit is GPT-6 Astra.
 
 ---
 
@@ -96,7 +99,7 @@ STATE_PIN: main @ <sha>; clean worktree; <n> open PRs; branch <name> absent
 MODEL_RUNTIME_PROOF: MODEL_REQUESTED Claude Opus 5 | MODEL_ID_REQUIRED claude-opus-5 |
   MODEL_EFFORT_REQUESTED <literal host label> | MODEL_FALLBACK NONE | THINKING ENABLED |
   report MODEL_ACTUAL, MODEL_EFFORT_ACTUAL, THINKING_ACTUAL, MODEL_IDENTITY_EVIDENCE, MODEL_EFFORT_EVIDENCE
-  before mutation (UNKNOWN when not observable)
+  before mutation; MODEL_ACTUAL or THINKING_ACTUAL UNKNOWN -> STOP_WITH_PROOF; MODEL_EFFORT_ACTUAL may be UNKNOWN
 ALLOWED_FILES: <exact files>
 INVARIANTS: <fail-closed / digest / paper-only / determinism properties>
 BLOCKER_INVENTORY: <inherited blocker identities, or NONE>
@@ -170,6 +173,7 @@ satisfies; post-merge verification precedes the next action; crypto_core scope o
 API, credentials, orders, scheduler/auto-loop, shadow/live execution, or capital mutation.
 
 **Temporary availability is never durable routing.** Model quota, rate limits or short-term unavailability are
-transient operational facts: record them in the controller handoff for that one task. Never write a temporary
+transient operational facts: record them in the controller handoff for that one task, where a Codex GPT-5.6 Sol
+outage may justify the section 24.4 ordinary-audit fallback for that task only. Never write a temporary
 availability state into this playbook or into `agent_workflow.md`, and never infer from a quota event that a
 lane has been retired. When GPT-6 Astra is unavailable, the protected gate waits.

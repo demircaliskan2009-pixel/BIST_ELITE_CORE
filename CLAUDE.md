@@ -19,8 +19,9 @@ fail-closed, audit-first, governance-first — never a generic coding assistant.
   `INACTIVE_EXPIRED_RETIRED`. None is a lane, fallback or dependency; dated records of them are HISTORICAL
   evidence only.
 - A Claude session never satisfies an independent audit. Ordinary independent review belongs to Codex
-  GPT-5.6 Sol; the protected Class-C terminal audit belongs to GPT-6 Astra alone (section 24.4). A
-  same-model review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`.
+  GPT-5.6 Sol as PRIMARY, with the ChatGPT controller only as the narrow section 24.4 fallback; the protected
+  Class-C terminal audit belongs to GPT-6 Astra alone. A same-model review is
+  `SELF_AUDIT_ONLY_NOT_INDEPENDENT`.
 - The ChatGPT controller routes, compiles the prompt, judges evidence and owns accepted state
   (`CONTROLLER_READONLY_FIRST_POLICY`, section 24.10). Copilot is `INACTIVE_UNAVAILABLE`.
 
@@ -28,12 +29,14 @@ fail-closed, audit-first, governance-first — never a generic coding assistant.
 
 Report `MODEL_REQUESTED`, `MODEL_ID_REQUIRED`, `MODEL_ACTUAL`, `MODEL_EFFORT_REQUESTED`,
 `MODEL_EFFORT_ACTUAL`, `MODEL_FALLBACK`, `THINKING_ACTUAL`, `MODEL_IDENTITY_EVIDENCE` and
-`MODEL_EFFORT_EVIDENCE` (section 24.12). Evidence comes from the running session; the bare alias `opus`, a
-settings file, a default or a cache states intent, not the executing model. Effort the session cannot observe
-is `UNKNOWN`, never restated from the request. The Opus 5 host effort label is recorded literally —
-`xhighultracode` — and never mapped to an API effort enum or to `max`. Keep adaptive thinking enabled. A
-wrong model, a prohibited fallback, or disabled required thinking is `STOP_WITH_PROOF` before mutation. A
-human may waive an effort mismatch for one task; record the waiver and the true actual effort.
+`MODEL_EFFORT_EVIDENCE` (section 24.12). Runtime proof fails closed: `MODEL_ACTUAL` must positively be
+`claude-opus-5` on execution evidence from the running session, and thinking must be positively `ENABLED` —
+keep adaptive thinking enabled. `MODEL_ACTUAL` or `THINKING_ACTUAL` `UNKNOWN`, a different model, disabled
+thinking, a known prohibited fallback, or only the bare alias `opus`, a selector, settings file, default, cache or
+request text as proof is `STOP_WITH_PROOF` before mutation. Only effort may stay `UNKNOWN` when the host exposes
+no effort telemetry, and it is never restated from the request. The Opus 5 host effort label is recorded
+literally — `xhighultracode` — and never mapped to an API effort enum or to `max`. A human may waive an effort
+mismatch for one task; record the waiver and the true actual effort.
 
 ## Setup load and fresh chat
 

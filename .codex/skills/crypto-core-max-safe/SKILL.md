@@ -15,8 +15,12 @@ engineering — paper-first, deterministic, fail-closed, audit-first — never g
 
 - **Codex GPT-5.6 Sol** is the primary repo-native engineering accelerator — repo navigation, code search,
   dependency tracing, clear-spec implementation where routed, mechanical refactor, test generation, static
-  inspection, debugging, CI analysis — and the ordinary independent reviewer, including the exhaustive
+  inspection, debugging, CI analysis — and the PRIMARY ordinary independent reviewer, including the exhaustive
   whole-contract audit and re-audit. Its host label `Ultra` is recorded literally.
+- When Sol is unavailable, quota-blocked, or stops on runtime proof before substantive audit, that reason is
+  recorded for the task and the ChatGPT controller may run the narrow `ORDINARY_INDEPENDENT_AUDIT_FALLBACK`
+  (section 24.4) under its independence conditions. A Sol session that cannot prove its identity or required
+  thinking stops before auditing and delivers no verdict.
 - An ordinary Sol review never satisfies protected Class C. Protected T4 `CLASS_C_CROSS_CONTRACT` is the GPT-6
   Astra READ_ONLY terminal audit alone; when Astra is unavailable that gate waits and is never reassigned to
   Sol.
@@ -28,8 +32,11 @@ engineering — paper-first, deterministic, fail-closed, audit-first — never g
 Every serious prompt/report carries the runtime-proof block (section 24.12): `MODEL_REQUESTED`,
 `MODEL_ID_REQUIRED`, `MODEL_ACTUAL`, `MODEL_EFFORT_REQUESTED`, `MODEL_EFFORT_ACTUAL`, `MODEL_FALLBACK`,
 `THINKING_ACTUAL`, `MODEL_IDENTITY_EVIDENCE`, `MODEL_EFFORT_EVIDENCE`, plus `SETUP_REQUESTED` /
-`SETUP_ACTUAL` / `SETUP_FILES_READ` / `SETUP_GAPS`. Configuration is not execution proof; unobservable
-telemetry is `UNKNOWN`; a wrong model or prohibited fallback stops. Never claim unavailable-model quality.
+`SETUP_ACTUAL` / `SETUP_FILES_READ` / `SETUP_GAPS`. Runtime proof fails closed: `MODEL_ACTUAL` must
+positively equal `MODEL_ID_REQUIRED` and required thinking must be positively `ENABLED` on execution evidence;
+`UNKNOWN`, a mismatch, disabled required thinking, a known prohibited fallback, or selector, configuration,
+default, cache or request text alone stops before any audit or mutation. Only effort may stay `UNKNOWN`. Never
+claim unavailable-model quality.
 
 ## Controller input
 
@@ -76,7 +83,8 @@ another writer, never as the reviewer of the same work, and never merge.
   changes prove exact scope and run `git diff --check` unless an executable/config surface changed.
 - Stage exact paths only. Never push directly to `main`, force-push, self-approve, or merge without exact
   per-PR, exact-head human authorization.
-- Budget (section 24.8): about 3 meaningful prompts per PR, 5 at most; status reads and polling do not count.
+- Budget (section 24.8): about 3 specialist prompts per PR, 5 at most; controller governance (state proof,
+  status and CI reads, adjudication, merge closeout, post-merge verification) consumes none.
 
 ## Report
 

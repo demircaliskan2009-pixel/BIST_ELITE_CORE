@@ -30,9 +30,9 @@ wins.
 
 | Council member | Responsibility |
 |---|---|
-| **ChatGPT controller** | Controller and router, architecture adjudication, prompt compiler, evidence judge, live GitHub verification, contradiction detection, merge-readiness judgement, exactly one next action. |
+| **ChatGPT controller** | Controller and router, architecture adjudication, prompt compiler, evidence judge, live GitHub verification, contradiction detection, merge-readiness judgement, exactly one next action; an ordinary independent audit only as the narrow section 24.4 fallback. |
 | **Claude Opus 5** (`claude-opus-5`) | Primary deep semantic implementation and repair. |
-| **Codex GPT-5.6 Sol** | Primary repo-native engineering accelerator and ordinary independent review; never protected Class C. |
+| **Codex GPT-5.6 Sol** | Primary repo-native engineering accelerator and the PRIMARY ordinary independent reviewer; never protected Class C. |
 | **GPT-6 Astra** | Protected T4 `CLASS_C_CROSS_CONTRACT` READ_ONLY terminal frontier audit. |
 | **ChatGPT Work** | Substantial multi-step execution when a cloud browser/computer, many files, apps or evidence collection materially help; never governance authority. |
 | **Deep Research** | Current load-bearing external facts only; advisory. |
@@ -42,9 +42,9 @@ Every serious prompt/report carries the runtime-proof block of section 24.12. Mo
 ### 2a. Independent audit rule
 
 An implementation cannot self-satisfy the independent audit gate in the same context. Implementation and
-audit are separate fresh-context, pinned-head tasks (section 24.4). Current valid P1/P2 threads block.
-Outdated threads do not block code, but any resolution needs explicit guarded closeout; human threads are
-never self-resolved.
+audit are separate fresh-context, pinned-head tasks (section 24.4), and no model audits its own implementation
+or repair. Current valid P1/P2 threads block. Outdated threads do not block code, but any resolution needs
+explicit guarded closeout; human threads are never self-resolved.
 
 ## 3. Hard Rules
 
@@ -89,14 +89,15 @@ The lifecycle, prompt budget and fixed-point stop are section 24.8. The sequence
    expected `main` HEAD, "open PRs: none").
 2. The routed implementer runs the **Implementation Loop** (§5) → opens one PR → natural CI to terminal →
    handoff. No merge.
-3. One exhaustive fresh-context independent audit (Codex GPT-5.6 Sol) returns the complete P1/P2 set (§8,
-   section 24.4).
+3. One exhaustive fresh-context independent audit — Codex GPT-5.6 Sol, or the ChatGPT controller only under the
+   section 24.4 fallback conditions — returns the complete P1/P2 set (§8).
 4. If it found P1/P2: at most ONE consolidated repair (§6) on the same branch, then exactly ONE whole-contract
    re-audit. Any genuine P1/P2 left → `FIXED_POINT_STOP`: the candidate is rejected and frozen.
 5. Protected or control-plane work: the GPT-6 Astra terminal audit; a genuine P1/P2 there also rejects the
    candidate.
-6. The controller verifies live state; the human gives exact-head merge authorization; the **Closeout/Merge
-   Loop** (§7) runs only from that authorization.
+6. Controller governance closeout, outside the specialist prompt budget (section 24.8): the controller verifies
+   live state; the human gives exact-head merge authorization; the **Closeout/Merge Loop** (§7) runs only from
+   that authorization.
 7. **Post-Merge Verification** (§12), then the next action (§15).
 
 ## 5. Implementation Loop
@@ -709,9 +710,9 @@ restates it as authority. The council is closed: a model or tool not listed here
 
 | Council member | Active role | Never |
 |---|---|---|
-| **ChatGPT controller** | Controller and router; architecture adjudication; prompt compiler (24.6); evidence judge; live GitHub verification through the connector/`gh`; contradiction detection; merge-readiness judgement; exactly one next action | Product implementation; an independent audit; a substitute for local tests or unverified repository state; GitHub mutation without an exact human action authorization; merge authority |
+| **ChatGPT controller** | Controller and router; architecture adjudication; prompt compiler (24.6); evidence judge; live GitHub verification through the connector/`gh`; contradiction detection; merge-readiness judgement; exactly one next action; an ordinary independent audit only as the narrow `ORDINARY_INDEPENDENT_AUDIT_FALLBACK` (24.4) | Product implementation; any independent audit outside that fallback; auditing a candidate it implemented or repaired; the protected Class-C audit; a substitute for local tests or unverified repository state; GitHub mutation without an exact human action authorization; merge authority |
 | **Claude Opus 5** (`claude-opus-5`) | Primary deep semantic IMPLEMENTATION and REPAIR, including the single consolidated repair of a candidate (24.8) | Its own independent audit; the protected Class-C audit |
-| **Codex GPT-5.6 Sol** | Primary repo-native engineering accelerator — repo navigation, code search, dependency tracing, clear-spec implementation where routed, mechanical refactor, test generation, static inspection, debugging, CI analysis — and ordinary independent review, including the exhaustive audit and whole-contract re-audit of a candidate | Satisfying protected Class C (an ordinary Sol review is never a Class-C audit); auditing work it implemented in the same context |
+| **Codex GPT-5.6 Sol** | Primary repo-native engineering accelerator — repo navigation, code search, dependency tracing, clear-spec implementation where routed, mechanical refactor, test generation, static inspection, debugging, CI analysis — and the PRIMARY ordinary independent reviewer (24.4), including the exhaustive audit and whole-contract re-audit of a candidate | Satisfying protected Class C (an ordinary Sol review is never a Class-C audit); auditing work it implemented in the same context |
 | **GPT-6 Astra** | Protected T4 `CLASS_C_CROSS_CONTRACT`: the READ_ONLY terminal frontier audit (24.4). Default protected effort `Extra High` or `Ultra` per controller task; `Ultra` for setup/control-plane terminal audits | Mutation; ordinary review; any reassignment of protected T4 to another lane |
 | **ChatGPT Work** | Substantial multi-step execution when a cloud browser/computer, many files, apps or evidence collection materially help, under the same prompt shape (24.6) and gates | Governance authority; accepted state; merge authority |
 | **Deep Research** | Current load-bearing external facts only (24.9) | Repository/PR/CI state; implementation; mutation; gate waivers |
@@ -734,8 +735,20 @@ any of them is a `MATERIAL_CAPABILITY_CHANGE` (24.13).
 
 ### 24.4 Independent audit, protected Class C and complete blocker collection
 
-- `ORDINARY_INDEPENDENT_AUDIT` — Codex GPT-5.6 Sol, fresh context, exact pinned head, READ_ONLY, judging the
-  declared semantic contract of the candidate. Every PR candidate gets one before any terminal gate.
+- `ORDINARY_INDEPENDENT_AUDIT_PRIMARY` — Codex GPT-5.6 Sol: fresh context, exact pinned head, READ_ONLY, judging
+  the declared semantic contract of the candidate. Every PR candidate gets one ordinary independent audit (and,
+  after the one consolidated repair, one whole-contract re-audit) before any terminal gate.
+- `ORDINARY_INDEPENDENT_AUDIT_FALLBACK` — the ChatGPT controller, as a resilience mechanism and never as default
+  routing. It is legal only when ALL hold: (1) Codex GPT-5.6 Sol is unavailable, quota-blocked, or stops on
+  runtime proof (24.12) before any substantive audit; (2) that reason is recorded for this task in its handoff,
+  never as durable model state; (3) the ChatGPT controller, including through ChatGPT Work, neither implemented nor
+  repaired the candidate; (4) the audit is fresh-context, pinned to the exact head and READ_ONLY; (5) it meets the
+  same `COMPLETE_BLOCKER_COLLECTION` standard; (6) it returns P1/P2/P3 with concrete evidence; (7) it performs zero
+  repository or GitHub mutation; (8) it never satisfies protected T4. When ChatGPT or ChatGPT Work implemented or
+  repaired the candidate the fallback does not exist for it: the ordinary gate waits for Codex GPT-5.6 Sol or stops
+  with proof, and no other reviewer lane is added. Codex GPT-5.6 Sol stays PRIMARY.
+- `NO_SELF_AUDIT` — no model audits its own implementation or repair as independent evidence. A Claude
+  implementer's self-review, like any same-model review of its own work, is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`.
 - `PROTECTED_CLASS_C` — the GPT-6 Astra terminal audit, fresh context, exact pinned head, READ_ONLY. Required
   when the candidate touches any protected trigger: digest recomputation/consumption, expected-digest anchors,
   canonical serialization, reseal/provenance, mutable/stateful/TOCTOU behavior, denominator or record-set
@@ -762,9 +775,11 @@ one next safe action. Reports are claims until the controller verifies them, and
 `CONTROLLER_ACCEPTED_STATE`. Never vote or average model answers: resolve a disputed claim with controlling
 evidence (`LIVE_STATE_PRECEDENCE`, 24.7); an unresolved load-bearing dispute stays `UNKNOWN` and blocks merge.
 
-A merge requires, each freshly proven: the independent audit clean; the protected GPT-6 Astra terminal audit
-clean when 24.4 requires it; exact-head CI terminal green; controller live-state proof; and the human's
-exact-head merge authorization. Then standard merge, post-merge verification (section 12) and the next action.
+A merge requires, each freshly proven on the exact head: the ordinary independent audit clean (primary or the
+24.4 fallback, after the one re-audit when a repair ran); the protected GPT-6 Astra terminal audit clean when 24.4
+requires it; exact-head CI terminal green; controller live-state proof; and the human's exact-head merge
+authorization. Then standard merge, post-merge verification (section 12) and the next action. These closeout
+steps are controller governance and consume no specialist prompt (24.8).
 
 ### 24.6 SERIOUS_PROMPT_COMPILER and AGENT_OS_HANDOFF_V1
 
@@ -783,8 +798,9 @@ polling need no serious prompt.
 
 `AGENT_OS_HANDOFF_V1` — every serious task ends with one handoff: result; the runtime-proof block (24.12);
 setup fields (24.7); state proof (base, branch, head, PR, open PRs); files changed; validation and CI with exact
-results; review threads; P1/P2/P3 findings or the self-audit label; the meaningful-prompt count of the PR
-lifecycle (24.8); and exactly one next safe action. Missing facts are `UNKNOWN`, never invented; failure tails
+results; review threads; P1/P2/P3 findings or the self-audit label; for an ordinary audit, whether it ran as
+PRIMARY or FALLBACK with the recorded fallback reason (24.4); the specialist prompt count of the PR lifecycle
+(24.8); and exactly one next safe action. Missing facts are `UNKNOWN`, never invented; failure tails
 only; a handoff never authorizes mutation.
 
 ### 24.7 SETUP_LOAD_CONTRACT_V1, FRESH_CHAT_BOOTSTRAP and LIVE_STATE_PRECEDENCE
@@ -817,18 +833,35 @@ genuinely required, and its validation. There is no file-count, LOC or module-co
 for small PRs. Split only for: unrelated contracts; different authorization; a protected boundary that cannot
 be audited together; inability to validate the whole result; or a real context/correctness risk.
 
-`MEANINGFUL_PROMPT` — a model execution that materially implements, repairs, independently audits, or performs
-terminal protected audit or closeout judgement. Controller GitHub reads and status polling are not meaningful
-prompts; they neither reset nor pad the count, and no relabelling, splitting or re-routing of the work resets
-it.
+`MEANINGFUL_PROMPT` — a SPECIALIST model execution that materially implements, independently audits, repairs,
+re-audits the whole contract, or performs the protected terminal audit. Only specialist executions consume the
+prompt budget. An execution that stops on runtime proof (24.12) before any substantive work consumed no slot; an
+execution that did substantive work consumed its slot whatever its verdict. No relabelling, splitting or
+re-routing resets the count.
 
-`PROMPT_BUDGET` — normal target about **3** meaningful prompts per PR; hard maximum **5** per PR lifecycle.
+`CONTROLLER_GOVERNANCE_OPERATIONS` never consume the specialist budget: live repository/GitHub state proof; CI,
+status and check reads; adjudication of executor and auditor evidence; contradiction synthesis; merge-readiness
+judgement; asking the human for exact-head merge authorization; an authorized mechanical merge; post-merge
+verification; and fresh-chat acceptance. A governance operation never contains or dispatches an implementation,
+repair or audit execution, and specialist work relabelled as "controller closeout" is still specialist work that
+counts. The controller's own ordinary-audit fallback (24.4) is specialist work: it fills, and consumes, an audit
+slot.
 
-- Normal path: 1 `IMPLEMENTATION` → 2 `EXHAUSTIVE_INDEPENDENT_AUDIT` → 3 closeout judgement, or the protected
-  terminal audit when 24.4 requires it.
-- Repair path: 1 `IMPLEMENTATION` → 2 `EXHAUSTIVE_INDEPENDENT_AUDIT` → 3 `ONE_CONSOLIDATED_REPAIR` →
-  4 `ONE_WHOLE_CONTRACT_REAUDIT` → 5 `TERMINAL_CLOSEOUT` (the protected terminal audit when 24.4 requires it).
-- There is no prompt 6.
+`PROMPT_BUDGET` — normal target about **3** specialist prompts per PR; hard maximum **5** per PR lifecycle.
+
+- Clean non-protected: 1 `IMPLEMENTATION` → 2 `EXHAUSTIVE_INDEPENDENT_AUDIT` → 3 a specialist terminal candidate
+  decision, only when one is actually required.
+- Clean protected: 1 `IMPLEMENTATION` → 2 `EXHAUSTIVE_INDEPENDENT_AUDIT` → 3 GPT-6 Astra terminal audit.
+- Repaired: 1 `IMPLEMENTATION` → 2 `EXHAUSTIVE_INDEPENDENT_AUDIT` → 3 `ONE_CONSOLIDATED_REPAIR` →
+  4 `ONE_WHOLE_CONTRACT_REAUDIT` → 5 GPT-6 Astra terminal audit when 24.4 requires it (a repaired non-protected
+  candidate ends at 4, or at 5 only when a specialist terminal decision is actually required).
+- After the final specialist prompt, controller governance closeout (24.5) completes the lifecycle outside the
+  count. There is no specialist prompt 6.
+- Waiting consumes nothing: CI still pending after the terminal audit, a delayed human authorization, post-merge
+  verification and fresh-chat acceptance are governance. `VERDICTS_BIND_EXACT_HEAD` — every audit verdict and CI
+  result binds the exact head it judged. After the implementation, only the one consolidated repair may move the
+  head, and the section-3 authorized empty re-trigger commit keeps the verdicts only when its tree is identical; any
+  other head movement voids the verdicts bound to the old head and stops the candidate (`REJECT/FREEZE`).
 
 `ONE_CONSOLIDATED_REPAIR` — at most one repair per candidate lifecycle. It repairs the COMPLETE audit blocker
 set by root cause in one change. No micro-patching, no finding-by-finding repair, no repair → audit → repair
@@ -870,8 +903,9 @@ subordinate to this section.
 The ChatGPT controller works read-only first: it proves live state, verifies every executor and auditor claim
 against evidence, detects contradictions and stale state, compiles the next serious prompt, and judges merge
 readiness. It never replaces local tests, never treats memory as repository state, never implements product
-code, never satisfies the ordinary independent audit or the protected Class-C audit, never mutates GitHub
-without an exact human action authorization, and never grants merge, readiness, live or capital authority.
+code, never satisfies the protected Class-C audit, performs an ordinary independent audit only as the narrow
+`ORDINARY_INDEPENDENT_AUDIT_FALLBACK` of 24.4, never mutates GitHub without an exact human action
+authorization, and never grants merge, readiness, live or capital authority.
 Claude Fable 5 stays `INACTIVE_EXPIRED_RETIRED`: no active surface routes to it.
 
 ### 24.11 LIVE_STATE_POLICY and non-regression
@@ -886,23 +920,41 @@ BIST/live/private-API/order/scheduler/readiness/shadow/capital surface without s
 
 ### 24.12 RUNTIME_PROOF and effort
 
-Every serious routed task reports, before mutation or audit:
+Every serious routed execution — implementation, repair, audit, re-audit, protected terminal audit — reports,
+before mutation or audit:
 
 ```text
 MODEL_REQUESTED / MODEL_ID_REQUIRED / MODEL_ACTUAL / MODEL_EFFORT_REQUESTED / MODEL_EFFORT_ACTUAL /
 MODEL_FALLBACK / THINKING_ACTUAL / MODEL_IDENTITY_EVIDENCE / MODEL_EFFORT_EVIDENCE
 ```
 
-- Evidence is execution evidence from the running session (runtime metadata, `/model`, `/status` or an
-  equivalent diagnostic). A configuration file, default, cache or alias states intent, never the executing
-  model or effort.
-- Telemetry that is not observable is `UNKNOWN` — never inferred and never restated from the request.
-- A wrong model, a prohibited fallback, or disabled thinking where thinking is required → `STOP_WITH_PROOF`
-  before mutation. A human may waive an effort mismatch for one task; the waiver and the true actual effort are
-  recorded, and the actual is never restated as the requested value.
-- Effort is the host setting, recorded under `HOST_UI_LABELS_ARE_LITERAL` (24.3) and chosen from the work
-  itself; de-escalate as soon as the remaining work is simpler. Adaptive thinking stays enabled for
-  implementation, repair and audit work.
+`FAIL_CLOSED_RUNTIME_PROOF` — model identity and required thinking are load-bearing: they are proven positively,
+or the execution stops before any mutation or audit. Effort telemetry is not load-bearing.
+
+| Runtime fact | Verdict |
+|---|---|
+| `MODEL_ACTUAL` equals `MODEL_ID_REQUIRED` on execution evidence; thinking required and positively `ENABLED`; effort known | PASS |
+| As above, with `MODEL_EFFORT_ACTUAL` = `UNKNOWN` because the host exposes no execution-effort telemetry | PASS |
+| `MODEL_ACTUAL` = `UNKNOWN` | `STOP_WITH_PROOF` |
+| `MODEL_ACTUAL` differs from `MODEL_ID_REQUIRED` | `STOP_WITH_PROOF` |
+| Identity shown only by a selector, configuration, default, cache, alias or request text | `STOP_WITH_PROOF` |
+| Thinking required and `THINKING_ACTUAL` = `UNKNOWN` | `STOP_WITH_PROOF` |
+| Thinking required and `THINKING_ACTUAL` = `DISABLED` | `STOP_WITH_PROOF` |
+| A known prohibited fallback | `STOP_WITH_PROOF` |
+
+- Execution evidence is produced by the running session itself: runtime metadata naming the exact model,
+  `/model`, `/status` or an equivalent diagnostic. A selector, configuration file, default, cache, alias or
+  request text states intent, never the executing model, thinking mode or effort.
+- Implementation, repair and audit executions require thinking (`THINKING_REQUIRED=ENABLED`, stated in the
+  serious prompt's `MODEL_RUNTIME_PROOF`).
+- When the exact required `MODEL_ACTUAL` is independently proven on execution evidence, the absence of a separate
+  fallback telemetry field is not a second proof requirement; a known prohibited fallback still stops.
+- `MODEL_EFFORT_ACTUAL` may be `UNKNOWN` when exact execution-effort telemetry is unavailable. That is
+  non-blocking once identity and required thinking are proven, and the actual is never restated from the request.
+  Effort and `HOST_SETTING_RAW` are recorded literally under `HOST_UI_LABELS_ARE_LITERAL` (24.3) and never mapped
+  to an API effort enum. A human may waive an effort mismatch for one task; the waiver and the true actual effort
+  are recorded. Identity and required thinking have no waiver: a different model is a different routed task.
+- Effort is chosen from the work itself; de-escalate as soon as the remaining work is simpler.
 - Subagents default to 0 (at most 2 read-only, for genuinely independent substantial tracks); only one agent
   mutates a branch.
 
@@ -945,8 +997,8 @@ complete"; a new theoretical edge case outside the active contract; the desire f
 generic architecture improvement. A reopening change follows the same lifecycle (24.8) as any other PR.
 
 `PRODUCT_DEFAULT` — after `SETUP_STATUS=CLOSED_FROZEN` the default next action is PRODUCT work, and ordinary
-product PRs never redesign the workflow. Product PRs use `LARGEST_SAFE_SEMANTIC_CLOSURE`, the ~3-prompt target
-and 5-prompt hard ceiling, one complete audit, at most one consolidated repair, one re-audit and a terminal
+product PRs never redesign the workflow. Product PRs use `LARGEST_SAFE_SEMANTIC_CLOSURE`, the ~3 / hard-5
+specialist-prompt budget, one complete audit, at most one consolidated repair, one re-audit and a terminal
 decision (24.8).
 
 ---
@@ -1112,3 +1164,18 @@ default. Sections 1-19 were aligned (role table, lifecycle, repair loop, PR sizi
 is labelled historical; `AGENTS.md`, `CLAUDE.md`, both skills, the model prompting guide and the Opus 5
 playbook were rewritten to apply the kernel. Docs/setup only: no product code, tests, scripts, workflows, hooks,
 dependencies or executable validators touched; no safety gate weakened.*
+
+*v6.0 same-PR consolidated repair (2026-09-14): the one consolidated repair of this setup PR closed three
+blockers as one operational-governance closure. (1) Bounded specialist prompt accounting: `MEANINGFUL_PROMPT`
+now counts only specialist executions (implementation, independent audit, repair, whole-contract re-audit,
+protected terminal audit). Controller governance - state proof, CI reads, evidence adjudication,
+merge-readiness, the authorization request, merge, post-merge verification, fresh-chat acceptance - sits outside
+the budget and may not hide specialist work, so a repaired protected candidate completes at five specialist
+prompts with no sixth; verdicts bind the exact head. (2) Fail-closed runtime proof: `MODEL_ACTUAL` and required
+`THINKING_ACTUAL` must be positively proven on execution evidence and `UNKNOWN` stops; only effort telemetry may
+stay `UNKNOWN`. (3) Independent-audit availability resilience: Codex GPT-5.6 Sol stays the PRIMARY ordinary
+independent auditor. The ChatGPT controller is a narrow `ORDINARY_INDEPENDENT_AUDIT_FALLBACK` only when Sol is
+unavailable, quota-blocked or stopped by runtime proof before substantive audit, the reason is recorded, and the
+controller neither implemented nor repaired the candidate. The fallback never satisfies protected T4, and GPT-6
+Astra exclusivity is unchanged. Docs/setup only; no scripts, tests, workflows, hooks, validators or dependencies
+touched.*

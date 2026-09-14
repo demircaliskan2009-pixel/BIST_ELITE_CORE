@@ -22,7 +22,9 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 - `SEMANTIC_BOUNDARY` names the one contract the PR closes as the largest safe semantic closure (section
   24.8) — never a file-count or LOC target.
 - `STATE_PIN` carries exact SHAs, branch, PR and open-PR count; the executor re-proves them locally.
-- `MODEL_RUNTIME_PROOF` carries the section 24.12 fields, with the host label written literally.
+- `MODEL_RUNTIME_PROOF` carries the section 24.12 fields and requirements (`MODEL_ID_REQUIRED`, required
+  thinking), with the host label written literally; identity and required thinking fail closed on `UNKNOWN`, and
+  only effort may stay `UNKNOWN`.
 - `BLOCKER_INVENTORY` names inherited blockers by semantic defect (identity survives renames) and, for a repair
   or re-audit, the complete audited P1/P2 set.
 - `VALIDATION_MATRIX` is exact; the full crypto_core suite runs only via `run_full_tests_logged.ps1`.
@@ -38,12 +40,17 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 - **Owns:** routing; architecture adjudication; serious prompt compilation; evidence judgement and
   contradiction detection against live GitHub/terminal proof; `CONTROLLER_ACCEPTED_STATE`; merge-readiness
   judgement; exactly one next action.
-- **Budget duty:** count meaningful prompts per PR lifecycle (status reads do not count); never issue a sixth;
-  apply `FIXED_POINT_STOP`; open a new attempt only through a `TASK_INTENT=ARCHITECTURE` `ROOT_CAUSE_ESCAPE`
-  decision.
-- **Never:** product implementation; an ordinary or protected independent audit; a substitute for local
-  tests; memory as repository state; GitHub mutation without an exact human action authorization; merge
-  authority.
+- **Budget duty:** count specialist prompts per PR lifecycle (governance operations — state proof, CI/status
+  reads, adjudication, merge-readiness, the authorization request, merge, post-merge verification, fresh-chat
+  acceptance — do not count); never issue a specialist sixth; never hide specialist work inside governance; apply
+  `FIXED_POINT_STOP`; open a new attempt only through a `TASK_INTENT=ARCHITECTURE` `ROOT_CAUSE_ESCAPE` decision.
+- **Ordinary-audit fallback:** only under every section 24.4 `ORDINARY_INDEPENDENT_AUDIT_FALLBACK` condition —
+  Codex Sol unavailable, quota-blocked or stopped by runtime proof before substantive audit; reason recorded; the
+  controller neither implemented nor repaired the candidate; fresh pinned-head READ_ONLY; complete blocker
+  collection with evidence; zero mutation; never protected T4.
+- **Never:** product implementation; the protected Class-C audit; an ordinary audit outside that fallback or of
+  its own implementation or repair; a substitute for local tests; memory as repository state; GitHub mutation
+  without an exact human action authorization; merge authority.
 - **Anti-patterns:** trusting a report because it is detailed; merging on `mergeable` alone; issuing two
   writers at once; accepting one finding at a time from an auditor.
 
@@ -74,8 +81,8 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 ### 2.5 Codex GPT-5.6 Sol — engineering accelerator and ordinary independent reviewer
 
 - **Best tasks:** repo navigation, code search, dependency tracing, clear-spec implementation where routed,
-  mechanical refactor, test generation, static inspection, debugging, CI analysis, and ordinary independent
-  large-codebase review — including the exhaustive audit and the one whole-contract re-audit.
+  mechanical refactor, test generation, static inspection, debugging, CI analysis, and the PRIMARY ordinary
+  independent large-codebase review — including the exhaustive audit and the one whole-contract re-audit.
 - **Rules:** host label `Ultra` recorded literally; never audits work it implemented in the same context; an
   ordinary Sol review never satisfies protected Class C.
 
@@ -102,7 +109,8 @@ HANDOFF: AGENT_OS_HANDOFF_V1; MEANINGFUL_PROMPT_COUNT_THIS_PR: 1
 ```
 
 ```text
-TASK_INTENT: AUDIT (exhaustive, fresh context, READ_ONLY) — Codex GPT-5.6 Sol
+TASK_INTENT: AUDIT (exhaustive, fresh context, READ_ONLY) — Codex GPT-5.6 Sol (PRIMARY), or the ChatGPT
+  controller under the section 24.4 fallback with FALLBACK_REASON recorded
 SEMANTIC_BOUNDARY: <the declared contract of PR #<n>>; judge it, do not expand it
 STATE_PIN: PR #<n> head <sha>, base <sha>
 OUTPUT: the COMPLETE current P1/P2 set in one pass, each with file:line evidence and a failure scenario;
@@ -118,7 +126,8 @@ HANDOFF: AGENT_OS_HANDOFF_V1; this is the candidate's only repair
 ```
 
 ```text
-TASK_INTENT: REAUDIT (the ONE whole-contract re-audit) — Codex GPT-5.6 Sol
+TASK_INTENT: REAUDIT (the ONE whole-contract re-audit) — Codex GPT-5.6 Sol (PRIMARY), or the ChatGPT controller
+  under the section 24.4 fallback with FALLBACK_REASON recorded
 STATE_PIN: repaired head <sha>; BLOCKER_INVENTORY: <the repaired set>
 OUTPUT: the COMPLETE current P1/P2 set of the whole contract. Any genuine P1/P2 -> FIXED_POINT_STOP.
 ```
