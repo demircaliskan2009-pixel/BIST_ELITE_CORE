@@ -1034,25 +1034,38 @@ only in its one exact spelling, so a marker in another spelling is refused, neve
 `FILESYSTEM_ACCESS_AUTHORITY` - every file the control plane judges passes through ONE authority, with five
 outcomes: present, missing, not a regular file, unreadable, or an invalid path.
 
-- `ONE_PATH_VALIDATION_BOUNDARY`: a registry path is a portable repository-relative path - no embedded NUL or
-  control character, no backslash or `:`, not absolute, no empty, `.` or `..` segment, no segment ending in `.`
-  or a space, none of `< > " | ? *`, and no reserved device name - and a discovery pattern follows the same
-  grammar with `*`, `?` and `**` allowed. An operator path (`--root`, `--manifest`) carries no NUL or control
-  character. A path that fails is `INVALID_PATH`: it is never observed, and it is never absence.
-- `ONE_FILE_STATUS_BOUNDARY`: control-plane paths are observed without following links, so a symbolic link or a
-  junction is not a regular file. Absence is only what is positively established - no such file, no such path,
-  or a component that is not a directory. A permission error, an I/O error, a loop, a bad descriptor, an invalid
-  name, a network path that was not found and a device that is not ready are `UNREADABLE_FILE`, never missing.
+- `ONE_PATH_VALIDATION_BOUNDARY`: a registry path is a portable repository-relative path - no embedded NUL,
+  control character or unpaired surrogate (U+D800 to U+DFFF), no backslash or `:`, not absolute, no empty, `.`
+  or `..` segment, no segment ending in `.` or a space, none of `< > " | ? *`, and no reserved device name - and a
+  discovery pattern follows the same grammar with `*`, `?` and `**` allowed. Legitimate non-ASCII names stay valid.
+  An operator path (`--root`, `--manifest`) carries no NUL, control character or unpaired surrogate. A path that
+  fails is `INVALID_PATH`: it is never observed, and it is never absence. A path the filesystem still cannot
+  encode is `INVALID_PATH` too - never a traceback.
+- `ONE_FILE_STATUS_BOUNDARY` and `STATIC_ANCESTOR_TRUST`: a repository path is walked component by component from
+  the trusted root. Each parent directory is listed once, each component is found in that listing by its exact
+  spelling and classified once without following links. A symbolic link or junction ANCESTOR is
+  `UNTRUSTED_ANCESTOR` and nothing beneath it is read, so no redirect can supply authority bytes from outside the
+  tree; a symbolic link or junction LEAF is not a regular file. Absence is only what a successful listing positively
+  establishes - the name is not in its parent, or an ancestor is not a directory. A listing or classification
+  failure, a permission error, an I/O error, a loop, a bad descriptor, an invalid name, a network path that was not
+  found and a device that is not ready are `UNREADABLE_FILE`, never missing. The root is the operator's trusted
+  choice and is observed once, following links.
+- `ONE_PATH_IDENTITY`: a path's identity is its NFC-normalized, case-folded spelling, and the exact registered
+  spelling stays canonical. A component found only under another spelling of its identity is a case alias, and two
+  entries of one identity are a case collision; both are `INVALID_PATH` on every platform, so Linux and Windows never
+  certify contradictory authority sets. Registries, discovery, matching and the ledger all use this one identity,
+  and distinct files are never silently merged.
 - `ONE_READ_DECODE_BOUNDARY`: a file is read only after its present status is retained, with no second status;
   a read that fails after that status is unreadable, and bytes that are not UTF-8 are `UNREADABLE_TEXT`.
-- `ONE_DISCOVERY_BOUNDARY`: a discovery location is walked explicitly, and every entry is classified by one
-  status taken without following links. A location or an entry that cannot be listed or classified, a symbolic
-  link or junction anywhere inside a location, and a matching entry that is not a regular file each fail;
-  nothing is skipped silently, and an absent location holds nothing.
+- `ONE_DISCOVERY_BOUNDARY`: a discovery location is walked over the same ledger listings, and every entry is
+  classified once without following links. A location or an entry that cannot be listed or classified, a symbolic
+  link or junction anywhere inside a location, an entry name outside the portable path domain, a case collision and
+  a matching entry that is not a regular file each fail; nothing is skipped silently, and an absent location holds
+  nothing.
 - `ONE_OBSERVATION_SEMANTIC`: each path is observed once per validation run and every decision reuses that
   retained result - doctrine surfaces, executables, required artifacts, retired paths, the historical host
-  surface, the committed JSON artifacts, discovery locations and the bootstrap oracle alike - so no second
-  observation can turn an unreadable, invalid or non-regular result into a pass.
+  surface, the committed JSON artifacts, discovery locations, registered workflows and the bootstrap oracle alike -
+  so no second observation can turn an unreadable, invalid, untrusted or non-regular result into a pass.
 
 Every such outcome is a structured rejection - never a traceback, never a silent skip, and never reported as
 missing. A file required only to exist is judged by its status and never read.
@@ -1304,6 +1317,7 @@ There is no fourth state.
 `HOST_DISCOVERY_SCAN_PATHS`, and that declaration is derived from this control plane's own registries
 rather than from a list of every host that exists: the GitHub agent, skill, prompt and instruction
 locations and the repository-wide Copilot instruction file, where active and retired entries live;
+the GitHub Actions workflow location, which GitHub itself loads executable workflows from;
 the Claude and Codex project skill locations, where the registered adapters live; and the Cursor rule
 location, which the workflow companion names as a legacy host location. The declaration is held
 closed in both directions: every path any registry names inside a host configuration directory —
@@ -1318,6 +1332,7 @@ names; those remain the independent audit's problem, not the scanner's.
 - .github/prompts/**/*.prompt.md
 - .github/instructions/**/*.instructions.md
 - .github/copilot-instructions.md
+- .github/workflows/*
 - .claude/skills/**/SKILL.md
 - .codex/skills/**/SKILL.md
 - .cursor/rules/**/*.mdc
@@ -1346,15 +1361,38 @@ certify it. The setup audit reports this same contract and holds no judgement of
 `HOST_NON_DISCOVERY_PATHS` — registered paths inside a host configuration directory that no host
 auto-discovers: the retired hook-engine document, whose sibling JSON files are configuration read by
 historical BIST code rather than a host convention; a retired shared reference document from the
-skill location, which a host reads only through a skill entry point and never discovers on its own;
-and the CI workflow. Each entry must be named by a registry and must not lie in a declared discovery
-location.
+skill location, which a host reads only through a skill entry point and never discovers on its own.
+Each entry must be named by a registry and must not lie in a declared discovery location. A GitHub Actions
+workflow is never here: GitHub discovers every workflow file, so the workflow location is declared above and
+closed below.
 
 <!-- HOST_NON_DISCOVERY_PATHS_BEGIN -->
 - .github/hooks/hook-engine.md
 - .github/skills/_shared/references/contract-schema.md
-- .github/workflows/ci.yml
 <!-- HOST_NON_DISCOVERY_PATHS_END -->
+
+`HOST_EXECUTABLE_WORKFLOW_CLOSED_WORLD` — GitHub Actions loads every workflow file from `.github/workflows`, so
+that location is an executable host surface, and an unregistered file there is undeclared behavior exactly like
+an unregistered agent file. The project policy is deliberately stricter than any host behavior this control
+plane has not proven: every immediate entry of `.github/workflows` must be a regular file registered below in its
+exact spelling; a subdirectory, a symbolic link or junction, a special file, any other file, a case alias of a
+registered name and a case collision each fail; every registered workflow must be present; and renaming a
+workflow - including between `.yml` and `.yaml` - changes its identity and fails. A registration grants ZERO Agent
+OS authority: a workflow is not a doctrine surface, carries no role, and decides no routing, effort, merge,
+readiness or live authority. `CONTROL_PLANE_CI` is the one workflow the control-plane gates run in.
+`HISTORICAL_MT4_CLOSED_FROZEN` records a workflow of the frozen MT4 milestone; it does not reopen MT4, which stays
+`CLOSED_FROZEN`. `PUBLIC_SMOKE_NO_READINESS` records a public-data smoke workflow; it implies no Deribit readiness
+and no live authorization. Workflow CONTENT is governed by review, the human merge authority and the premerge
+proof of section 17.1, never by this registry. Format: `- <path> :: <class>`.
+
+<!-- HOST_EXECUTABLE_WORKFLOWS_BEGIN -->
+- .github/workflows/ci.yml :: CONTROL_PLANE_CI
+- .github/workflows/crypto_core_mt4_s3a_blst_qualification.yml :: HISTORICAL_MT4_CLOSED_FROZEN
+- .github/workflows/crypto_core_mt4_s3c_static_worker_qualification.yml :: HISTORICAL_MT4_CLOSED_FROZEN
+- .github/workflows/crypto_core_mt4_s3c_trusted_attestation.yml :: HISTORICAL_MT4_CLOSED_FROZEN
+- .github/workflows/crypto_core_mt4_trusted_attestation.yml :: HISTORICAL_MT4_CLOSED_FROZEN
+- .github/workflows/deribit-public-smoke.yml :: PUBLIC_SMOKE_NO_READINESS
+<!-- HOST_EXECUTABLE_WORKFLOWS_END -->
 
 <!-- ACTIVE_DOCTRINE_SURFACES_BEGIN -->
 - docs/crypto_core/agent_os_v2.md :: CANONICAL_AUTHORITY
@@ -1715,6 +1753,10 @@ enforces.
 It additionally does not claim that the filesystem access authority defends against a concurrent, adversarial
 filesystem change between one observation and the read that follows it - a file swapped for a link after its
 status was taken - or that a native symbolic-link test runs on a host that cannot create symbolic links.
+
+It additionally does not claim GitHub Actions' exact discovery behavior for a nested, differently cased, linked or
+special workflow shape - the workflow policy refuses every such shape instead - and it does not validate what a
+workflow file contains.
 
 <!-- HISTORICAL_RECORD_BEGIN -->
 ## 22. Historical record

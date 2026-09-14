@@ -32,6 +32,10 @@ STRUCTURE and BOUNDED LEXICAL CONTRACTS over the control-plane surfaces register
 * ONE filesystem access authority: portable path validation, conservative absence, one retained observation per
   path per run, read and decoding, and an explicit discovery walk; an invalid path, a permission, I/O,
   classification or decode failure is a structured rejection, never a traceback, a silent skip, a pass or "missing";
+* static ancestor trust and ONE path identity: every repository path is walked from the trusted root through one
+  listing per directory, a link or junction ancestor is never followed, and a case alias or collision fails;
+* the executable workflow closed world: every GitHub Actions workflow file is registered and classified, and a
+  registration grants no authority;
 * the positive NON_APPLYING front-matter contract for a historical host surface;
 * ACTIVE_AUTHORITY_STRUCTURAL_COMPLETENESS: authority syntax is recognized structurally rather than at
   column zero, a subordinate surface carries exactly one authority reference and it resolves to the
@@ -394,6 +398,7 @@ BLOCK_ROUTING_MODES = "CAPACITY_ROUTING_MODES"
 BLOCK_HOST_DISCOVERY = "HOST_DISCOVERY_SCAN_PATHS"
 BLOCK_HISTORICAL_HOST = "HISTORICAL_HOST_SURFACES"
 BLOCK_HOST_NON_DISCOVERY = "HOST_NON_DISCOVERY_PATHS"
+BLOCK_HOST_WORKFLOWS = "HOST_EXECUTABLE_WORKFLOWS"
 BLOCK_MAX_FAMILY = "MAX_EFFORT_FAMILY_TRIGGERS"
 BLOCK_ROUTING_MATRIX = "ROLE_ROUTING_MATRIX"
 BLOCK_FAMILY_CONTRACT = "FAMILY_SEMANTIC_CONTRACT"
@@ -430,6 +435,7 @@ CANONICAL_AUTHORITY_BLOCKS = (
     "HOST_DISCOVERY_SCAN_PATHS",
     "HISTORICAL_HOST_SURFACES",
     "HOST_NON_DISCOVERY_PATHS",
+    "HOST_EXECUTABLE_WORKFLOWS",
     "ACTIVE_DOCTRINE_SURFACES",
     "REQUIRED_CONTROL_PLANE_ARTIFACTS",
     "DURABLE_SURFACES",
@@ -550,6 +556,12 @@ FILE_INVALID_PATH = "INVALID_PATH"
 UNREADABLE_FILE = "UNREADABLE_FILE"
 UNREADABLE_TEXT = "UNREADABLE_TEXT"
 INVALID_PATH = "INVALID_PATH"
+UNTRUSTED_ANCESTOR = "UNTRUSTED_ANCESTOR"
+KIND_FILE = "file"
+KIND_DIRECTORY = "directory"
+KIND_LINK = "symbolic link or junction"
+KIND_SPECIAL = "special file"
+KIND_UNCLASSIFIED = "unclassified entry"
 # Positive absence and nothing else: no such file (winerror 2), no such path (3), a component that is not a directory
 # (267), or the POSIX equivalents. A network path or name that was not found (53, 67), a bad pathname (161), a device
 # that is not ready (21), a loop, a bad descriptor, an invalid name and every permission or I/O error prove nothing.
@@ -576,11 +588,24 @@ class FileObservation(NamedTuple):
     reason: str | None = None
 
 
-def _control_character(value: str) -> str | None:
+def _path_character_problem(value: str) -> str | None:
+    """A character no portable path may carry: a control character, or an unpaired surrogate (U+D800-U+DFFF)."""
     for character in value:
-        if ord(character) < 32 or ord(character) == 127:
-            return f"control character U+{ord(character):04X}"
+        code = ord(character)
+        if code < 32 or code == 127:
+            return f"control character U+{code:04X}"
+        if 0xD800 <= code <= 0xDFFF:
+            return f"unpaired surrogate U+{code:04X}, which no portable filesystem path can carry"
     return None
+
+
+def path_identity(value: str) -> str:
+    """ONE_PATH_IDENTITY: the NFC-normalized, case-folded spelling every registry, listing and match compares.
+
+    The exact registered spelling stays canonical. Identity decides only when two spellings could name one file on a
+    case-insensitive or normalizing filesystem, so an alias or a collision is refused on every platform alike.
+    """
+    return unicodedata.normalize("NFC", value).casefold()
 
 
 def repository_path_failure(value: object, *, pattern: bool = False) -> str | None:
@@ -594,7 +619,7 @@ def repository_path_failure(value: object, *, pattern: bool = False) -> str | No
         return "empty or not a string"
     if len(value) > 4096:
         return "longer than 4096 characters"
-    control = _control_character(value)
+    control = _path_character_problem(value)
     if control is not None:
         return control
     forbidden = _PATTERN_FORBIDDEN_CHARACTERS if pattern else _PATH_FORBIDDEN_CHARACTERS
@@ -617,7 +642,7 @@ def operator_path_failure(value: object) -> str | None:
     """Why an operator-supplied path (`--root`, `--manifest`, a root handed to the API) cannot reach the filesystem."""
     if not isinstance(value, str) or not value:
         return "empty or not a string"
-    return _control_character(value)
+    return _path_character_problem(value)
 
 
 def _positively_absent(exc: OSError) -> bool:
@@ -634,23 +659,52 @@ def _os_reason(exc: OSError) -> str:
     return exc.strerror or type(exc).__name__
 
 
-def observe_status(path: Path, *, follow_symlinks: bool = False) -> FileObservation:
-    """The status of one path whose text already passed the path grammar.
+def observe_status(path: Path) -> FileObservation:
+    """The status of one OPERATOR path - a `--root` or `--manifest` the operator chose - following links.
 
-    Control-plane paths are observed WITHOUT following links: a symbolic link or a junction is NOT_A_FILE, never the
-    file it points to. Only a positively established absence is MISSING; every other failure is UNREADABLE.
+    Repository paths never come here: they are walked component by component through the FileLedger, so no link or
+    junction can redirect them. Only a positively established absence is MISSING; every other failure is UNREADABLE,
+    and a path the filesystem cannot encode is INVALID_PATH.
     """
     try:
-        info = os.stat(path) if follow_symlinks else os.lstat(path)
+        info = os.stat(path)
     except OSError as exc:
         if _positively_absent(exc):
             return FileObservation(FILE_MISSING)
         return FileObservation(FILE_UNREADABLE, reason=f"{UNREADABLE_FILE}: status cannot be read ({_os_reason(exc)})")
-    if not follow_symlinks and (S_ISLNK(info.st_mode) or getattr(info, "st_reparse_tag", 0) & _NAME_SURROGATE_REPARSE):
-        return FileObservation(FILE_NOT_REGULAR, kind="symbolic link or junction")
+    except UnicodeEncodeError as exc:
+        return FileObservation(
+            FILE_INVALID_PATH, reason=f"{INVALID_PATH}: not encodable for this filesystem ({exc.reason})"
+        )
     if S_ISREG(info.st_mode):
-        return FileObservation(FILE_PRESENT, kind="file")
-    return FileObservation(FILE_NOT_REGULAR, kind="directory" if S_ISDIR(info.st_mode) else "special file")
+        return FileObservation(FILE_PRESENT, kind=KIND_FILE)
+    return FileObservation(FILE_NOT_REGULAR, kind=KIND_DIRECTORY if S_ISDIR(info.st_mode) else KIND_SPECIAL)
+
+
+def list_directory(path: Path) -> tuple[dict[str, os.DirEntry] | None, str | None, str | None]:
+    """(entries by exact name, failure status, failure reason) for ONE listing of one directory."""
+    try:
+        with os.scandir(path) as listing:
+            return {entry.name: entry for entry in listing}, None, None
+    except OSError as exc:
+        return None, FILE_UNREADABLE, f"{UNREADABLE_FILE}: directory cannot be listed ({_os_reason(exc)})"
+    except UnicodeEncodeError as exc:
+        return None, FILE_INVALID_PATH, f"{INVALID_PATH}: not encodable for this filesystem ({exc.reason})"
+
+
+def classify_entry(entry: os.DirEntry) -> tuple[str, str | None]:
+    """(kind, failure reason) for one listed entry, from ONE status taken without following links."""
+    try:
+        info = entry.stat(follow_symlinks=False)
+    except OSError as exc:
+        return KIND_UNCLASSIFIED, f"{UNREADABLE_FILE}: entry cannot be classified ({_os_reason(exc)})"
+    if S_ISLNK(info.st_mode) or getattr(info, "st_reparse_tag", 0) & _NAME_SURROGATE_REPARSE:
+        return KIND_LINK, None
+    if S_ISDIR(info.st_mode):
+        return KIND_DIRECTORY, None
+    if S_ISREG(info.st_mode):
+        return KIND_FILE, None
+    return KIND_SPECIAL, None
 
 
 def read_observed_text(path: Path, observed: FileObservation) -> FileObservation:
@@ -668,28 +722,62 @@ def read_observed_text(path: Path, observed: FileObservation) -> FileObservation
         return FileObservation(
             FILE_UNREADABLE, reason=f"{UNREADABLE_TEXT}: not valid UTF-8 ({exc.reason} at byte {exc.start})"
         )
+    except UnicodeEncodeError as exc:
+        return FileObservation(
+            FILE_INVALID_PATH, reason=f"{INVALID_PATH}: not encodable for this filesystem ({exc.reason})"
+        )
     except OSError as exc:
         return FileObservation(FILE_UNREADABLE, reason=f"{UNREADABLE_FILE}: cannot be read ({_os_reason(exc)})")
-    return FileObservation(FILE_PRESENT, kind="file", text=content)
+    return FileObservation(FILE_PRESENT, kind=KIND_FILE, text=content)
 
 
 class FileLedger:
-    """ONE observation per repository path per validation run.
+    """ONE observation per repository path per validation run, from ONE listing per directory.
 
-    Every existence, absence, content and discovery-location decision reads this ledger. A status request and a later
-    content request for the same path reuse the retained result, so no second observation can turn an UNREADABLE,
-    INVALID_PATH or NOT_A_FILE result into a pass, and a path that fails the grammar is never observed at all.
+    A repository path is walked component by component from the trusted root. Each parent directory is listed once;
+    each component is found in that listing by its exact spelling and classified once, without following links. A
+    symbolic link or junction ancestor is untrusted and nothing beneath it is read; a component found only under
+    another spelling of the same path identity is a case alias, and two entries of one identity are a case collision.
+    Absence is only what a successful listing establishes. Every existence, absence, content and discovery decision
+    reads this ledger, so no later observation can erase an UNREADABLE, INVALID_PATH, untrusted-ancestor or
+    case-identity result, and a path that fails the grammar is never observed at all.
     """
 
     def __init__(self, root: Path) -> None:
         self.root = root
         self._observed: dict[str, FileObservation] = {}
+        self._listings: dict[str, tuple[dict[str, os.DirEntry] | None, str | None, str | None]] = {}
+        self._identities: dict[str, dict[str, list[str]]] = {}
+        self._kinds: dict[str, tuple[str, str | None]] = {}
+
+    def listing(self, directory: str) -> tuple[dict[str, os.DirEntry] | None, str | None, str | None]:
+        """The ONE listing of a repository directory; '' is the root."""
+        if directory not in self._listings:
+            self._listings[directory] = list_directory(self.root / directory if directory else self.root)
+        return self._listings[directory]
+
+    def identities(self, directory: str) -> dict[str, list[str]]:
+        """Path identity -> the exact names in one listing that share it; more than one is a case collision."""
+        if directory not in self._identities:
+            grouped: dict[str, list[str]] = {}
+            for name in sorted(self.listing(directory)[0] or {}):
+                grouped.setdefault(path_identity(name), []).append(name)
+            self._identities[directory] = grouped
+        return self._identities[directory]
+
+    def kind(self, directory: str, name: str) -> tuple[str, str | None]:
+        """The ONE classification of a listed entry."""
+        rel = f"{directory}/{name}" if directory else name
+        if rel not in self._kinds:
+            entries = self.listing(directory)[0] or {}
+            self._kinds[rel] = classify_entry(entries[name])
+        return self._kinds[rel]
 
     def status(self, rel: str) -> FileObservation:
         if rel not in self._observed:
             problem = repository_path_failure(rel)
             if problem is None:
-                self._observed[rel] = observe_status(self.root / rel)
+                self._observed[rel] = self._walk(rel)
             else:
                 self._observed[rel] = FileObservation(FILE_INVALID_PATH, reason=f"{INVALID_PATH}: {problem}")
         return self._observed[rel]
@@ -698,6 +786,45 @@ class FileLedger:
         observed = read_observed_text(self.root / rel, self.status(rel))
         self._observed[rel] = observed
         return observed
+
+    def _walk(self, rel: str) -> FileObservation:
+        parts = rel.split("/")
+        parent = ""
+        for depth, name in enumerate(parts, start=1):
+            where = "/".join(parts[:depth])
+            shown = parent or "."
+            entries, failed_status, reason = self.listing(parent)
+            if entries is None:
+                return FileObservation(failed_status or FILE_UNREADABLE, reason=f"{reason} at {shown}")
+            twins = self.identities(parent).get(path_identity(name), [])
+            if len(twins) > 1:
+                return FileObservation(
+                    FILE_INVALID_PATH, reason=f"{INVALID_PATH}: case collision - {shown} holds {twins} for one identity"
+                )
+            if name not in entries:
+                if twins:
+                    return FileObservation(
+                        FILE_INVALID_PATH,
+                        reason=f"{INVALID_PATH}: case alias - {shown} holds {twins[0]!r} where {name!r} is named",
+                    )
+                return FileObservation(FILE_MISSING)
+            kind, failure = self.kind(parent, name)
+            if failure is not None:
+                return FileObservation(FILE_UNREADABLE, reason=f"{failure} at {where}")
+            if depth == len(parts):
+                if kind == KIND_FILE:
+                    return FileObservation(FILE_PRESENT, kind=kind)
+                return FileObservation(FILE_NOT_REGULAR, kind=kind)
+            if kind == KIND_LINK:
+                return FileObservation(
+                    FILE_UNREADABLE,
+                    reason=f"{UNTRUSTED_ANCESTOR}: {where} is a symbolic link or junction, so nothing beneath it is trusted",
+                )
+            if kind != KIND_DIRECTORY:
+                # A regular or special file contains nothing: the rest of the path is positively absent.
+                return FileObservation(FILE_MISSING)
+            parent = where
+        return FileObservation(FILE_MISSING)
 
 
 def observe_root(raw: str | None) -> tuple[Path | None, str | None]:
@@ -711,12 +838,12 @@ def observe_root(raw: str | None) -> tuple[Path | None, str | None]:
         absolute = Path(os.path.abspath(raw))
     except OSError as exc:
         return None, f"--root {raw!r} cannot be made absolute: {UNREADABLE_FILE}: {_os_reason(exc)}"
-    observed = observe_status(absolute, follow_symlinks=True)
-    if observed.kind == "directory":
+    observed = observe_status(absolute)
+    if observed.kind == KIND_DIRECTORY:
         return absolute, None
     if observed.status == FILE_MISSING:
         return None, f"--root {absolute}: missing"
-    if observed.status == FILE_UNREADABLE:
+    if observed.status in (FILE_UNREADABLE, FILE_INVALID_PATH):
         return None, f"--root {absolute}: {observed.reason}"
     return None, f"--root {absolute}: not a directory ({observed.kind})"
 
@@ -724,11 +851,11 @@ def observe_root(raw: str | None) -> tuple[Path | None, str | None]:
 def discover_files(root: Path, pattern: str, ledger: FileLedger | None = None) -> tuple[list[str], list[str]]:
     """(regular files matching one declared discovery pattern, failures): a host location listed through the authority.
 
-    The pattern's fixed leading directories are observed one by one, without following links, through the ledger. The
-    location is then walked with an explicit `os.scandir` stack, and each entry is classified by ONE status taken with
-    `follow_symlinks=False`. Every listing error and every classification error is a failure, so an entry that cannot
-    be classified can never hide what lies beneath it; a symbolic link or junction anywhere inside a location is a
-    failure, because a host may follow what this scan never does; an absent location holds nothing.
+    The pattern's fixed prefix is walked through the ledger from the trusted root, then the location is walked with an
+    explicit stack over the ledger's ONE listing per directory, each entry classified once without following links. A
+    listing or classification error, a symbolic link or junction anywhere inside a location, an entry name outside the
+    portable path domain, a case collision and a matching special file each fail; nothing is skipped silently, and an
+    absent location holds nothing. Matching uses the path identity, so a case alias of a declared name is discovered.
     """
     ledger = ledger if ledger is not None else FileLedger(root)
     problem = repository_path_failure(pattern, pattern=True)
@@ -740,64 +867,74 @@ def discover_files(root: Path, pattern: str, ledger: FileLedger | None = None) -
         if "*" in segment or "?" in segment:
             break
         fixed.append(segment)
-    matcher = host_glob_regex(pattern)
-    for depth in range(1, len(fixed) + 1):
-        rel = "/".join(fixed[:depth])
-        observed = ledger.status(rel)
+    matcher = host_glob_regex(path_identity(pattern))
+    if fixed:
+        prefix = "/".join(fixed)
+        observed = ledger.status(prefix)
         if observed.status == FILE_MISSING:
             return [], []
         if observed.status in (FILE_UNREADABLE, FILE_INVALID_PATH):
             return [], [
-                f"host auto-discovery location cannot be observed: {rel} (scanning {pattern}): {observed.reason}"
+                f"host auto-discovery location cannot be observed: {prefix} (scanning {pattern}): {observed.reason}"
             ]
-        if observed.kind == "directory":
-            continue
         if observed.status == FILE_PRESENT:
             # A regular file: the whole pattern when it has no wildcard; otherwise nothing can lie beneath it.
-            return ([rel], []) if depth == len(segments) and matcher.match(rel) else ([], [])
-        return [], [
-            f"host auto-discovery location {rel} (scanning {pattern}) is a {observed.kind}; a host may follow what "
-            f"this scan never does"
-        ]
-    if len(fixed) == len(segments):
-        return [], []
+            exact = len(fixed) == len(segments) and matcher.match(path_identity(prefix))
+            return ([prefix], []) if exact else ([], [])
+        if observed.kind != KIND_DIRECTORY:
+            return [], [
+                f"host auto-discovery location {prefix} (scanning {pattern}) is a {observed.kind}; a host may follow "
+                f"what this scan never does"
+            ]
+        if len(fixed) == len(segments):
+            return [], []
     found: list[str] = []
     failures: list[str] = []
     stack = ["/".join(fixed)]
     while stack:
         directory = stack.pop()
-        try:
-            with os.scandir(root / directory) as listing:
-                entries = sorted(listing, key=lambda entry: entry.name)
-        except OSError as exc:
+        shown = directory or "."
+        entries, _failed_status, reason = ledger.listing(directory)
+        if entries is None:
             failures.append(
-                f"host auto-discovery location cannot be listed: {directory or '.'} (scanning {pattern}): "
-                f"{UNREADABLE_FILE}: listing failed ({_os_reason(exc)}); an unlisted location cannot be proven free of "
-                f"unregistered surfaces"
+                f"host auto-discovery location cannot be listed: {shown} (scanning {pattern}): {reason}; an unlisted "
+                f"location cannot be proven free of unregistered surfaces"
             )
             continue
-        for entry in entries:
-            rel = f"{directory}/{entry.name}" if directory else entry.name
-            try:
-                info = entry.stat(follow_symlinks=False)
-            except OSError as exc:
+        for names in ledger.identities(directory).values():
+            if len(names) > 1:
                 failures.append(
-                    f"host auto-discovery entry cannot be classified: {rel} (scanning {pattern}): {UNREADABLE_FILE}: "
-                    f"{_os_reason(exc)}; an unclassified entry could be a directory hiding surfaces"
+                    f"host auto-discovery location {shown} holds a case collision: {names} (scanning {pattern}); one "
+                    f"path identity cannot name two surfaces"
+                )
+        for name in sorted(entries):
+            rel = f"{directory}/{name}" if directory else name
+            portable = repository_path_failure(rel)
+            if portable is not None:
+                failures.append(
+                    f"host auto-discovery entry {rel!r} (scanning {pattern}) is outside the portable path domain: "
+                    f"{portable}"
                 )
                 continue
-            if S_ISLNK(info.st_mode) or getattr(info, "st_reparse_tag", 0) & _NAME_SURROGATE_REPARSE:
+            kind, failure = ledger.kind(directory, name)
+            if failure is not None:
+                failures.append(
+                    f"host auto-discovery entry cannot be classified: {rel} (scanning {pattern}): {failure}; an "
+                    f"unclassified entry could be a directory hiding surfaces"
+                )
+                continue
+            if kind == KIND_LINK:
                 failures.append(
                     f"host auto-discovery location holds a symbolic link or junction: {rel} (scanning {pattern}); a "
                     f"host may follow it, and this scan never does"
                 )
                 continue
-            if S_ISDIR(info.st_mode):
+            if kind == KIND_DIRECTORY:
                 stack.append(rel)
                 continue
-            if not matcher.match(rel):
+            if not matcher.match(path_identity(rel)):
                 continue
-            if S_ISREG(info.st_mode):
+            if kind == KIND_FILE:
                 found.append(rel)
             else:
                 failures.append(
@@ -1137,6 +1274,7 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
     host_globs = parse_registry(authority_text, BLOCK_HOST_DISCOVERY)
     historical_host = parse_surface_registry(authority_text, BLOCK_HISTORICAL_HOST)
     host_non_discovery = parse_registry(authority_text, BLOCK_HOST_NON_DISCOVERY)
+    workflows = parse_surface_registry(authority_text, BLOCK_HOST_WORKFLOWS)
     max_family = parse_registry(authority_text, BLOCK_MAX_FAMILY)
     for label, value in (
         (BLOCK_REQUIRED_ARTIFACTS, artifacts),
@@ -1148,6 +1286,7 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
         (BLOCK_HOST_DISCOVERY, host_globs),
         (BLOCK_HISTORICAL_HOST, historical_host),
         (BLOCK_HOST_NON_DISCOVERY, host_non_discovery),
+        (BLOCK_HOST_WORKFLOWS, workflows),
         (BLOCK_MAX_FAMILY, max_family),
     ):
         if value is None:
@@ -1162,6 +1301,7 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
         or host_globs is None
         or historical_host is None
         or host_non_discovery is None
+        or workflows is None
         or max_family is None
     ):
         return None
@@ -1178,6 +1318,7 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
         (BLOCK_HOST_DISCOVERY, host_globs),
         (BLOCK_HISTORICAL_HOST, [p for p, _r in historical_host]),
         (BLOCK_HOST_NON_DISCOVERY, host_non_discovery),
+        (BLOCK_HOST_WORKFLOWS, [p for p, _c in workflows]),
         (BLOCK_MAX_FAMILY, max_family),
     ):
         if not values:
@@ -1196,6 +1337,7 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
         (BLOCK_RETIRED_PATHS, retired),
         (BLOCK_HISTORICAL_HOST, [p for p, _r in historical_host]),
         (BLOCK_HOST_NON_DISCOVERY, host_non_discovery),
+        (BLOCK_HOST_WORKFLOWS, [p for p, _c in workflows]),
     )
     for label, values in path_registries:
         for value in values:
@@ -1206,6 +1348,19 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
         problem = repository_path_failure(value, pattern=True)
         if problem is not None:
             failures.append(f"{CANONICAL}: {BLOCK_HOST_DISCOVERY} entry {value!r}: {INVALID_PATH}: {problem}")
+
+    # ONE_PATH_IDENTITY across every path registry: one identity spelled two ways is an alias, never two surfaces.
+    spellings: dict[str, set[str]] = {}
+    for _label, values in path_registries:
+        for value in values:
+            if isinstance(value, str):
+                spellings.setdefault(path_identity(value), set()).add(value)
+    for names in spellings.values():
+        if len(names) > 1:
+            failures.append(
+                f"{CANONICAL}: the registries name one path identity in more than one spelling: {sorted(names)}; a "
+                f"case alias is never a second surface"
+            )
 
     if CANONICAL not in surface_paths:
         failures.append(f"{CANONICAL} does not register itself in {BLOCK_ACTIVE_SURFACES}")
@@ -1230,6 +1385,7 @@ def _check_registries(root: Path, failures: list[str]) -> dict[str, object] | No
         "host_globs": host_globs,
         "historical_host": historical_host,
         "host_non_discovery": host_non_discovery,
+        "workflows": workflows,
         "max_family": max_family,
     }
 
@@ -2097,10 +2253,12 @@ def _check_host_discovery(root: Path, ctx: dict[str, object], failures: list[str
         {path for path, _role in ctx["surfaces"]}  # type: ignore[union-attr]
         | set(ctx["artifacts"])  # type: ignore[arg-type]
         | historical_paths
+        | {path for path, _class in ctx["workflows"]}  # type: ignore[union-attr]
     )
 
     ledger: FileLedger = ctx["ledger"]  # type: ignore[assignment]
     discovered: set[str] = set()
+    registered_identity = {path_identity(path): path for path in registered}
     for pattern in globs:
         found, unlisted = discover_files(root, pattern, ledger)
         failures.extend(unlisted)
@@ -2108,15 +2266,22 @@ def _check_host_discovery(root: Path, ctx: dict[str, object], failures: list[str
         for rel in found:
             if rel in registered:
                 continue
+            twin = registered_identity.get(path_identity(rel))
+            if twin is not None:
+                failures.append(
+                    f"host auto-discovery surface {rel} is a case alias of the registered {twin} (matched {pattern}); "
+                    f"a host may load it under either spelling, so it is never inert"
+                )
+                continue
             failures.append(
                 f"host auto-discovery surface present but not registered: {rel} "
                 f"(matched {pattern}; a discoverable path must be registered with a safe role or absent)"
             )
 
-    matchers = [(pattern, host_glob_regex(pattern)) for pattern in globs]
+    matchers = [(pattern, host_glob_regex(path_identity(pattern))) for pattern in globs]
 
     def locations(path: str) -> list[str]:
-        return [pattern for pattern, matcher in matchers if matcher.match(path)]
+        return [pattern for pattern, matcher in matchers if matcher.match(path_identity(path))]
 
     for path, role in historical:
         if role not in HISTORICAL_HOST_ROLES:
@@ -2170,6 +2335,108 @@ def _check_host_discovery(root: Path, ctx: dict[str, object], failures: list[str
         elif path.split("/", 1)[0] not in host_directories:
             failures.append(
                 f"{CANONICAL}: {BLOCK_HOST_NON_DISCOVERY} declares {path}, which is outside every host directory"
+            )
+
+
+# HOST_EXECUTABLE_WORKFLOW_CLOSED_WORLD (agent_os_v2.md section 20). GitHub Actions loads workflow files from one
+# location, so that location is an executable host surface: an unregistered file there is undeclared behavior. The
+# project policy is stricter than any host behavior this control plane has not proven, and a registration grants no
+# Agent OS authority. Workflow CONTENT stays with review, the human merge authority and the premerge proof.
+WORKFLOW_LOCATION = ".github/workflows"
+WORKFLOW_SUFFIXES = (".yml", ".yaml")
+WORKFLOW_CLASSES = ("CONTROL_PLANE_CI", "HISTORICAL_MT4_CLOSED_FROZEN", "PUBLIC_SMOKE_NO_READINESS")
+
+
+def _check_workflow_inventory(root: Path, ctx: dict[str, object], failures: list[str]) -> None:
+    """Every immediate entry of the workflow location is a registered regular workflow file, and every registered
+    workflow is present, each in its exact spelling."""
+    workflows: list[tuple[str, str]] = list(ctx["workflows"])  # type: ignore[arg-type]
+    ledger: FileLedger = ctx["ledger"]  # type: ignore[assignment]
+    doctrine = {path for path, _role in ctx["surfaces"]}  # type: ignore[union-attr]
+    registered = {path for path, _class in workflows}
+    ci = sorted(path for path, workflow_class in workflows if workflow_class == "CONTROL_PLANE_CI")
+    if ci != [EXPECTED_CI_WORKFLOW_PATH]:
+        failures.append(
+            f"{CANONICAL}: {BLOCK_HOST_WORKFLOWS} must classify exactly one CONTROL_PLANE_CI workflow, "
+            f"{EXPECTED_CI_WORKFLOW_PATH}; found {ci}"
+        )
+    for path, workflow_class in workflows:
+        if workflow_class not in WORKFLOW_CLASSES:
+            failures.append(
+                f"{CANONICAL}: {BLOCK_HOST_WORKFLOWS} classifies {path} as {workflow_class!r}; the classes are "
+                f"{list(WORKFLOW_CLASSES)}"
+            )
+        directory, _separator, name = path.rpartition("/")
+        if directory != WORKFLOW_LOCATION or not name.endswith(WORKFLOW_SUFFIXES):
+            failures.append(
+                f"{CANONICAL}: {BLOCK_HOST_WORKFLOWS} entry {path} is not an immediate .yml or .yaml file of "
+                f"{WORKFLOW_LOCATION}"
+            )
+        if path in doctrine:
+            failures.append(
+                f"{CANONICAL}: workflow {path} is also registered as a doctrine surface; a workflow registration grants "
+                f"no Agent OS authority"
+            )
+        observed = ledger.status(path)
+        if observed.status == FILE_PRESENT:
+            continue
+        if observed.status == FILE_MISSING:
+            detail = "missing"
+        elif observed.status == FILE_NOT_REGULAR:
+            detail = f"not a regular file ({observed.kind})"
+        else:
+            detail = str(observed.reason)
+        failures.append(
+            f"registered workflow {path} is not present as a regular file: {detail}; removing or renaming a workflow "
+            f"changes the executable host surface"
+        )
+    location = ledger.status(WORKFLOW_LOCATION)
+    if location.status == FILE_MISSING:
+        return
+    if location.status in (FILE_UNREADABLE, FILE_INVALID_PATH):
+        failures.append(f"workflow location {WORKFLOW_LOCATION} cannot be observed: {location.reason}")
+        return
+    if location.kind != KIND_DIRECTORY:
+        failures.append(
+            f"workflow location {WORKFLOW_LOCATION} is a {location.kind}; a host may follow what this scan never does"
+        )
+        return
+    entries, _failed_status, reason = ledger.listing(WORKFLOW_LOCATION)
+    if entries is None:
+        failures.append(f"workflow location {WORKFLOW_LOCATION} cannot be listed: {reason}")
+        return
+    for names in ledger.identities(WORKFLOW_LOCATION).values():
+        if len(names) > 1:
+            failures.append(
+                f"workflow location {WORKFLOW_LOCATION} holds a case collision: {names}; one path identity cannot name "
+                f"two workflows"
+            )
+    registered_identity = {path_identity(path): path for path in registered}
+    for name in sorted(entries):
+        rel = f"{WORKFLOW_LOCATION}/{name}"
+        portable = repository_path_failure(rel)
+        if portable is not None:
+            failures.append(f"workflow location entry {rel!r} is outside the portable path domain: {portable}")
+            continue
+        kind, failure = ledger.kind(WORKFLOW_LOCATION, name)
+        if failure is not None:
+            failures.append(f"workflow location entry cannot be classified: {rel}: {failure}")
+            continue
+        if kind != KIND_FILE:
+            failures.append(
+                f"workflow location entry {rel} is a {kind}; only registered regular workflow files may sit in "
+                f"{WORKFLOW_LOCATION}"
+            )
+            continue
+        if rel in registered:
+            continue
+        twin = registered_identity.get(path_identity(rel))
+        if twin is not None:
+            failures.append(f"workflow location entry {rel} is a case alias of the registered workflow {twin}")
+        else:
+            failures.append(
+                f"unregistered workflow file: {rel}; GitHub Actions may load it, so it must be registered in "
+                f"{BLOCK_HOST_WORKFLOWS} or absent"
             )
 
 
@@ -2912,7 +3179,7 @@ def load_strict_json_file(path: Path | str) -> object:
     if problem is not None:
         raise StrictJsonError(f"cannot be read as UTF-8 text ({INVALID_PATH}: {problem})")
     source = Path(raw)
-    observed = read_observed_text(source, observe_status(source, follow_symlinks=True))
+    observed = read_observed_text(source, observe_status(source))
     if observed.status == FILE_MISSING:
         raise StrictJsonError("cannot be read as UTF-8 text (missing: not an existing file)")
     if observed.status == FILE_NOT_REGULAR:
@@ -3772,6 +4039,7 @@ def collect_failures(root: Path) -> list[str]:
     _check_model_agnostic(root, ctx, failures)
     _check_prohibited_sizing(root, ctx, failures)
     _check_host_discovery(root, ctx, failures)
+    _check_workflow_inventory(root, ctx, failures)
     _check_executable_subordinates(root, ctx, failures)
     _check_effort_family_legality(root, ctx, max_effort_classes, failures)
     _check_capacity_contract(root, ctx, failures)

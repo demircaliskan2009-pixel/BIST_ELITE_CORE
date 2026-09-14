@@ -31,7 +31,7 @@ import subprocess
 import sys
 import unicodedata
 from pathlib import Path
-from stat import S_IFDIR, S_IFLNK
+from stat import S_IFDIR, S_IFLNK, S_ISLNK
 from types import SimpleNamespace
 
 import pytest
@@ -246,6 +246,7 @@ ORACLE_HOST_DISCOVERY_GLOBS = [
     ".github/prompts/**/*.prompt.md",
     ".github/instructions/**/*.instructions.md",
     ".github/copilot-instructions.md",
+    ".github/workflows/*",
     ".claude/skills/**/SKILL.md",
     ".codex/skills/**/SKILL.md",
     ".cursor/rules/**/*.mdc",
@@ -257,8 +258,16 @@ ORACLE_HISTORICAL_HOST_SURFACES = {".cursor/rules/prdv3-constitution.mdc": "NON_
 ORACLE_HOST_NON_DISCOVERY_PATHS = [
     ".github/hooks/hook-engine.md",
     ".github/skills/_shared/references/contract-schema.md",
-    ".github/workflows/ci.yml",
 ]
+# HOST_EXECUTABLE_WORKFLOW_CLOSED_WORLD: every GitHub Actions workflow file, classified, granting no authority.
+ORACLE_HOST_EXECUTABLE_WORKFLOWS = {
+    ".github/workflows/ci.yml": "CONTROL_PLANE_CI",
+    ".github/workflows/crypto_core_mt4_s3a_blst_qualification.yml": "HISTORICAL_MT4_CLOSED_FROZEN",
+    ".github/workflows/crypto_core_mt4_s3c_static_worker_qualification.yml": "HISTORICAL_MT4_CLOSED_FROZEN",
+    ".github/workflows/crypto_core_mt4_s3c_trusted_attestation.yml": "HISTORICAL_MT4_CLOSED_FROZEN",
+    ".github/workflows/crypto_core_mt4_trusted_attestation.yml": "HISTORICAL_MT4_CLOSED_FROZEN",
+    ".github/workflows/deribit-public-smoke.yml": "PUBLIC_SMOKE_NO_READINESS",
+}
 
 # PROOF_TARGET_BINDINGS, written out literally: what each proof-paired field is an observation OF.
 ORACLE_PROOF_TARGET_BINDINGS = {
@@ -303,7 +312,11 @@ ORACLE_RETIRED_PATH_COUNT = 50
 # Surfaces that must never be reachable as control-plane doctrine: product, legacy and protected runtime.
 ORACLE_FORBIDDEN_REGISTRY_PREFIXES = ("src/", "tests/services/", "tests/brain/", ".github/hooks/")
 
-SANDBOX_FILES = sorted(set(ORACLE_ACTIVE_DOCTRINE_SURFACES) | ORACLE_REQUIRED_CONTROL_PLANE_ARTIFACTS)
+SANDBOX_FILES = sorted(
+    set(ORACLE_ACTIVE_DOCTRINE_SURFACES)
+    | ORACLE_REQUIRED_CONTROL_PLANE_ARTIFACTS
+    | set(ORACLE_HOST_EXECUTABLE_WORKFLOWS)
+)
 
 
 # ---------------------------------------------------------------------------
@@ -1606,6 +1619,7 @@ def test_every_declared_host_discovery_location_holds_only_registered_surfaces()
         set(ORACLE_ACTIVE_DOCTRINE_SURFACES)
         | ORACLE_REQUIRED_CONTROL_PLANE_ARTIFACTS
         | set(ORACLE_HISTORICAL_HOST_SURFACES)
+        | set(ORACLE_HOST_EXECUTABLE_WORKFLOWS)
     )
     for pattern in ORACLE_HOST_DISCOVERY_GLOBS:
         found = sorted(p.relative_to(REPO_ROOT).as_posix() for p in REPO_ROOT.glob(pattern) if p.is_file())
@@ -5785,9 +5799,9 @@ _HOST_CLOSURE_MUTATIONS = [
     ),
     (
         "a non-discovery declaration removed",
-        "- .github/workflows/ci.yml\n<!-- HOST_NON_DISCOVERY_PATHS_END -->",
-        "<!-- HOST_NON_DISCOVERY_PATHS_END -->",
-        ".github/workflows/ci.yml is named by a registry inside host directory .github/",
+        "- .github/hooks/hook-engine.md\n- .github/skills/_shared/references/contract-schema.md\n<!-- HOST_NON_DISCOVERY_PATHS_END -->",
+        "- .github/skills/_shared/references/contract-schema.md\n<!-- HOST_NON_DISCOVERY_PATHS_END -->",
+        ".github/hooks/hook-engine.md is named by a registry inside host directory .github/",
     ),
     (
         "a discoverable path declared non-discoverable",
@@ -6033,6 +6047,7 @@ ORACLE_CANONICAL_AUTHORITY_BLOCKS = [
     "HOST_DISCOVERY_SCAN_PATHS",
     "HISTORICAL_HOST_SURFACES",
     "HOST_NON_DISCOVERY_PATHS",
+    "HOST_EXECUTABLE_WORKFLOWS",
     "ACTIVE_DOCTRINE_SURFACES",
     "REQUIRED_CONTROL_PLANE_ARTIFACTS",
     "DURABLE_SURFACES",
@@ -6072,6 +6087,7 @@ ORACLE_ACTIVE_READER_NEEDLES = {
     "HOST_DISCOVERY_SCAN_PATHS": ("HOST_DISCOVERY_SCAN_PATHS block missing or malformed",),
     "HISTORICAL_HOST_SURFACES": ("HISTORICAL_HOST_SURFACES block missing or malformed",),
     "HOST_NON_DISCOVERY_PATHS": ("HOST_NON_DISCOVERY_PATHS block missing or malformed",),
+    "HOST_EXECUTABLE_WORKFLOWS": ("HOST_EXECUTABLE_WORKFLOWS block missing or malformed",),
     "ACTIVE_DOCTRINE_SURFACES": ("ACTIVE_DOCTRINE_SURFACES block missing or malformed",),
     "REQUIRED_CONTROL_PLANE_ARTIFACTS": ("REQUIRED_CONTROL_PLANE_ARTIFACTS block missing or malformed",),
     "DURABLE_SURFACES": ("DURABLE_SURFACES block missing or malformed",),
@@ -7339,17 +7355,18 @@ def test_text_boundary_keeps_a_bool_out_of_an_integer_field(sandbox: Path) -> No
 
 
 # ===========================================================================================
-# FILESYSTEM_ACCESS_AUTHORITY
+# FILESYSTEM_ACCESS_AUTHORITY - FILESYSTEM_PATH_TRUST_BOUNDARY_TOTALITY and HOST_EXECUTABLE_DISCOVERY_CLOSED_WORLD
 #
-# The frozen replacement candidate failed four ways in ONE root family, and every test below binds the abstraction
-# rather than a reported string: a directory whose DirEntry classification failed hid its descendants from
-# discovery; an embedded NUL became "missing" or a raw ValueError; an UNREADABLE bootstrap status was discarded and
-# the path asked again; and a mirrored "does not exist" list turned a loop or a device that was not ready into
-# absence. Faults are injected at the seams the standard library itself uses (os.stat, os.lstat, io.open,
-# os.scandir, DirEntry), so the tests judge behaviour, not call names. Every expected verdict is written out literally.
+# Two root families, closed together. The filesystem authority checked only a path's LEAF, so a junction ancestor
+# supplied authority bytes from outside the tree; it matched discovery names case-sensitively, so a `skill.md` that
+# a case-insensitive host loads as `SKILL.md` stayed invisible; and it let a path the filesystem cannot encode escape
+# as a raw UnicodeEncodeError or read as "missing". Separately, the discovery closed world never modelled GitHub
+# Actions, so six executable workflows sat outside it and a rogue workflow passed. Faults are injected at the seams
+# the authority itself observes through (os.scandir listings, DirEntry.stat, io.open, os.stat for operator paths), so
+# the tests judge behaviour, not call names. Every expected verdict is written out literally.
 # ===========================================================================================
 
-ORACLE_FS_TOUCHING_FUNCTIONS = {"observe_status", "read_observed_text", "discover_files"}
+ORACLE_FS_TOUCHING_FUNCTIONS = {"observe_status", "read_observed_text", "list_directory", "classify_entry"}
 ORACLE_FS_HANDLING_FUNCTIONS = ORACLE_FS_TOUCHING_FUNCTIONS | {"observe_root"}
 ORACLE_FS_CALLS = (
     "stat",
@@ -7378,6 +7395,8 @@ ORACLE_FS_ERRORS = {
     "IsADirectoryError",
     "NotADirectoryError",
     "UnicodeDecodeError",
+    "UnicodeEncodeError",
+    "UnicodeError",
     "ValueError",
 }
 ORACLE_ORACLE_REL = "tests/crypto_core/test_agent_os_v2_contract.py"
@@ -7385,26 +7404,19 @@ ORACLE_EXISTENCE_ONLY = ".github/workflows/ci.yml"
 ORACLE_RETIRED_PROBE = ".github/prompts/edge-discovery.prompt.md"
 ORACLE_ROGUE_DIR = ".claude/skills/zz-oracle-rogue"
 ORACLE_ROGUE = ORACLE_ROGUE_DIR + "/SKILL.md"
+ORACLE_SURROGATE = chr(0xD800)
+ORACLE_FILE_MODE = 0o100644
+ORACLE_FIFO_MODE = 0o010644
 
 
 def _fs_name(path) -> str:
     return os.fsdecode(path).replace("\\", "/") if isinstance(path, (str, bytes, os.PathLike)) else ""
 
 
-def _status_fault(monkeypatch, target: str, make_error, *, only_calls=None) -> None:
-    """Fail os.stat AND os.lstat for paths ending in ``target``; ``only_calls`` restricts which matching calls fail."""
-    calls = [0]
-    for name in ("stat", "lstat"):
-        real = getattr(os, name)
-
-        def faulty(path, *args, _real=real, **kwargs):
-            if _fs_name(path).endswith("/" + target):
-                calls[0] += 1
-                if only_calls is None or calls[0] in only_calls:
-                    raise make_error(_fs_name(path))
-            return _real(path, *args, **kwargs)
-
-        monkeypatch.setattr(os, name, faulty)
+def _same_path(path, target: Path) -> bool:
+    if not isinstance(path, (str, bytes, os.PathLike)):
+        return False
+    return os.path.normcase(os.path.abspath(os.fsdecode(path))) == os.path.normcase(os.path.abspath(target))
 
 
 def _open_fault(monkeypatch, target: str, make_error) -> None:
@@ -7455,12 +7467,163 @@ def _names(found: list[str], fragment: str, forbidden: tuple[str, ...] = ()) -> 
         assert wrong not in joined, "a filesystem fault was reported as {!r}:\n{}".format(wrong, joined)
 
 
-# --- ONE_PATH_VALIDATION_BOUNDARY ------------------------------------------------------------------------------
+class _FakeEntry:
+    """A listed entry the host filesystem cannot produce here: a link, a junction, a collision, a special file."""
+
+    def __init__(self, directory: str, name: str, mode: int, tag: int = 0) -> None:
+        self.name = name
+        self.path = os.path.join(directory, name)
+        self._info = SimpleNamespace(st_mode=mode, st_reparse_tag=tag)
+
+    def stat(self, *, follow_symlinks: bool = True):
+        return self._info
+
+    def is_symlink(self) -> bool:
+        return S_ISLNK(self._info.st_mode)
+
+
+class _EntryProxy:
+    def __init__(self, entry, behaviour: dict) -> None:
+        self._entry = entry
+        self._behaviour = behaviour
+
+    def __getattr__(self, name):
+        return getattr(self._entry, name)
+
+    def stat(self, *, follow_symlinks: bool = True):
+        if "stat_error" in self._behaviour:
+            shared = self._behaviour.get("first_calls")
+            if shared is None:
+                raise self._behaviour["stat_error"]
+            shared[0] += 1
+            if shared[0] == 1:
+                raise self._behaviour["stat_error"]
+        if "fake_mode" in self._behaviour:
+            return SimpleNamespace(st_mode=self._behaviour["fake_mode"], st_reparse_tag=self._behaviour.get("tag", 0))
+        return self._entry.stat(follow_symlinks=follow_symlinks)
+
+    def is_dir(self, *, follow_symlinks: bool = True):
+        if "is_dir_error" in self._behaviour:
+            raise self._behaviour["is_dir_error"]
+        return self._entry.is_dir(follow_symlinks=follow_symlinks)
+
+    def is_file(self, *, follow_symlinks: bool = True):
+        if "is_file_error" in self._behaviour:
+            raise self._behaviour["is_file_error"]
+        return self._entry.is_file(follow_symlinks=follow_symlinks)
+
+    def is_symlink(self):
+        if "is_symlink_error" in self._behaviour:
+            raise self._behaviour["is_symlink_error"]
+        return self._entry.is_symlink()
+
+
+class _ListingProxy:
+    def __init__(self, inner, entry_name, behaviour: dict, iteration_error, extras: list) -> None:
+        self._inner = inner
+        self._name = entry_name
+        self._behaviour = behaviour
+        self._iteration_error = iteration_error
+        self._extras = extras
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        self._inner.close()
+        return False
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        if self._iteration_error is not None:
+            raise self._iteration_error
+        try:
+            entry = next(self._inner)
+        except StopIteration:
+            if self._extras:
+                return self._extras.pop(0)
+            raise
+        return _EntryProxy(entry, self._behaviour) if entry.name == self._name else entry
+
+    def close(self):
+        self._inner.close()
+
+
+def _listing_fault(
+    monkeypatch, directory: str, entry_name=None, behaviour=None, iteration_error=None, extras=(), exact=None
+) -> None:
+    """Wrap the listing of one directory - by path suffix, or by ``exact`` absolute path for the root."""
+    real = os.scandir
+
+    def faulty(path=".", *args, **kwargs):
+        inner = real(path, *args, **kwargs)
+        hit = _same_path(path, exact) if exact is not None else _fs_name(path).endswith("/" + directory)
+        if hit:
+            fakes = [_FakeEntry(os.fsdecode(path), name, mode, tag) for name, mode, tag in extras]
+            return _ListingProxy(inner, entry_name, behaviour or {}, iteration_error, fakes)
+        return inner
+
+    monkeypatch.setattr(os, "scandir", faulty)
+
+
+def _scandir_raises(monkeypatch, target: Path, make_error) -> None:
+    real = os.scandir
+
+    def faulty(path=".", *args, **kwargs):
+        if _same_path(path, target):
+            raise make_error(os.fsdecode(path))
+        return real(path, *args, **kwargs)
+
+    monkeypatch.setattr(os, "scandir", faulty)
+
+
+def _entry_fault(monkeypatch, root: Path, rel: str, error: OSError, *, first_only: bool = False) -> None:
+    """Make the ONE classification of ``rel``'s entry fail (only its first call when ``first_only``)."""
+    directory, _separator, name = rel.rpartition("/")
+    behaviour: dict = {"stat_error": error}
+    if first_only:
+        behaviour["first_calls"] = [0]
+    _listing_fault(monkeypatch, directory, name, behaviour, exact=root / directory if directory else root)
+
+
+def _rename_case(path: Path, new_name: str) -> None:
+    """Change only the case of a name, in two steps so a case-insensitive filesystem really renames it."""
+    staging = path.with_name(path.name + ".case-staging")
+    path.rename(staging)
+    staging.rename(path.with_name(new_name))
+
+
+def _symlink_or_skip(target: Path | str, link: Path, *, directory: bool = False) -> None:
+    try:
+        os.symlink(target, link, target_is_directory=directory)
+    except (OSError, NotImplementedError) as exc:
+        pytest.skip("symbolic links cannot be created on this host: {}".format(type(exc).__name__))
+
+
+def _directory_redirect_or_skip(target: Path, link: Path) -> str:
+    """A directory redirect the host can really make: a junction on Windows, a symbolic link elsewhere."""
+    if sys.platform == "win32":
+        try:
+            import _winapi
+
+            _winapi.CreateJunction(str(target), str(link))
+            return "junction"
+        except (ImportError, AttributeError, OSError) as exc:
+            pytest.skip("a junction cannot be created on this host: {}".format(type(exc).__name__))
+    _symlink_or_skip(target, link, directory=True)
+    return "symbolic link"
+
+
+# --- ONE_PATH_VALIDATION_BOUNDARY: the portable Unicode path domain ----------------------------------------------
 
 ORACLE_INVALID_REPOSITORY_PATHS = [
     "",
     "a" + chr(0) + "b",
     "a" + chr(9) + "b",
+    "a" + chr(0xD800) + ".md",
+    "a" + chr(0xDFFF) + ".md",
     "/absolute.md",
     "a//b.md",
     "./a.md",
@@ -7489,6 +7652,8 @@ ORACLE_VALID_REPOSITORY_PATHS = [
     "docs/crypto_core/continuity/CONTINUITY_INDEX.md",
     "CONSOLE.md",
     "a.b.c",
+    "docs/r" + chr(0xE9) + "sum" + chr(0xE9) + ".md",
+    chr(0x65E5) + chr(0x672C) + "/notes.md",
 ]
 
 
@@ -7499,15 +7664,15 @@ def test_fs_authority_path_grammar_refuses_a_path_no_platform_should_be_asked_ab
     assert validator.repository_path_failure(value) is not None
 
 
-@pytest.mark.parametrize("value", ORACLE_VALID_REPOSITORY_PATHS)
+@pytest.mark.parametrize("value", ORACLE_VALID_REPOSITORY_PATHS, ids=[ascii(v) for v in ORACLE_VALID_REPOSITORY_PATHS])
 def test_fs_authority_path_grammar_accepts_a_portable_repository_path(value: str) -> None:
     assert validator.repository_path_failure(value) is None
 
 
 def test_fs_authority_pattern_grammar_allows_only_glob_wildcards() -> None:
-    for good in (".claude/skills/**/SKILL.md", ".github/agents/**/*.agent.md", "a/?.md"):
+    for good in (".claude/skills/**/SKILL.md", ".github/agents/**/*.agent.md", "a/?.md", ".github/workflows/*"):
         assert validator.repository_path_failure(good, pattern=True) is None, good
-    for bad in ("a\\*.md", "C:/**/x.md", "a/../*.md", "a/" + chr(0) + "*.md"):
+    for bad in ("a\\*.md", "C:/**/x.md", "a/../*.md", "a/" + chr(0) + "*.md", "a/" + ORACLE_SURROGATE + "*.md"):
         assert validator.repository_path_failure(bad, pattern=True) is not None, bad
     assert validator.repository_path_failure("a/*.md") is not None
 
@@ -7518,10 +7683,10 @@ def test_fs_authority_an_invalid_path_is_never_observed(monkeypatch, tmp_path: P
     def forbidden(*args, **kwargs):
         raise AssertionError("the filesystem was asked about an invalid path")
 
-    monkeypatch.setattr(os, "lstat", forbidden)
-    monkeypatch.setattr(os, "stat", forbidden)
+    for name in ("scandir", "lstat", "stat"):
+        monkeypatch.setattr(os, name, forbidden)
     ledger = validator.FileLedger(tmp_path)
-    for value in ("a" + chr(0) + "b", "CON", "../x"):
+    for value in ("a" + chr(0) + "b", "CON", "../x", "a" + ORACLE_SURROGATE + ".md"):
         observed = ledger.status(value)
         assert observed.status == "INVALID_PATH" and "INVALID_PATH" in observed.reason, observed
 
@@ -7539,7 +7704,6 @@ def test_fs_authority_an_invalid_path_is_never_observed(monkeypatch, tmp_path: P
 def test_fs_authority_an_invalid_registry_path_fails_and_is_never_absence(
     sandbox: Path, registry: str, entry: str
 ) -> None:
-    """P2-PATH-VALIDATION: a retired path with an embedded NUL used to read as absent and PASS."""
     text = read(sandbox, CANONICAL)
     begin = "<!-- {}_BEGIN -->\n".format(registry)
     assert text.count(begin) == 1
@@ -7557,20 +7721,46 @@ def test_fs_authority_an_invalid_discovery_pattern_fails(sandbox: Path) -> None:
     _names(failures(sandbox), "HOST_DISCOVERY_SCAN_PATHS entry '.claude/../*.md': INVALID_PATH")
 
 
-def test_fs_authority_operator_paths_are_validated_before_the_filesystem(capsys, tmp_path: Path) -> None:
-    """P2-PATH-VALIDATION at the entrypoints: an embedded NUL raised ValueError or read as "missing"."""
-    nul = chr(0)
-    assert validator.main(["--root", str(REPO_ROOT) + nul, "--json"]) == 1
+@pytest.mark.parametrize("bad", [chr(0), ORACLE_SURROGATE], ids=["NUL", "U+D800"])
+def test_fs_authority_operator_paths_are_validated_before_the_filesystem(capsys, tmp_path: Path, bad: str) -> None:
+    """P2-PATH-ENCODING at the entrypoints: never a raw exception, never "missing"."""
+    assert validator.main(["--root", str(REPO_ROOT) + bad, "--json"]) == 1
     verdict = json.loads(capsys.readouterr().out)
     assert verdict["ok"] is False and "INVALID_PATH" in verdict["failures"][0], verdict
     probe = tmp_path / "probe.json"
     shutil.copyfile(REPO_ROOT / _STRICT_EXAMPLE_REL, probe)
-    assert validator.main(["--root", str(REPO_ROOT), "--manifest", str(probe) + nul, "--json"]) == 1
+    assert validator.main(["--root", str(REPO_ROOT), "--manifest", str(probe) + bad, "--json"]) == 1
     verdict = json.loads(capsys.readouterr().out)
     assert "INVALID_PATH" in verdict["failures"][0] and "(missing" not in verdict["failures"][0], verdict
-    assert "INVALID_PATH" in validator.collect_failures(Path("repo" + nul))[0]
-    found = validator.check_manifest_file(REPO_ROOT, Path(str(probe) + nul))
+    assert "INVALID_PATH" in validator.collect_failures(Path("repo" + bad))[0]
+    found = validator.check_manifest_file(REPO_ROOT, Path(str(probe) + bad))
     assert len(found) == 1 and "INVALID_PATH" in found[0], found
+
+
+def test_fs_authority_a_path_the_filesystem_cannot_encode_is_structured(monkeypatch, capsys, tmp_path: Path) -> None:
+    """POSIX converts a path with utf-8 and surrogateescape, which cannot encode U+D800; the authority types it."""
+    with pytest.raises(UnicodeEncodeError):
+        ORACLE_SURROGATE.encode("utf-8", "surrogateescape")
+    bad = tmp_path / ("x" + ORACLE_SURROGATE)
+
+    def encoding(real):
+        def converted(path=".", *args, **kwargs):
+            if isinstance(path, (str, os.PathLike)) and not isinstance(path, bytes):
+                os.fspath(path).encode("utf-8", "surrogateescape")
+            return real(path, *args, **kwargs)
+
+        return converted
+
+    for name in ("stat", "scandir"):
+        monkeypatch.setattr(os, name, encoding(getattr(os, name)))
+    monkeypatch.setattr(io, "open", encoding(io.open))
+    assert validator.observe_status(bad).status == "INVALID_PATH"
+    entries, status, reason = validator.list_directory(bad)
+    assert entries is None and status == "INVALID_PATH" and "not encodable" in reason
+    present = validator.FileObservation("PRESENT", kind="file")
+    assert validator.read_observed_text(bad, present).status == "INVALID_PATH"
+    assert validator.main(["--root", str(bad), "--json"]) == 1
+    assert "INVALID_PATH" in json.loads(capsys.readouterr().out)["failures"][0]
 
 
 def test_fs_authority_a_root_that_is_not_a_directory_is_structured(capsys, tmp_path: Path) -> None:
@@ -7582,7 +7772,7 @@ def test_fs_authority_a_root_that_is_not_a_directory_is_structured(capsys, tmp_p
         assert fragment in verdict["failures"][0], verdict
 
 
-# --- ONE_FILE_STATUS_BOUNDARY: conservative absence ------------------------------------------------------------
+# --- conservative absence ----------------------------------------------------------------------------------------
 
 ORACLE_ABSENCE = [
     ("ENOENT", lambda: FileNotFoundError(errno.ENOENT, "injected"), "MISSING"),
@@ -7604,65 +7794,127 @@ ORACLE_ABSENCE = [
 
 
 @pytest.mark.parametrize(("label", "make", "expected"), ORACLE_ABSENCE, ids=[case[0] for case in ORACLE_ABSENCE])
-def test_fs_authority_absence_is_only_what_is_positively_established(
+def test_fs_authority_operator_absence_is_only_what_is_positively_established(
     monkeypatch, tmp_path: Path, label: str, make, expected: str
 ) -> None:
-    """P2-UNAVAILABLE-STATUS: a loop, a bad descriptor or a device that was not ready used to read as absence."""
-
     def raising(path, *args, **kwargs):
         raise make()
 
-    monkeypatch.setattr(os, "lstat", raising)
+    monkeypatch.setattr(os, "stat", raising)
     assert validator.observe_status(tmp_path / "any.md").status == expected
 
 
-ORACLE_UNAVAILABLE_RETIRED = [
+ORACLE_UNAVAILABLE_LISTINGS = [
     ("ELOOP", lambda p: OSError(errno.ELOOP, "injected", p)),
     ("EBADF", lambda p: OSError(errno.EBADF, "injected", p)),
     ("WinError 21", lambda p: _windows_error(PermissionError, errno.EACCES, 21)),
     ("WinError 53", lambda p: _windows_error(FileNotFoundError, errno.ENOENT, 53)),
+    ("WinError 161", lambda p: _windows_error(FileNotFoundError, errno.ENOENT, 161)),
+    ("EACCES", _eacces),
+    ("EIO", _eio),
 ]
 
 
-@pytest.mark.parametrize(("label", "make"), ORACLE_UNAVAILABLE_RETIRED, ids=[c[0] for c in ORACLE_UNAVAILABLE_RETIRED])
-def test_fs_authority_a_retired_path_with_an_unavailable_status_is_not_proven_absent(
-    monkeypatch, sandbox: Path, label: str, make
-) -> None:
+@pytest.mark.parametrize(
+    ("label", "make"), ORACLE_UNAVAILABLE_LISTINGS, ids=[c[0] for c in ORACLE_UNAVAILABLE_LISTINGS]
+)
+def test_fs_authority_a_listing_failure_is_never_absence(monkeypatch, sandbox: Path, label: str, make) -> None:
+    """A retired path is proven absent only by a listing that succeeded; a failed listing proves nothing."""
     root = _fs_root(sandbox)
-    _status_fault(monkeypatch, ORACLE_RETIRED_PROBE, make)
+    _scandir_raises(monkeypatch, root / ".github", make)
     _names(failures(root), "retired control-plane path cannot be proven absent: " + ORACLE_RETIRED_PROBE)
 
 
 def test_fs_authority_native_statuses(tmp_path: Path) -> None:
-    afile = tmp_path / "f.md"
-    afile.write_text("x", encoding="utf-8")
+    (tmp_path / "f.md").write_text("x", encoding="utf-8")
     (tmp_path / "d").mkdir()
-    assert validator.observe_status(afile).status == "PRESENT"
-    assert validator.observe_status(tmp_path / "absent.md").status == "MISSING"
-    assert validator.observe_status(afile / "child.md").status == "MISSING"
-    directory = validator.observe_status(tmp_path / "d")
+    ledger = validator.FileLedger(tmp_path)
+    assert ledger.status("f.md").status == "PRESENT"
+    assert ledger.status("absent.md").status == "MISSING"
+    assert ledger.status("f.md/child.md").status == "MISSING"
+    assert ledger.status("d/absent.md").status == "MISSING"
+    directory = ledger.status("d")
     assert (directory.status, directory.kind) == ("NOT_A_FILE", "directory")
 
 
-def _symlink_or_skip(target: Path | str, link: Path, *, directory: bool = False) -> None:
-    try:
-        os.symlink(target, link, target_is_directory=directory)
-    except (OSError, NotImplementedError) as exc:
-        pytest.skip("symbolic links cannot be created on this host: {}".format(type(exc).__name__))
+# --- STATIC_ANCESTOR_TRUST and the symbolic-link policy ----------------------------------------------------------
 
 
-def test_fs_authority_native_symbolic_links_are_never_regular_files(tmp_path: Path) -> None:
-    """SYMLINK POLICY, native: file link, directory link, loop and broken link are all NOT_A_FILE, never followed."""
+def test_fs_authority_native_symbolic_links_are_never_followed(tmp_path: Path) -> None:
+    """Native: a file link, directory link, broken link and loop are never regular files, and never ancestors."""
     (tmp_path / "real.md").write_text("x", encoding="utf-8")
     (tmp_path / "real_dir").mkdir()
+    (tmp_path / "real_dir" / "inner.md").write_text("x", encoding="utf-8")
     _symlink_or_skip(tmp_path / "real.md", tmp_path / "file_link.md")
     _symlink_or_skip(tmp_path / "real_dir", tmp_path / "dir_link", directory=True)
     _symlink_or_skip(tmp_path / "gone.md", tmp_path / "broken_link.md")
     _symlink_or_skip("loop_b", tmp_path / "loop_a")
     _symlink_or_skip("loop_a", tmp_path / "loop_b")
+    ledger = validator.FileLedger(tmp_path)
     for name in ("file_link.md", "dir_link", "broken_link.md", "loop_a"):
-        observed = validator.observe_status(tmp_path / name)
+        observed = ledger.status(name)
         assert (observed.status, observed.kind) == ("NOT_A_FILE", "symbolic link or junction"), (name, observed)
+    through = ledger.status("dir_link/inner.md")
+    assert through.status == "UNREADABLE" and "UNTRUSTED_ANCESTOR: dir_link" in through.reason, through
+
+
+def test_fs_authority_native_directory_redirect_ancestor_is_untrusted(tmp_path: Path) -> None:
+    (tmp_path / "outside").mkdir()
+    (tmp_path / "outside" / "inner.md").write_text("x", encoding="utf-8")
+    _directory_redirect_or_skip(tmp_path / "outside", tmp_path / "redirect")
+    observed = validator.FileLedger(tmp_path).status("redirect/inner.md")
+    assert observed.status == "UNREADABLE" and "UNTRUSTED_ANCESTOR: redirect" in observed.reason, observed
+
+
+@pytest.mark.parametrize(
+    "rel", ["docs", "docs/crypto_core/continuity"], ids=["canonical through docs", "continuity through its directory"]
+)
+def test_fs_authority_external_authority_through_a_redirected_ancestor_is_refused(
+    sandbox: Path, tmp_path: Path, rel: str
+) -> None:
+    """P2-STATIC-ANCESTOR, native: the frozen candidate read authority bytes through a junction and PASSED."""
+    external = tmp_path / "external"
+    external.mkdir()
+    shutil.move(str(sandbox / rel), str(external / "moved"))
+    _directory_redirect_or_skip(external / "moved", sandbox / rel)
+    found = failures(sandbox)
+    _names(found, "UNTRUSTED_ANCESTOR: {} is a symbolic link or junction".format(rel))
+
+
+ORACLE_ANCESTOR_SEAMS = [
+    ("symbolic link", S_IFLNK | 0o777, 0),
+    ("junction", S_IFDIR | 0o777, 0xA0000003),
+]
+
+
+@pytest.mark.parametrize(("label", "mode", "tag"), ORACLE_ANCESTOR_SEAMS, ids=[c[0] for c in ORACLE_ANCESTOR_SEAMS])
+def test_fs_authority_a_linked_ancestor_is_untrusted_on_every_platform(
+    monkeypatch, sandbox: Path, label: str, mode: int, tag: int
+) -> None:
+    _listing_fault(monkeypatch, "", "docs", {"fake_mode": mode, "tag": tag}, exact=sandbox)
+    _names(
+        failures(sandbox),
+        "canonical authority unreadable: docs/crypto_core/agent_os_v2.md: UNTRUSTED_ANCESTOR: docs is a symbolic link",
+    )
+
+
+@pytest.mark.parametrize(("label", "make"), [("EACCES", _eacces), ("EIO", _eio)], ids=["EACCES", "EIO"])
+def test_fs_authority_an_unclassifiable_ancestor_is_unreadable(monkeypatch, sandbox: Path, label: str, make) -> None:
+    _entry_fault(monkeypatch, sandbox, "docs", make("docs"))
+    _names(
+        failures(sandbox),
+        "canonical authority unreadable: docs/crypto_core/agent_os_v2.md: UNREADABLE_FILE: entry cannot be classified",
+        ("canonical authority missing",),
+    )
+
+
+def test_fs_authority_a_linked_discovery_prefix_fails(monkeypatch, sandbox: Path) -> None:
+    _listing_fault(monkeypatch, "", ".claude", {"fake_mode": S_IFLNK | 0o777}, exact=sandbox)
+    assert_rejects(
+        sandbox,
+        "host auto-discovery location cannot be observed: .claude/skills (scanning .claude/skills/**/SKILL.md): "
+        "UNTRUSTED_ANCESTOR: .claude",
+    )
 
 
 def test_fs_authority_native_symbolic_links_in_a_discovery_location_fail(tmp_path: Path) -> None:
@@ -7680,17 +7932,16 @@ def test_fs_authority_native_symbolic_links_in_a_discovery_location_fail(tmp_pat
 
 # --- category matrix through the real gate ----------------------------------------------------------------------
 
-# category -> (path, STATUS-fault failure, READ-fault failure or None, what would mean "missing")
 ORACLE_FS_MATRIX = {
     "canonical": (
         CANONICAL,
-        "canonical authority unreadable: docs/crypto_core/agent_os_v2.md: UNREADABLE_FILE: status cannot be read",
+        "canonical authority unreadable: docs/crypto_core/agent_os_v2.md: UNREADABLE_FILE: entry cannot be classified",
         "canonical authority unreadable: docs/crypto_core/agent_os_v2.md: UNREADABLE_FILE: cannot be read",
         ("canonical authority missing",),
     ),
     "doctrine": (
         "CLAUDE.md",
-        "CLAUDE.md: UNREADABLE_FILE: status cannot be read",
+        "CLAUDE.md: UNREADABLE_FILE: entry cannot be classified",
         "CLAUDE.md: UNREADABLE_FILE: cannot be read",
         ("active doctrine surface missing from the tree: CLAUDE.md",),
     ),
@@ -7702,19 +7953,19 @@ ORACLE_FS_MATRIX = {
     ),
     "historical host": (
         _ORACLE_HISTORICAL_RULE,
-        _ORACLE_HISTORICAL_RULE + ": UNREADABLE_FILE: status cannot be read",
+        _ORACLE_HISTORICAL_RULE + ": UNREADABLE_FILE: entry cannot be classified",
         _ORACLE_HISTORICAL_RULE + ": UNREADABLE_FILE: cannot be read",
         (),
     ),
     "committed schema": (
         _STRICT_SCHEMA_REL,
-        _STRICT_SCHEMA_REL + ": STRICT_JSON_REJECTED: UNREADABLE_FILE: status cannot be read",
+        _STRICT_SCHEMA_REL + ": STRICT_JSON_REJECTED: UNREADABLE_FILE: entry cannot be classified",
         _STRICT_SCHEMA_REL + ": STRICT_JSON_REJECTED: UNREADABLE_FILE: cannot be read",
         (_STRICT_SCHEMA_REL + ": missing",),
     ),
     "committed example": (
         _STRICT_EXAMPLE_REL,
-        _STRICT_EXAMPLE_REL + ": STRICT_JSON_REJECTED: UNREADABLE_FILE: status cannot be read",
+        _STRICT_EXAMPLE_REL + ": STRICT_JSON_REJECTED: UNREADABLE_FILE: entry cannot be classified",
         _STRICT_EXAMPLE_REL + ": STRICT_JSON_REJECTED: UNREADABLE_FILE: cannot be read",
         (_STRICT_EXAMPLE_REL + ": missing",),
     ),
@@ -7723,12 +7974,6 @@ ORACLE_FS_MATRIX = {
         "required control-plane artifact status cannot be proven: .github/workflows/ci.yml: UNREADABLE_FILE",
         None,
         ("missing from the tree: .github/workflows/ci.yml",),
-    ),
-    "retired path": (
-        ORACLE_RETIRED_PROBE,
-        "retired control-plane path cannot be proven absent: " + ORACLE_RETIRED_PROBE + ": UNREADABLE_FILE",
-        None,
-        (),
     ),
 }
 ORACLE_FS_CONTENT = [name for name, spec in ORACLE_FS_MATRIX.items() if spec[2] is not None]
@@ -7740,12 +7985,12 @@ _FS_STATUS_MATRIX = [
 @pytest.mark.parametrize(
     ("category", "label", "make"), _FS_STATUS_MATRIX, ids=["{} {}".format(c, lab) for c, lab, _ in _FS_STATUS_MATRIX]
 )
-def test_fs_authority_a_status_fault_is_structured_and_never_missing(
+def test_fs_authority_a_classification_fault_is_structured_and_never_missing(
     monkeypatch, sandbox: Path, category: str, label: str, make
 ) -> None:
     root = _fs_root(sandbox)
     rel, fragment, _read, missing = ORACLE_FS_MATRIX[category]
-    _status_fault(monkeypatch, rel, make)
+    _entry_fault(monkeypatch, root, rel, make(rel))
     _names(failures(root), fragment, missing)
 
 
@@ -7781,7 +8026,6 @@ ORACLE_FS_NOT_A_FILE = {
     "committed schema": _STRICT_SCHEMA_REL + ": STRICT_JSON_REJECTED: not a regular file (directory)",
     "committed example": _STRICT_EXAMPLE_REL + ": STRICT_JSON_REJECTED: not a regular file (directory)",
     "existence-only artifact": "required control-plane artifact is not a regular file: .github/workflows/ci.yml (directory)",
-    "retired path": "retired control-plane path still present in the tree: " + ORACLE_RETIRED_PROBE,
 }
 
 
@@ -7789,20 +8033,22 @@ ORACLE_FS_NOT_A_FILE = {
 def test_fs_authority_a_directory_where_a_file_is_required_is_named(sandbox: Path, category: str) -> None:
     rel, _status, _read, missing = ORACLE_FS_MATRIX[category]
     target = sandbox / rel
-    if target.exists():
-        target.unlink()
-    target.mkdir(parents=True)
+    target.unlink()
+    target.mkdir()
     _names(failures(sandbox), ORACLE_FS_NOT_A_FILE[category], missing)
+
+
+def test_fs_authority_a_retired_path_that_is_a_directory_is_still_present(sandbox: Path) -> None:
+    (sandbox / ORACLE_RETIRED_PROBE).mkdir(parents=True)
+    _names(failures(sandbox), "retired control-plane path still present in the tree: " + ORACLE_RETIRED_PROBE)
 
 
 @pytest.mark.parametrize("category", ORACLE_FS_CONTENT)
 def test_fs_authority_a_file_that_vanishes_after_its_one_status_fails_closed(
     monkeypatch, sandbox: Path, category: str
 ) -> None:
-    """TOCTOU: the one retained status is PRESENT, the read then finds nothing - never a silent skip or a pass."""
     root = _fs_root(sandbox)
     rel = ORACLE_FS_MATRIX[category][0]
-    _status_fault(monkeypatch, rel, _vanished, only_calls=set(range(2, 100)))
     _open_fault(monkeypatch, rel, _vanished)
     found = failures(root)
     assert any(rel in item for item in found), "\n".join(found)
@@ -7811,123 +8057,84 @@ def test_fs_authority_a_file_that_vanishes_after_its_one_status_fails_closed(
 # --- ONE_OBSERVATION_SEMANTIC -------------------------------------------------------------------------------------
 
 
-def test_fs_authority_every_path_is_observed_once_per_run(monkeypatch, sandbox: Path) -> None:
+def test_fs_authority_every_directory_is_listed_once_and_no_path_is_stat_ed(monkeypatch, sandbox: Path) -> None:
+    """Every repository decision comes from ONE listing per directory; no leaf status is ever taken beside it."""
     root = _fs_root(sandbox)
-    seen: list[str] = []
-    for name in ("stat", "lstat"):
-        real = getattr(os, name)
+    inside = os.path.normcase(os.path.abspath(root))
+    listed: list[str] = []
+    stated: list[str] = []
+    real_scandir = os.scandir
 
-        def counting(path, *args, _real=real, **kwargs):
-            seen.append(_fs_name(path))
-            return _real(path, *args, **kwargs)
+    def counting(path=".", *args, **kwargs):
+        listed.append(os.path.normcase(os.path.abspath(os.fsdecode(path))))
+        return real_scandir(path, *args, **kwargs)
 
-        monkeypatch.setattr(os, name, counting)
-    assert failures(root) == []
-    counts: dict[str, int] = {}
-    for name in seen:
-        counts[name] = counts.get(name, 0) + 1
-    repeated = {name: count for name, count in counts.items() if count > 1}
+    def recording(real_call):
+        # Record rather than raise: an exception here would also fire inside pytest's own failure reporting.
+        def observed(path, *args, **kwargs):
+            if isinstance(path, (str, bytes, os.PathLike)):
+                name = os.path.normcase(os.path.abspath(os.fsdecode(path)))
+                if name == inside or name.startswith(inside + os.sep):
+                    stated.append(name)
+            return real_call(path, *args, **kwargs)
+
+        return observed
+
+    monkeypatch.setattr(os, "scandir", counting)
+    monkeypatch.setattr(os, "stat", recording(os.stat))
+    monkeypatch.setattr(os, "lstat", recording(os.lstat))
+    found = failures(root)
+    monkeypatch.undo()
+    assert found == [], found
+    assert stated == [], "a repository path was observed outside its directory listing: {}".format(stated)
+    repeated = {path: listed.count(path) for path in set(listed) if listed.count(path) > 1}
     assert repeated == {}, repeated
-    observed = {name for name in counts}
-    for rel in (
-        CANONICAL,
-        "CLAUDE.md",
-        ORACLE_ORACLE_REL,
-        _STRICT_SCHEMA_REL,
-        ORACLE_EXISTENCE_ONLY,
-        ORACLE_RETIRED_PROBE,
-    ):
-        assert any(name.endswith("/" + rel) for name in observed), rel
+    for rel in ("", "docs/crypto_core", "tests/crypto_core", ".github/workflows", "docs/crypto_core/continuity"):
+        assert os.path.normcase(os.path.abspath(root / rel if rel else root)) in listed, rel
 
 
 def test_fs_authority_the_bootstrap_oracle_keeps_its_one_observation(monkeypatch, sandbox: Path) -> None:
-    """P2-BOOTSTRAP-STATUS: an UNREADABLE first status was discarded, the path asked again, and the gate PASSED."""
+    """P2-BOOTSTRAP regression: the first classification fails and a later one would succeed; the failure stays."""
     root = _fs_root(sandbox)
     patch(root, CANONICAL, "- {}\n".format(ORACLE_ORACLE_REL), "")
     assert failures(root) == []
-    _status_fault(monkeypatch, ORACLE_ORACLE_REL, _eacces, only_calls={1})
+    _entry_fault(monkeypatch, root, ORACLE_ORACLE_REL, _eacces(ORACLE_ORACLE_REL), first_only=True)
     _names(
         failures(root),
         "independent contract oracle status cannot be proven: " + ORACLE_ORACLE_REL + ": UNREADABLE_FILE",
     )
 
 
+def test_fs_authority_a_shared_ancestor_is_classified_once_for_every_descendant(monkeypatch, sandbox: Path) -> None:
+    """The first classification of a shared ancestor fails and a later one would succeed: every path beneath it
+    carries the retained failure - never one failing descendant beside passing siblings."""
+    root = _fs_root(sandbox)
+    ancestor = "docs/crypto_core/continuity"
+    _entry_fault(monkeypatch, root, ancestor, _eacces(ancestor), first_only=True)
+    found = failures(root)
+    joined = "\n".join(found)
+    for rel in (_STRICT_SCHEMA_REL, _STRICT_EXAMPLE_REL):
+        assert any(rel in item and "entry cannot be classified" in item for item in found), "{}:\n{}".format(
+            rel, joined
+        )
+
+
+def test_fs_authority_a_retained_failure_is_never_erased(tmp_path: Path) -> None:
+    (tmp_path / "Real.md").write_text("x", encoding="utf-8")
+    ledger = validator.FileLedger(tmp_path)
+    first = ledger.status("real.md")
+    assert first.status == "INVALID_PATH" and "case alias" in first.reason, first
+    _rename_case(tmp_path / "Real.md", "real.md")
+    assert ledger.status("real.md") is first
+    assert ledger.text("real.md").status == "INVALID_PATH"
+
+
 # --- ONE_DISCOVERY_BOUNDARY ---------------------------------------------------------------------------------------
 
 
-class _EntryProxy:
-    def __init__(self, entry, behaviour: dict) -> None:
-        self._entry = entry
-        self._behaviour = behaviour
-
-    def __getattr__(self, name):
-        return getattr(self._entry, name)
-
-    def stat(self, *, follow_symlinks: bool = True):
-        if "stat_error" in self._behaviour:
-            raise self._behaviour["stat_error"]
-        if "fake_mode" in self._behaviour:
-            return SimpleNamespace(st_mode=self._behaviour["fake_mode"], st_reparse_tag=self._behaviour.get("tag", 0))
-        return self._entry.stat(follow_symlinks=follow_symlinks)
-
-    def is_dir(self, *, follow_symlinks: bool = True):
-        if "is_dir_error" in self._behaviour:
-            raise self._behaviour["is_dir_error"]
-        return self._entry.is_dir(follow_symlinks=follow_symlinks)
-
-    def is_file(self, *, follow_symlinks: bool = True):
-        if "is_file_error" in self._behaviour:
-            raise self._behaviour["is_file_error"]
-        return self._entry.is_file(follow_symlinks=follow_symlinks)
-
-    def is_symlink(self):
-        if "is_symlink_error" in self._behaviour:
-            raise self._behaviour["is_symlink_error"]
-        return self._entry.is_symlink()
-
-
-class _ListingProxy:
-    def __init__(self, inner, entry_name: str | None, behaviour: dict, iteration_error: OSError | None) -> None:
-        self._inner = inner
-        self._name = entry_name
-        self._behaviour = behaviour
-        self._iteration_error = iteration_error
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *exc):
-        self._inner.close()
-        return False
-
-    def __iter__(self):
-        return self
-
-    def __next__(self):
-        if self._iteration_error is not None:
-            raise self._iteration_error
-        entry = next(self._inner)
-        return _EntryProxy(entry, self._behaviour) if entry.name == self._name else entry
-
-    def close(self):
-        self._inner.close()
-
-
-def _listing_fault(monkeypatch, directory: str, entry_name=None, behaviour=None, iteration_error=None) -> None:
-    real = os.scandir
-
-    def faulty(path=".", *args, **kwargs):
-        inner = real(path, *args, **kwargs)
-        if _fs_name(path).endswith("/" + directory):
-            return _ListingProxy(inner, entry_name, behaviour or {}, iteration_error)
-        return inner
-
-    monkeypatch.setattr(os, "scandir", faulty)
-
-
-def _plant_rogue(root: Path) -> None:
-    rogue = root / ORACLE_ROGUE
-    rogue.parent.mkdir(parents=True)
+def _plant_rogue(root: Path, name: str = "SKILL.md") -> None:
+    rogue = root / ORACLE_ROGUE_DIR / name
+    rogue.parent.mkdir(parents=True, exist_ok=True)
     rogue.write_text("# rogue\n", encoding="utf-8", newline="\n")
 
 
@@ -7964,13 +8171,11 @@ ORACLE_CLASSIFICATION_FAULTS = [
 def test_fs_authority_an_unclassifiable_directory_never_hides_its_descendants(
     monkeypatch, sandbox: Path, label: str, behaviour: dict, fragment
 ) -> None:
-    """P2-DISCOVERY-CLASSIFICATION: an is_dir error filed the rogue directory as a file, and the gate PASSED."""
     _plant_rogue(sandbox)
     _listing_fault(monkeypatch, ".claude/skills", "zz-oracle-rogue", behaviour)
     found = failures(sandbox)
     assert found, "an unclassifiable discovery entry was accepted"
     if fragment is None:
-        # Whatever the implementation calls, the rogue is either classified and refused or reported unclassifiable.
         joined = "\n".join(found)
         assert ORACLE_ROGUE_DIR in joined, joined
     else:
@@ -7991,14 +8196,7 @@ def test_fs_authority_an_unlistable_discovery_location_fails(
     monkeypatch, sandbox: Path, where: str, label: str, make
 ) -> None:
     _plant_rogue(sandbox)
-    real = os.scandir
-
-    def faulty(path=".", *args, **kwargs):
-        if _fs_name(path).endswith("/" + where):
-            raise make(_fs_name(path))
-        return real(path, *args, **kwargs)
-
-    monkeypatch.setattr(os, "scandir", faulty)
+    _scandir_raises(monkeypatch, sandbox / where, make)
     assert_rejects(sandbox, "host auto-discovery location cannot be listed: {} (scanning".format(where))
 
 
@@ -8008,27 +8206,19 @@ def test_fs_authority_an_iteration_error_during_listing_fails(monkeypatch, sandb
     assert_rejects(sandbox, "host auto-discovery location cannot be listed: .claude/skills (scanning")
 
 
-def test_fs_authority_a_linked_discovery_prefix_fails(monkeypatch, sandbox: Path) -> None:
-    real = os.lstat
-
-    def linked(path, *args, **kwargs):
-        if _fs_name(path).endswith("/.claude"):
-            return SimpleNamespace(st_mode=S_IFLNK | 0o777, st_reparse_tag=0)
-        return real(path, *args, **kwargs)
-
-    monkeypatch.setattr(os, "lstat", linked)
-    assert_rejects(
-        sandbox, "host auto-discovery location .claude (scanning .claude/skills/**/SKILL.md) is a symbolic link"
-    )
-
-
 def test_fs_authority_a_matching_special_file_fails(monkeypatch, sandbox: Path) -> None:
     _plant_rogue(sandbox)
-    _listing_fault(monkeypatch, ORACLE_ROGUE_DIR, "SKILL.md", {"fake_mode": 0o010644})
+    _listing_fault(monkeypatch, ORACLE_ROGUE_DIR, "SKILL.md", {"fake_mode": ORACLE_FIFO_MODE})
     assert_rejects(
         sandbox,
         "host auto-discovery entry " + ORACLE_ROGUE + " (matched .claude/skills/**/SKILL.md) is not a regular file",
     )
+
+
+def test_fs_authority_an_entry_outside_the_portable_domain_fails(monkeypatch, sandbox: Path) -> None:
+    name = "zz" + chr(0xDC80)
+    _listing_fault(monkeypatch, ".claude/skills", extras=[(name, S_IFDIR | 0o755, 0)])
+    assert_rejects(sandbox, "is outside the portable path domain")
 
 
 @pytest.mark.parametrize(
@@ -8047,18 +8237,268 @@ def test_fs_authority_discovery_lists_what_the_scan_glob_meaning_lists(
     assert (path in found) is matches
 
 
+# --- ONE_PATH_IDENTITY --------------------------------------------------------------------------------------------
+
+
+def test_fs_authority_path_identity_is_nfc_and_case_folded() -> None:
+    assert validator.path_identity("SKILL.md") == validator.path_identity("skill.md")
+    assert validator.path_identity("e" + chr(0x301) + ".md") == validator.path_identity(chr(0xE9) + ".md")
+    assert validator.path_identity("a.md") != validator.path_identity("b.md")
+
+
+def test_fs_authority_a_case_alias_host_surface_is_discovered(sandbox: Path) -> None:
+    """P2-NATIVE-CASE: `skill.md` is loaded as `SKILL.md` by a case-insensitive host, and used to stay invisible."""
+    _plant_rogue(sandbox, "skill.md")
+    assert_rejects(sandbox, "host auto-discovery surface present but not registered: " + ORACLE_ROGUE_DIR + "/skill.md")
+
+
+def test_fs_authority_a_case_alias_of_a_registered_discovered_surface_fails(sandbox: Path) -> None:
+    registered = sandbox / ".claude/skills/crypto-core-token-efficient-loop/SKILL.md"
+    _rename_case(registered, "Skill.md")
+    found = failures(sandbox)
+    _names(
+        found,
+        "host auto-discovery surface .claude/skills/crypto-core-token-efficient-loop/Skill.md is a case alias of the "
+        "registered .claude/skills/crypto-core-token-efficient-loop/SKILL.md",
+    )
+    _names(found, ".claude/skills/crypto-core-token-efficient-loop/SKILL.md: INVALID_PATH: case alias")
+
+
+def test_fs_authority_a_case_alias_of_a_registered_leaf_fails_on_every_platform(sandbox: Path) -> None:
+    _rename_case(sandbox / "CLAUDE.md", "claude.md")
+    _names(
+        failures(sandbox),
+        "CLAUDE.md: INVALID_PATH: case alias",
+        ("active doctrine surface missing from the tree: CLAUDE.md",),
+    )
+
+
+def test_fs_authority_a_case_alias_in_an_ancestor_fails_on_every_platform(sandbox: Path) -> None:
+    _rename_case(sandbox / "docs", "Docs")
+    _names(
+        failures(sandbox), "canonical authority unreadable: docs/crypto_core/agent_os_v2.md: INVALID_PATH: case alias"
+    )
+
+
+def test_fs_authority_a_case_collision_fails_on_every_platform(monkeypatch, sandbox: Path) -> None:
+    _listing_fault(monkeypatch, "", extras=[("claude.md", ORACLE_FILE_MODE, 0)], exact=sandbox)
+    _names(failures(sandbox), "CLAUDE.md: INVALID_PATH: case collision")
+
+
+def test_fs_authority_a_case_collision_in_a_discovery_location_fails(monkeypatch, sandbox: Path) -> None:
+    _plant_rogue(sandbox)
+    _listing_fault(monkeypatch, ORACLE_ROGUE_DIR, extras=[("skill.md", ORACLE_FILE_MODE, 0)])
+    assert_rejects(sandbox, "host auto-discovery location " + ORACLE_ROGUE_DIR + " holds a case collision")
+
+
+def test_fs_authority_registries_cannot_name_one_identity_twice(sandbox: Path) -> None:
+    patch(
+        sandbox,
+        CANONICAL,
+        "<!-- RETIRED_CONTROL_PLANE_PATHS_BEGIN -->\n",
+        "<!-- RETIRED_CONTROL_PLANE_PATHS_BEGIN -->\n- claude.md\n",
+    )
+    assert_rejects(
+        sandbox, "the registries name one path identity in more than one spelling: ['CLAUDE.md', 'claude.md']"
+    )
+
+
+# --- HOST_EXECUTABLE_WORKFLOW_CLOSED_WORLD -------------------------------------------------------------------------
+
+
+def test_workflow_registry_matches_the_oracle() -> None:
+    text = (REPO_ROOT / CANONICAL).read_text(encoding="utf-8-sig")
+    assert (
+        dict(validator.parse_surface_registry(text, "HOST_EXECUTABLE_WORKFLOWS") or [])
+        == ORACLE_HOST_EXECUTABLE_WORKFLOWS
+    )
+    assert ".github/workflows/ci.yml" not in (validator.parse_registry(text, "HOST_NON_DISCOVERY_PATHS") or [])
+
+
+def test_workflow_every_committed_workflow_is_classified() -> None:
+    committed = sorted(".github/workflows/" + name for name in os.listdir(REPO_ROOT / ".github" / "workflows"))
+    assert committed == sorted(ORACLE_HOST_EXECUTABLE_WORKFLOWS)
+
+
+def _workflows(root: Path) -> Path:
+    return root / ".github" / "workflows"
+
+
+ORACLE_WORKFLOW_BODY = "name: rogue\non: pull_request\njobs: {}\n"
+
+
+def _add_workflow(name: str):
+    def mutate(root: Path) -> None:
+        (_workflows(root) / name).write_text(ORACLE_WORKFLOW_BODY, encoding="utf-8", newline="\n")
+
+    return mutate
+
+
+def _remove_workflow(root: Path) -> None:
+    (_workflows(root) / "deribit-public-smoke.yml").unlink()
+
+
+def _rename_to_yaml(root: Path) -> None:
+    (_workflows(root) / "deribit-public-smoke.yml").rename(_workflows(root) / "deribit-public-smoke.yaml")
+
+
+def _alias_workflow(root: Path) -> None:
+    _rename_case(_workflows(root) / "deribit-public-smoke.yml", "Deribit-Public-Smoke.yml")
+
+
+def _nest_workflow(root: Path) -> None:
+    (_workflows(root) / "nested").mkdir()
+    (_workflows(root) / "nested" / "inner.yml").write_text(ORACLE_WORKFLOW_BODY, encoding="utf-8", newline="\n")
+
+
+ORACLE_WORKFLOW_MUTATIONS = [
+    ("unregistered rogue.yml", _add_workflow("rogue.yml"), ["unregistered workflow file: .github/workflows/rogue.yml"]),
+    (
+        "unregistered rogue.yaml",
+        _add_workflow("rogue.yaml"),
+        ["unregistered workflow file: .github/workflows/rogue.yaml"],
+    ),
+    ("a non-workflow file", _add_workflow("README.md"), ["unregistered workflow file: .github/workflows/README.md"]),
+    (
+        "a registered workflow removed",
+        _remove_workflow,
+        ["registered workflow .github/workflows/deribit-public-smoke.yml is not present as a regular file: missing"],
+    ),
+    (
+        "a registered workflow renamed to .yaml",
+        _rename_to_yaml,
+        [
+            "registered workflow .github/workflows/deribit-public-smoke.yml is not present as a regular file: missing",
+            "unregistered workflow file: .github/workflows/deribit-public-smoke.yaml",
+        ],
+    ),
+    (
+        "a case alias of a registered workflow",
+        _alias_workflow,
+        [
+            "workflow location entry .github/workflows/Deribit-Public-Smoke.yml is a case alias of the registered "
+            "workflow .github/workflows/deribit-public-smoke.yml",
+            "registered workflow .github/workflows/deribit-public-smoke.yml is not present as a regular file: "
+            "INVALID_PATH: case alias",
+        ],
+    ),
+    ("a subdirectory", _nest_workflow, ["workflow location entry .github/workflows/nested is a directory"]),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "mutate", "needles"), ORACLE_WORKFLOW_MUTATIONS, ids=[case[0] for case in ORACLE_WORKFLOW_MUTATIONS]
+)
+def test_workflow_location_is_closed_world(sandbox: Path, label: str, mutate, needles: list[str]) -> None:
+    """P1-WORKFLOW-DISCOVERY: an unregistered workflow and an undeclared rename used to PASS."""
+    assert failures(sandbox) == []
+    mutate(sandbox)
+    found = failures(sandbox)
+    for needle in needles:
+        _names(found, needle)
+
+
+ORACLE_WORKFLOW_SHAPES = [
+    ("a case collision", "CI.yml", ORACLE_FILE_MODE, 0, "workflow location .github/workflows holds a case collision"),
+    (
+        "a symbolic link",
+        "linked.yml",
+        S_IFLNK | 0o777,
+        0,
+        "workflow location entry .github/workflows/linked.yml is a symbolic link or junction",
+    ),
+    (
+        "a junction",
+        "junction.yml",
+        S_IFDIR | 0o777,
+        0xA0000003,
+        "workflow location entry .github/workflows/junction.yml is a symbolic link or junction",
+    ),
+    (
+        "a special file",
+        "fifo.yml",
+        ORACLE_FIFO_MODE,
+        0,
+        "workflow location entry .github/workflows/fifo.yml is a special file",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "name", "mode", "tag", "needle"), ORACLE_WORKFLOW_SHAPES, ids=[case[0] for case in ORACLE_WORKFLOW_SHAPES]
+)
+def test_workflow_location_refuses_every_unexpected_shape(
+    monkeypatch, sandbox: Path, label: str, name: str, mode: int, tag: int, needle: str
+) -> None:
+    _listing_fault(monkeypatch, ".github/workflows", extras=[(name, mode, tag)])
+    assert_rejects(sandbox, needle)
+
+
+ORACLE_WORKFLOW_REGISTRY_MUTATIONS = [
+    (
+        "an entry outside the workflow location",
+        "- .github/workflows/ci.yml :: CONTROL_PLANE_CI\n",
+        "- .github/workflows/ci.yml :: CONTROL_PLANE_CI\n- .github/scripts/x.yml :: PUBLIC_SMOKE_NO_READINESS\n",
+        "entry .github/scripts/x.yml is not an immediate .yml or .yaml file of .github/workflows",
+    ),
+    (
+        "an entry with another suffix",
+        "- .github/workflows/ci.yml :: CONTROL_PLANE_CI\n",
+        "- .github/workflows/ci.yml :: CONTROL_PLANE_CI\n- .github/workflows/x.txt :: PUBLIC_SMOKE_NO_READINESS\n",
+        "entry .github/workflows/x.txt is not an immediate .yml or .yaml file of .github/workflows",
+    ),
+    (
+        "an unknown class",
+        "- .github/workflows/deribit-public-smoke.yml :: PUBLIC_SMOKE_NO_READINESS\n",
+        "- .github/workflows/deribit-public-smoke.yml :: LIVE_TRADING\n",
+        "classifies .github/workflows/deribit-public-smoke.yml as 'LIVE_TRADING'",
+    ),
+    (
+        "a second control-plane CI workflow",
+        "- .github/workflows/deribit-public-smoke.yml :: PUBLIC_SMOKE_NO_READINESS\n",
+        "- .github/workflows/deribit-public-smoke.yml :: CONTROL_PLANE_CI\n",
+        "must classify exactly one CONTROL_PLANE_CI workflow",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("label", "old", "new", "needle"),
+    ORACLE_WORKFLOW_REGISTRY_MUTATIONS,
+    ids=[case[0] for case in ORACLE_WORKFLOW_REGISTRY_MUTATIONS],
+)
+def test_workflow_registry_rules_fail_closed(sandbox: Path, label: str, old: str, new: str, needle: str) -> None:
+    patch(sandbox, CANONICAL, old, new)
+    assert_rejects(sandbox, needle)
+
+
+def test_workflow_registration_grants_no_authority_and_is_documented() -> None:
+    canonical = _normalized(REPO_ROOT / CANONICAL)
+    for token in (
+        "HOST_EXECUTABLE_WORKFLOW_CLOSED_WORLD",
+        "A registration grants ZERO Agent OS authority",
+        "it does not reopen MT4",
+        "it implies no Deribit readiness and no live authorization",
+        "GitHub discovers every workflow file",
+    ):
+        assert token in canonical, token
+    for path in ORACLE_HOST_EXECUTABLE_WORKFLOWS:
+        assert path not in ORACLE_ACTIVE_DOCTRINE_SURFACES, path
+
+
 # --- structural single authority ---------------------------------------------------------------------------------
 
 
+def _functions(source: str) -> list[ast.FunctionDef]:
+    return [node for node in ast.walk(ast.parse(source)) if isinstance(node, ast.FunctionDef)]
+
+
 def test_fs_authority_is_the_single_filesystem_authority() -> None:
-    """STRUCTURAL: no function outside the authority touches the filesystem, handles a filesystem error or a
-    ValueError from a path, so no second status, read or listing path can reappear beside it."""
+    """STRUCTURAL: only the authority touches the filesystem or handles a filesystem or path-encoding error."""
     source = VALIDATOR_PATH.read_text(encoding="utf-8")
     touching: set[str] = set()
     handling: set[str] = set()
-    for function in ast.walk(ast.parse(source)):
-        if not isinstance(function, ast.FunctionDef):
-            continue
+    for function in _functions(source):
         for node in ast.walk(function):
             if isinstance(node, ast.Call):
                 if isinstance(node.func, ast.Attribute) and node.func.attr in ORACLE_FS_CALLS:
@@ -8073,8 +8513,34 @@ def test_fs_authority_is_the_single_filesystem_authority() -> None:
                     handling.add(function.name + " (ValueError)")
     assert touching == ORACLE_FS_TOUCHING_FUNCTIONS, touching
     assert handling <= ORACLE_FS_HANDLING_FUNCTIONS, handling
-    for retired in ("def file_status", "def read_file", "class FileAccess", "_ABSENT_ERRNOS", "os.walk(", ".glob("):
+    for retired in (
+        "def file_status",
+        "def read_file",
+        "class FileAccess",
+        "_ABSENT_ERRNOS",
+        "os.walk(",
+        ".glob(",
+        "os.lstat(",
+    ):
         assert retired not in source, retired
+
+
+def test_fs_authority_path_identity_is_the_single_case_policy() -> None:
+    source = VALIDATOR_PATH.read_text(encoding="utf-8")
+    folding = {
+        function.name
+        for function in _functions(source)
+        for node in ast.walk(function)
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute) and node.func.attr == "casefold"
+    }
+    assert folding == {"path_identity"}, folding
+
+
+def test_workflow_inventory_is_the_single_workflow_registry() -> None:
+    source = VALIDATOR_PATH.read_text(encoding="utf-8")
+    assert source.count('".github/workflows"') == 1
+    assert source.count('".github/workflows/ci.yml"') == 1
+    assert source.count("BLOCK_HOST_WORKFLOWS = ") == 1
 
 
 # --- doctrine and CI -----------------------------------------------------------------------------------------------
@@ -8086,6 +8552,10 @@ def test_fs_authority_and_the_replacement_doctrine_are_documented() -> None:
         "FILESYSTEM_ACCESS_AUTHORITY",
         "ONE_PATH_VALIDATION_BOUNDARY",
         "ONE_FILE_STATUS_BOUNDARY",
+        "STATIC_ANCESTOR_TRUST",
+        "UNTRUSTED_ANCESTOR",
+        "ONE_PATH_IDENTITY",
+        "unpaired surrogate",
         "ONE_READ_DECODE_BOUNDARY",
         "ONE_DISCOVERY_BOUNDARY",
         "ONE_OBSERVATION_SEMANTIC",
