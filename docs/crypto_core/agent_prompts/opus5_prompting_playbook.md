@@ -1,6 +1,7 @@
-# Claude Opus 5 Prompting Playbook (crypto_core, v2 — minimal kernel edition)
+# Claude Opus 5 Prompting Playbook (crypto_core, v3 — Astra unified audit edition)
 
-How to prompt the one active Claude lane under `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1`. Authority:
+How to prompt the one active Claude lane under `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by
+`ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`. Authority:
 `docs/crypto_core/agent_workflow.md` section 24 — council 24.3, audit 24.4, prompt shape 24.6, lifecycle and
 budget 24.8, runtime proof 24.12. This playbook never overrides it; on any conflict, section 24 and the
 stricter safety rule win.
@@ -77,9 +78,9 @@ follows the section 24.6 serious prompt shape:
 - **Subagents:** default 0; at most 2 read-only subagents for genuinely independent, substantial,
   parallelizable investigation; only one agent mutates a branch, and the primary agent validates every
   subagent conclusion.
-- **Independence:** a same-model self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`; ordinary independent review
-  is Codex GPT-5.6 Sol as PRIMARY (the ChatGPT controller only as the section 24.4 fallback) and the protected
-  terminal audit is GPT-6 Astra.
+- **Independence:** a same-model self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`; the independent audit is
+  GPT-6 Astra as PRIMARY, which for protected work is also the protected audit (section 24.4); Codex GPT-5.6 Sol
+  and then the ChatGPT controller are recorded fallbacks for non-protected work only.
 
 ---
 
@@ -167,13 +168,13 @@ evidence invalidated it.
 
 This playbook changes prompt construction only. It does not weaken any gate: one repository writer and one
 open PR at a time; no direct `main` push; standard merge only; no self-approval and no auto-merge; explicit
-per-PR, exact-head human merge authorization; pending CI is `NOT_READY`; current valid P1/P2 threads block;
-protected work always gets the GPT-6 Astra terminal audit, which no Claude lane, Sol review or self-review
-satisfies; post-merge verification precedes the next action; crypto_core scope only — no BIST, live or private
+per-PR, exact-head human merge authorization; pending CI is `NOT_READY`; current valid material P1/P2 threads
+block; protected work always gets the GPT-6 Astra audit, which no Claude lane, Sol review, controller review or
+self-review satisfies; post-merge verification precedes the next action; crypto_core scope only — no BIST, live or private
 API, credentials, orders, scheduler/auto-loop, shadow/live execution, or capital mutation.
 
 **Temporary availability is never durable routing.** Model quota, rate limits or short-term unavailability are
-transient operational facts: record them in the controller handoff for that one task, where a Codex GPT-5.6 Sol
-outage may justify the section 24.4 ordinary-audit fallback for that task only. Never write a temporary
+transient operational facts: record them in the controller handoff for that one task, where a GPT-6 Astra
+outage may justify the section 24.4 non-protected audit fallback for that task only. Never write a temporary
 availability state into this playbook or into `agent_workflow.md`, and never infer from a quota event that a
 lane has been retired. When GPT-6 Astra is unavailable, the protected gate waits.

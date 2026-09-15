@@ -1,31 +1,32 @@
 ---
 name: crypto-core-max-safe
-description: Use for BIST_ELITE_CORE crypto_core engineering, independent audit, re-audit, or setup tasks routed to Codex that require maximum safe throughput with strict paper-only, deterministic, fail-closed, audit-first rails.
+description: Use for BIST_ELITE_CORE crypto_core engineering, routed non-protected fallback audit or re-audit, or setup tasks routed to Codex that require maximum safe throughput with strict paper-only, deterministic, fail-closed, audit-first rails.
 ---
 
 # Crypto Core Max-Safe Workflow
 
 Use this skill only for `crypto_core` work in BIST_ELITE_CORE. Authority: `AGENTS.md` →
 `docs/crypto_core/agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`, active content
-`MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1`) → this adapter, which restates no authority. Operate under
+`MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`) → this adapter, which restates no authority. Operate under
 `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2): specialized institutional crypto trading systems
 engineering — paper-first, deterministic, fail-closed, audit-first — never generic coding.
 
 ## Codex lane (section 24.3)
 
 - **Codex GPT-5.6 Sol** is the primary repo-native engineering accelerator — repo navigation, code search,
-  dependency tracing, clear-spec implementation where routed, mechanical refactor, test generation, static
-  inspection, debugging, CI analysis — and the PRIMARY ordinary independent reviewer, including the exhaustive
-  whole-contract audit and re-audit. Its host label `Ultra` is recorded literally.
-- Sol audits a candidate only when it neither implemented nor repaired that candidate lifecycle, is available,
-  and passes runtime proof (section 24.4: eligibility before availability). When Sol is independence-ineligible,
-  unavailable, quota-blocked, or stops on runtime proof before substantive audit, that reason is recorded for the
-  task and the ChatGPT controller may run the narrow `ORDINARY_INDEPENDENT_AUDIT_FALLBACK` under its independence
-  conditions; with no independent eligible reviewer the gate stops with proof. A Sol session that cannot prove its
+  dependency tracing, static inspection, clear-spec implementation when specifically routed, mechanical
+  refactor, test generation, debugging, CI analysis, large-codebase inspection. Its host label `Ultra` is
+  recorded literally.
+- GPT-6 Astra is the PRIMARY independent auditor (`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1`, section 24.4); Sol is not
+  the default auditor. For a candidate with NO protected trigger only, Sol performs an audit or re-audit as
+  `NON_PROTECTED_AUDIT_FALLBACK` when Astra is unavailable, quota-blocked or stopped by runtime proof before
+  substantive audit, or when the ChatGPT controller explicitly selects Sol — the reason recorded for that task,
+  never as durable routing — and only when Sol neither implemented nor repaired that candidate lifecycle and passes
+  runtime proof (eligibility before availability). When Sol cannot legally audit, the ChatGPT controller is the
+  last resort; with no independent eligible reviewer the gate stops with proof. A Sol session that cannot prove its
   identity or required thinking stops before auditing and delivers no verdict.
-- An ordinary Sol review never satisfies protected Class C. Protected T4 `CLASS_C_CROSS_CONTRACT` is the GPT-6
-  Astra READ_ONLY terminal audit alone; when Astra is unavailable that gate waits and is never reassigned to
-  Sol.
+- Sol never satisfies a protected audit. Protected T4 `CLASS_C_CROSS_CONTRACT` is the GPT-6 Astra READ_ONLY audit
+  alone; when Astra is unavailable that gate waits and is never reassigned to Sol.
 - Sol never audits a candidate it implemented or repaired, in any context.
 - Codex GPT-5.6 Terra and Codex GPT-5.6 Luna are `NOT_IN_ACTIVE_COUNCIL`. The ChatGPT controller
   (`CONTROLLER_READONLY_FIRST_POLICY`) routes, compiles prompts, judges evidence and owns accepted state.
@@ -50,8 +51,10 @@ tokens. Implementer conclusions are never audit premises.
 
 ## Audit contract (section 24.4)
 
-- Fresh context, exact pinned head, READ_ONLY, zero mutation, ending in an AUDITOR_TO_CONTROLLER handoff.
-- `COMPLETE_BLOCKER_COLLECTION`: return the COMPLETE current P1/P2 set of the declared semantic contract in
+- Applies only when Sol is the routed `NON_PROTECTED_AUDIT_FALLBACK` auditor, to the full
+  `ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1` standard except the lane: fresh context, exact pinned head, READ_ONLY, zero
+  mutation, the fallback reason recorded, ending in an AUDITOR_TO_CONTROLLER handoff.
+- `COMPLETE_BLOCKER_COLLECTION`: return the COMPLETE current material P1/P2 set of the declared semantic contract in
   one pass — never stop at the first defect — each finding with exact file:line evidence and a concrete
   failure scenario.
 - Judge the declared contract; never expand it (`CONTROL_PLANE_CLAIM_MINIMIZATION`, section 24.13). A finding
@@ -60,14 +63,16 @@ tokens. Implementer conclusions are never audit premises.
   numbers (section 24.8).
 - A re-audit is the one whole-contract re-audit after the one consolidated repair. Any genuine P1/P2 that
   remains is reported as `FIXED_POINT_STOP` (candidate REJECT/FREEZE); never request a second repair.
-- Protected triggers (section 24.4 list, including control-plane changes) are flagged as requiring the GPT-6
-  Astra terminal audit — never satisfied by this review.
-- P1 is a correctness/safety break; P2 is a real defect or missing negative-path proof inside the contract;
-  P3 is advisory. Overclaim of completion/readiness/live/shadow/Deribit/machine-time/capital/profitability
+- A candidate with any protected trigger (section 24.4 list, including control-plane changes) is never audited
+  by Sol: report `PROTECTED_TRIGGER_PRESENT` and stop before substantive audit; the GPT-6 Astra audit is required.
+- Severity follows `AUDIT_MATERIALITY_BOUNDARY_V1` and `FINITE_AUDIT_RULE` (section 24.4): a P1/P2 needs
+  demonstrated material relevance on a supported path inside the declared contract, with invariant, source
+  evidence, entry or consumer path, effect, materiality and minimum regression proof; P3 is advisory and never
+  blocks merge. Overclaim of completion/readiness/live/shadow/Deribit/machine-time/capital/profitability
   without its exact gate is P1.
 - Recompute digest-carrying inputs through their public serializer and reject mismatches before
   READY/ADMITTED/ACCEPTED. Forged or non-serializable input must fail closed, never raw-raise unexpectedly.
-- Current valid P1/P2 threads block. Outdated threads do not block code; resolve only with explicit guarded
+- Current valid material P1/P2 threads block. Outdated threads do not block code; resolve only with explicit guarded
   closeout authority. Never resolve human threads.
 
 ## Engineering contract
@@ -85,7 +90,8 @@ another writer, never as the reviewer of the same work, and never merge.
   changes prove exact scope and run `git diff --check` unless an executable/config surface changed.
 - Stage exact paths only. Never push directly to `main`, force-push, self-approve, or merge without exact
   per-PR, exact-head human authorization.
-- Budget (section 24.8): about 3 specialist prompts per PR, 5 at most; controller governance (state proof,
+- Budget (section 24.8): target 2 specialist prompts clean and 4 repaired, hard maximum 5, no sixth;
+  controller governance (state proof,
   status and CI reads, adjudication, merge closeout, post-merge verification) consumes none.
 
 ## Report
