@@ -65,6 +65,9 @@ tokens. Implementer conclusions are never audit premises.
   remains is reported as `FIXED_POINT_STOP` (candidate REJECT/FREEZE); never request a second repair.
 - A candidate with any protected trigger (section 24.4 list, including control-plane changes) is never audited
   by Sol: report `PROTECTED_TRIGGER_PRESENT` and stop before substantive audit; the GPT-6 Astra audit is required.
+  Transition exception (section 24.14 `ASTRA_UNIFIED_AUDIT_TRANSITION`): when the candidate is the change that
+  introduces this rule, apply this adapter and section 24 as they stand on the candidate's base (accepted main),
+  which still route that change to the ordinary Sol audit and the Astra terminal audit.
 - Severity follows `AUDIT_MATERIALITY_BOUNDARY_V1` and `FINITE_AUDIT_RULE` (section 24.4): a P1/P2 needs
   demonstrated material relevance on a supported path inside the declared contract, with invariant, source
   evidence, entry or consumer path, effect, materiality and minimum regression proof; P3 is advisory and never

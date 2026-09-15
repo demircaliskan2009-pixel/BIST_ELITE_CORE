@@ -52,7 +52,8 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   when Sol cannot legally audit — reason recorded; the controller, including through ChatGPT Work, neither
   implemented nor repaired the candidate; fresh pinned-head READ_ONLY; complete blocker collection with evidence;
   zero mutation; never a protected audit. Protected work waits for Astra. No independent eligible reviewer →
-  `STOP_WITH_PROOF`.
+  `STOP_WITH_PROOF`. Exception: the change that introduces this routing is audited under section 24 and the
+  adapters of its base, not its own text (section 24.14 transition).
 - **Never:** product implementation; any protected audit; an independent audit outside that fallback or of
   its own implementation or repair; a substitute for local tests; memory as repository state; GitHub mutation
   without an exact human action authorization; merge authority.

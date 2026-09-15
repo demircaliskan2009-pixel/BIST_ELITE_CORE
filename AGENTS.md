@@ -110,7 +110,8 @@ post-merge verification.
   schema, dependency or process merely because it could be modelled.
 - `SETUP_FREEZE` (section 24.14): once the kernel and its `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1` amendment are
   each independently accepted under the plane that governed them, merged, post-merge verified and fresh-chat
-  accepted, `SETUP_STATUS=CLOSED_FROZEN`; the amendment grants its own introducing change no exemption. The setup then reopens only for a real safety defect,
+  accepted, `SETUP_STATUS=CLOSED_FROZEN`; the amendment grants its own introducing change no exemption, and while that change is under acceptance
+  audit its auditors apply section 24 and the adapters of its base, not its own text. The setup then reopens only for a real safety defect,
   broken continuity, a material capability change, or measured repeated-work reduction, and the default next
   action is product work.
 

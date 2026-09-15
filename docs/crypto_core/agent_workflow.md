@@ -1067,7 +1067,12 @@ rules of 24.3, 24.4, 24.5 and 24.8) is a reopening under `MATERIAL_CAPABILITY_CH
 frontier audit lane) and `MEASURED_REPEATED_WORK_REDUCTION` (duplicated ordinary-then-protected review of the same
 head). The change that introduces it grants itself no exemption and no retroactive credit: its own acceptance is
 governed by the control plane accepted before it, and these rules become authoritative only once that change is
-independently accepted under the prior plane, merged, post-merge verified and fresh-chat accepted. From then on
+independently accepted under the prior plane, merged, post-merge verified and fresh-chat accepted. While that
+change is under acceptance audit, every auditor and the ChatGPT controller apply this section and the host
+adapters as they stand on its base (accepted main), never the candidate's own text: the candidate's text is the
+object under audit, not the audit procedure, so the prior plane's ordinary independent audit and protected GPT-6
+Astra terminal audit remain performable. The amendment's own rules, including the Sol protected-trigger stop,
+bind only candidate lifecycles that start after it is merged and post-merge verified. From then on
 `SETUP_STATUS=CLOSED_FROZEN` holds again under the reopen rules above — proven from live evidence, never written
 into a durable file — and the default next action is product work.
 
