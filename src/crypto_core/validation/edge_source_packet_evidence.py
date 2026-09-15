@@ -7,31 +7,36 @@ binds. It consumes the EF-2 intake -- the root anchor, which for EF-3 is also th
 
 Contract:
 
+* Authority is carried, never copied. The artifact commits one canonical EF-2 snapshot and one canonical registry
+  snapshot. The root is strictly reconstructed through ``edge_idea_intake_evidence_from_canonical_json``, re-proven by
+  ``verify_edge_idea_intake_evidence``, matched to the caller root anchor, and must be READY + PASS with the same
+  correlation id; the declared data requirements come from that authenticated root. The registry snapshot is parsed
+  through ``data_requirement_registry_from_dict``, its digest matched to the caller anchor, and its public digest after
+  re-parse must equal the snapshot digest.
 * The PIT vocabulary is not forked. A series names a ``DataRequirementKey``; its ``event_time`` / ``available_at`` /
-  ``finalized_at`` policies, finality policy, funding semantics and availability mode are copied from the re-proven
-  registry and are never declared by the caller.
+  ``finalized_at`` policies, finality policy, funding semantics and availability mode are derived from the
+  authenticated registry for that exact key and are never declared by the caller.
 * Finality is structural. A series that includes unfinalized records, or whose registry funding semantics are
   ``predicted``, FAILs; a series revised without point-in-time vintages FAILs; unknown finality or unknown revision
   behaviour is ``NEEDS_EXTERNAL_FACTS``. No unfinalized series can reach a PASS packet, so none can feed features.
 * Rights reuse the SourcePacket rights vocabulary and its rule: RESTRICTED data FAILs and never silently passes.
-* Coverage. The EF-2 declared data requirements must equal the series keys; every key must exist in the registry with
+* Coverage. The root's declared data requirements must equal the series keys; every key must exist in the registry with
   paper parity (the ``validation/pit_parity.py`` default). Packet instrument coverage is the intersection of every
-  series' coverage (an instrument is covered only when every input series covers it) and must be non-empty.
-* The EF-2 root is re-proven through ``verify_edge_idea_intake_evidence``, matched to the caller anchor, and must be
-  READY + PASS with the same correlation id; a NEEDS_* root never advances. The registry is re-proven from one
-  canonical snapshot: its public digest matches the anchor, it re-parses through ``data_requirement_registry_from_dict``
-  and the re-parsed registry has the same public digest.
+  series' coverage and must be non-empty.
+* Verification is reassembly: ``verify_edge_source_packet_evidence`` strictly parses the carried artifact, re-runs the
+  one assembly path over its carried snapshots, anchors and series declarations, and requires field-for-field equality,
+  for READY and REJECTED artifacts alike.
 * ``status`` (integrity) and ``gate_verdict`` (outcome) stay separate exactly as in EF-2; only READY + PASS advances.
-* Paper-only, deterministic, immutable, no clock/IO/network/venue fact, and every structural non-claim of EF-2.
+  Paper-only, deterministic, immutable, no clock/IO/network/venue fact, every structural non-claim of EF-2, and the
+  single Edge Factory scope policy ``edge_scope_violation``.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
-import re
-from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, fields, replace
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass, fields
 from enum import Enum
 
 from crypto_core.data.requirements import (
@@ -49,6 +54,9 @@ from crypto_core.validation.edge_idea_intake_evidence import (
     EdgeEvidenceVerification,
     EdgeGateVerdict,
     EdgeIdeaIntakeEvidence,
+    edge_idea_intake_evidence_from_canonical_json,
+    edge_idea_intake_evidence_to_dict,
+    edge_scope_violation,
     resolve_edge_gate_verdict,
     verify_edge_idea_intake_evidence,
 )
@@ -66,23 +74,11 @@ _SELF_DIGEST_FIELD = "packet_evidence_digest"
 _PREDICTED_FUNDING_SEMANTICS = "predicted"
 _SHA256_HEX_LENGTH = 64
 _HEX_CHARS = frozenset("0123456789abcdef")
-_DATA_REQUIREMENT_KEY_VALUES = frozenset(key.value for key in DataRequirementKey)
-_RIGHTS_STATUS_VALUES = frozenset(status.value for status in SourcePacketRightsStatus)
-_AVAILABILITY_MODE_VALUES = frozenset(mode.value for mode in DataAvailabilityMode)
-_REGISTRY_POLICY_FIELDS = ("event_time_policy", "available_at_policy", "finalized_at_policy")
-_REGISTRY_OPTIONAL_FIELDS = ("paper_observation_source", "finality_policy", "funding_semantics")
-# Same scope vocabulary as EF-2 (see edge_idea_intake_evidence.py).
-_BIST_PATTERN = re.compile(r"(?<![a-z0-9])(?:bist|borsa|matriks)|(?<![a-z0-9])kap(?![a-z0-9])", re.IGNORECASE)
-_FORBIDDEN_PATTERN = re.compile(
-    r"(?<![a-z0-9])(?:private_api|private_key|api_key|api_secret|credential|order_router|place_order|live_order"
-    r"|real_order|order_id|auto_loop|shadow_live_execution|scheduler)"
-    r"|(?<![a-z0-9])live(?![a-z0-9])",
-    re.IGNORECASE,
-)
+_FLAG_NAMES = frozenset(name for name, _ in EDGE_STRUCTURAL_NON_CLAIM_FLAGS)
 
 
 class EdgeSourcePacketEvidenceError(RuntimeError):
-    """Raised on malformed caller input or a forbidden BIST/live/private/order/scheduler token."""
+    """Raised on malformed caller input, a malformed carried artifact, or a forbidden scope token."""
 
 
 class EdgeSeriesFinality(str, Enum):
@@ -137,11 +133,6 @@ class EdgeSourceSeriesRecord:
     funding_semantics: str | None
 
 
-_SERIES_RECORD_KEYS = frozenset(field.name for field in fields(EdgeSourceSeriesRecord))
-_FINALITY_VALUES = frozenset(item.value for item in EdgeSeriesFinality)
-_REVISION_POLICY_VALUES = frozenset(item.value for item in EdgeSeriesRevisionPolicy)
-
-
 @dataclass(frozen=True)
 class EdgeSourcePacketEvidence:
     """Immutable, digest-bound EF-3 PIT data manifest. PAPER ONLY; proves process survival, never an edge."""
@@ -155,9 +146,11 @@ class EdgeSourcePacketEvidence:
     advances: bool
     packet_evidence_id: str
     correlation_id: str
+    root_intake_snapshot_json: str
     expected_root_intake_digest: str
     verified_root_intake_digest: str
     declared_data_requirement_keys: tuple[str, ...]
+    data_requirement_registry_snapshot_json: str
     expected_data_requirement_registry_digest: str
     verified_data_requirement_registry_digest: str
     data_requirement_registry_schema_version: str
@@ -195,18 +188,20 @@ class EdgeSourcePacketEvidence:
     auto_loop_enabled: bool = False
 
 
-_CONSTANT_FIELDS: tuple[tuple[str, str], ...] = (
-    ("schema_version", _SCHEMA_VERSION),
-    ("gate_id", _GATE_ID),
-    ("predecessor_gate_id", _PREDECESSOR_GATE_ID),
-    ("anchor_policy", _ANCHOR_POLICY),
-    ("pit_policy_source", _PIT_POLICY_SOURCE),
-    ("feature_input_finality_rule", _FEATURE_INPUT_FINALITY_RULE),
-    ("rights_vocabulary", _RIGHTS_VOCABULARY),
-    ("coverage_policy", _COVERAGE_POLICY),
-)
-_TEXT_FIELDS = ("packet_evidence_id", "correlation_id")
-_SERIES_TEXT_FIELDS = ("series_id", "source_reference", "rights_reference")
+_SERIES_RECORD_KEYS = frozenset(field.name for field in fields(EdgeSourceSeriesRecord))
+_SERIES_OPTIONAL_FIELDS = frozenset({"paper_observation_source", "finality_policy", "funding_semantics"})
+_PACKET_FIELD_KINDS: dict[str, object] = {
+    "status": EdgeEvidenceStatus,
+    "gate_verdict": EdgeGateVerdict,
+    "advances": "bool",
+    "declared_data_requirement_keys": "str_tuple",
+    "registry_keys": "str_tuple",
+    "series": "series",
+    "packet_instrument_coverage": "str_tuple",
+    "integrity_reason_codes": "str_tuple",
+    "verdict_reason_codes": "str_tuple",
+    **dict.fromkeys(_FLAG_NAMES, "bool"),
+}
 
 
 def _reason(code: str) -> str:
@@ -225,6 +220,10 @@ def _sorted_unique(reasons: Sequence[str]) -> tuple[str, ...]:
     return tuple(sorted(set(reasons)))
 
 
+def _reject_json_constant(value: str) -> object:
+    raise ValueError(f"non-finite JSON constant {value}")
+
+
 def _is_plain_text(value: object) -> bool:
     return (
         type(value) is str
@@ -238,42 +237,20 @@ def _is_hex64(value: object) -> bool:
     return type(value) is str and len(value) == _SHA256_HEX_LENGTH and all(char in _HEX_CHARS for char in value)
 
 
-def _scope_violation(text: str) -> str | None:
-    if _BIST_PATTERN.search(text):
-        return "bist_scope_leakage"
-    if _FORBIDDEN_PATTERN.search(text):
-        return "forbidden_scope_token"
-    return None
-
-
-def _is_clean_text(value: object) -> bool:
-    return _is_plain_text(value) and _scope_violation(value) is None  # type: ignore[arg-type]
-
-
 def _require_text(value: object, field_name: str) -> str:
     if not _is_plain_text(value):
         raise EdgeSourcePacketEvidenceError(_reason(f"{field_name}_invalid"))
-    violation = _scope_violation(value)  # type: ignore[arg-type]
+    violation = edge_scope_violation(value)  # type: ignore[arg-type]
     if violation is not None:
         raise EdgeSourcePacketEvidenceError(_reason(f"{violation}:{field_name}"))
     return value  # type: ignore[return-value]
 
 
-def _is_canonical_reason_list(value: object) -> bool:
-    return (
-        type(value) is list
-        and all(type(code) is str and code.startswith(f"{_REASON_PREFIX}:") for code in value)
-        and value == sorted(set(value))
-    )
-
-
-def _is_canonical_key_list(value: object) -> bool:
-    return (
-        type(value) is list
-        and bool(value)
-        and value == sorted(set(value))
-        and set(value) <= _DATA_REQUIREMENT_KEY_VALUES
-    )
+def _safe_canonical_snapshot(to_dict: Callable[[object], object], value: object) -> str:
+    try:
+        return _canonical_json(to_dict(value))
+    except Exception:  # noqa: BLE001 - an unserializable input is recorded as an empty snapshot and fails re-proof
+        return ""
 
 
 def _canonical_instruments(values: object) -> tuple[str, ...]:
@@ -327,50 +304,56 @@ def _canonical_series(series: object) -> tuple[EdgeInputSeries, ...]:
     return tuple(by_id[series_id] for series_id in sorted(by_id))
 
 
-def _registry_proof(
-    registry: DataRequirementRegistry, expected_digest: str
-) -> tuple[list[str], DataRequirementRegistry | None]:
-    """Re-prove the registry from ONE canonical snapshot: public digest, anchor, public re-parse, canonical form."""
+def _root_authority(
+    snapshot_json: str, expected_digest: str, correlation_id: str
+) -> tuple[list[str], EdgeIdeaIntakeEvidence | None]:
+    """Reconstruct and re-prove the carried EF-2 root; root-owned values come only from this authenticated root."""
 
     try:
-        canonical = _canonical_json(data_requirement_registry_to_dict(registry))
-        snapshot = json.loads(canonical)
-    except Exception:  # noqa: BLE001 - a forged or non-serializable registry must fail closed, never crash
-        return [_reason("data_requirement_registry_malformed_payload")], None
-    failures: list[str] = []
-    recomputed = _sha256(canonical)
-    if recomputed != expected_digest:
-        failures.append(_reason("data_requirement_registry_digest_mismatch"))
-    try:
-        result = data_requirement_registry_from_dict(snapshot)
-    except Exception:  # noqa: BLE001 - the public parser refusing the snapshot is a rejection, never a crash
-        result = None
-    if result is None or result.accepted is not True or type(result.registry) is not DataRequirementRegistry:
-        failures.append(_reason("data_requirement_registry_invalid"))
-        return failures, None
-    if data_requirement_registry_digest(result.registry) != recomputed:
-        failures.append(_reason("data_requirement_registry_noncanonical"))
-    return failures, result.registry
-
-
-def _consume_root_intake(
-    verification: EdgeEvidenceVerification, expected_digest: str, correlation_id: str
-) -> tuple[list[str], dict[str, object] | None]:
+        root = edge_idea_intake_evidence_from_canonical_json(snapshot_json)
+    except Exception:  # noqa: BLE001 - an unparseable root snapshot is a rejection, never a crash
+        return [_reason("root_intake_malformed_payload")], None
+    verification = verify_edge_idea_intake_evidence(root)
     if not verification.intact:
         return [_reason(f"root_intake_integrity_failure:{code}") for code in verification.reason_codes], None
     if verification.recomputed_digest != expected_digest:
         return [_reason("root_intake_digest_mismatch")], None
-    snapshot = json.loads(verification.canonical_json)
-    failures: list[str] = []
+    codes: list[str] = []
     if (
-        snapshot["status"] != EdgeEvidenceStatus.READY.value
-        or snapshot["gate_verdict"] != EdgeGateVerdict.PASS.value
-        or snapshot["advances"] is not True
+        root.status is not EdgeEvidenceStatus.READY
+        or root.gate_verdict is not EdgeGateVerdict.PASS
+        or root.advances is not True
     ):
-        failures.append(_reason(f"root_intake_not_passed:{snapshot['gate_verdict']}"))
-    if snapshot["correlation_id"] != correlation_id:
-        failures.append(_reason("correlation_id_mismatch"))
-    return failures, snapshot
+        codes.append(_reason(f"root_intake_not_passed:{root.gate_verdict.value}"))
+    if root.correlation_id != correlation_id:
+        codes.append(_reason("correlation_id_mismatch"))
+    return codes, root
+
+
+def _registry_authority(snapshot_json: str, expected_digest: str) -> tuple[list[str], DataRequirementRegistry | None]:
+    """Re-prove the carried registry snapshot through the public registry parser, serializer and digest."""
+
+    try:
+        payload = json.loads(snapshot_json, parse_constant=_reject_json_constant)
+    except Exception:  # noqa: BLE001 - an unparseable registry snapshot is a rejection, never a crash
+        return [_reason("data_requirement_registry_malformed_payload")], None
+    if type(payload) is not dict:
+        return [_reason("data_requirement_registry_malformed_payload")], None
+    codes: list[str] = []
+    if _canonical_json(payload) != snapshot_json:
+        codes.append(_reason("data_requirement_registry_snapshot_noncanonical"))
+    recomputed = _sha256(snapshot_json)
+    if recomputed != expected_digest:
+        codes.append(_reason("data_requirement_registry_digest_mismatch"))
+    try:
+        result = data_requirement_registry_from_dict(payload)
+    except Exception:  # noqa: BLE001 - the public parser refusing the snapshot is a rejection, never a crash
+        result = None
+    if result is None or result.accepted is not True or type(result.registry) is not DataRequirementRegistry:
+        return [*codes, _reason("data_requirement_registry_invalid")], None
+    if data_requirement_registry_digest(result.registry) != recomputed:
+        codes.append(_reason("data_requirement_registry_noncanonical"))
+    return codes, result.registry
 
 
 def _series_record(item: EdgeInputSeries, registry: DataRequirementRegistry | None) -> EdgeSourceSeriesRecord:
@@ -394,54 +377,133 @@ def _series_record(item: EdgeInputSeries, registry: DataRequirementRegistry | No
     )
 
 
-def _coverage_intersection(series: Sequence[Mapping[str, object]]) -> list[str]:
-    common = set(series[0]["instrument_coverage"])  # type: ignore[call-overload]
-    for record in series[1:]:
-        common &= set(record["instrument_coverage"])  # type: ignore[call-overload]
-    return sorted(common)
-
-
 def _packet_verdict_reasons(
     *,
     declared_keys: Sequence[str],
     registry_keys: Sequence[str],
-    series: Sequence[Mapping[str, object]],
+    series: Sequence[EdgeSourceSeriesRecord],
     coverage: Sequence[str],
 ) -> tuple[list[str], list[str], list[str]]:
     fail: list[str] = []
     needs_external: list[str] = []
-    series_keys = {record["data_requirement_key"] for record in series}
+    series_keys = {record.data_requirement_key for record in series}
     fail.extend(
         _reason(f"declared_data_requirement_not_covered:{key}") for key in declared_keys if key not in series_keys
     )
     for record in series:
-        series_id = record["series_id"]
-        key = record["data_requirement_key"]
-        if key not in declared_keys:
+        series_id = record.series_id
+        if record.data_requirement_key not in declared_keys:
             fail.append(_reason(f"series_data_requirement_not_declared_in_intake:{series_id}"))
-        if key not in registry_keys:
+        if record.data_requirement_key not in registry_keys:
             fail.append(_reason(f"series_data_requirement_not_in_registry:{series_id}"))
         else:
             if (
-                record["availability_mode"] != DataAvailabilityMode.PAPER_PARITY.value
-                or record["paper_observation_source"] is None
+                record.availability_mode != DataAvailabilityMode.PAPER_PARITY.value
+                or record.paper_observation_source is None
             ):
                 fail.append(_reason(f"series_paper_parity_unavailable:{series_id}"))
-            if record["funding_semantics"] == _PREDICTED_FUNDING_SEMANTICS:
+            if record.funding_semantics == _PREDICTED_FUNDING_SEMANTICS:
                 fail.append(_reason(f"series_funding_semantics_predicted_unfinalized:{series_id}"))
-        if record["rights_status"] == SourcePacketRightsStatus.RESTRICTED.value:
+        if record.rights_status == SourcePacketRightsStatus.RESTRICTED.value:
             fail.append(_reason(f"series_rights_restricted:{series_id}"))
-        if record["finality"] == EdgeSeriesFinality.INCLUDES_UNFINALIZED.value:
+        if record.finality == EdgeSeriesFinality.INCLUDES_UNFINALIZED.value:
             fail.append(_reason(f"series_unfinalized_feature_input:{series_id}"))
-        elif record["finality"] == EdgeSeriesFinality.UNKNOWN.value:
+        elif record.finality == EdgeSeriesFinality.UNKNOWN.value:
             needs_external.append(_reason(f"series_finality_unknown:{series_id}"))
-        if record["revision_policy"] == EdgeSeriesRevisionPolicy.REVISED_WITHOUT_VINTAGES.value:
+        if record.revision_policy == EdgeSeriesRevisionPolicy.REVISED_WITHOUT_VINTAGES.value:
             fail.append(_reason(f"series_revised_without_point_in_time_vintages:{series_id}"))
-        elif record["revision_policy"] == EdgeSeriesRevisionPolicy.UNKNOWN.value:
+        elif record.revision_policy == EdgeSeriesRevisionPolicy.UNKNOWN.value:
             needs_external.append(_reason(f"series_revision_policy_unknown:{series_id}"))
     if not coverage:
         fail.append(_reason("packet_instrument_coverage_empty"))
     return fail, needs_external, []
+
+
+def _assemble_packet(
+    *,
+    root_intake_snapshot_json: object,
+    expected_root_intake_digest: object,
+    data_requirement_registry_snapshot_json: object,
+    expected_data_requirement_registry_digest: object,
+    series: object,
+    packet_evidence_id: object,
+    correlation_id: object,
+) -> EdgeSourcePacketEvidence:
+    """The one assembly path of EF-3, shared by the builder and by reassembly-based verification."""
+
+    if type(root_intake_snapshot_json) is not str or type(data_requirement_registry_snapshot_json) is not str:
+        raise EdgeSourcePacketEvidenceError(_reason("authority_snapshot_malformed"))
+    if not _is_hex64(expected_root_intake_digest):
+        raise EdgeSourcePacketEvidenceError(_reason("expected_root_intake_digest_invalid"))
+    if not _is_hex64(expected_data_requirement_registry_digest):
+        raise EdgeSourcePacketEvidenceError(_reason("expected_data_requirement_registry_digest_invalid"))
+    packet_evidence_id = _require_text(packet_evidence_id, "packet_evidence_id")
+    correlation_id = _require_text(correlation_id, "correlation_id")
+    inputs = _canonical_series(series)
+
+    root_codes, root = _root_authority(root_intake_snapshot_json, expected_root_intake_digest, correlation_id)  # type: ignore[arg-type]
+    registry_codes, registry = _registry_authority(
+        data_requirement_registry_snapshot_json,
+        expected_data_requirement_registry_digest,  # type: ignore[arg-type]
+    )
+    integrity = _sorted_unique(root_codes + registry_codes)
+
+    declared_keys = () if root is None else root.data_requirement_keys
+    registry_keys = () if registry is None else tuple(sorted(key.value for key in registry.requirements))
+    records = tuple(_series_record(item, registry) for item in inputs)
+    common = set(records[0].instrument_coverage)
+    for record in records[1:]:
+        common &= set(record.instrument_coverage)
+    coverage = tuple(sorted(common))
+
+    if integrity:
+        status = EdgeEvidenceStatus.REJECTED
+        verdict = EdgeGateVerdict.NOT_EVALUATED
+        verdict_reasons: tuple[str, ...] = ()
+    else:
+        fail, needs_external, needs_governance = _packet_verdict_reasons(
+            declared_keys=declared_keys, registry_keys=registry_keys, series=records, coverage=coverage
+        )
+        status = EdgeEvidenceStatus.READY
+        verdict = resolve_edge_gate_verdict(fail, needs_external, needs_governance)
+        verdict_reasons = _sorted_unique(fail + needs_external + needs_governance)
+
+    seed = EdgeSourcePacketEvidence(
+        schema_version=_SCHEMA_VERSION,
+        gate_id=_GATE_ID,
+        predecessor_gate_id=_PREDECESSOR_GATE_ID,
+        anchor_policy=_ANCHOR_POLICY,
+        status=status,
+        gate_verdict=verdict,
+        advances=status is EdgeEvidenceStatus.READY and verdict is EdgeGateVerdict.PASS,
+        packet_evidence_id=packet_evidence_id,
+        correlation_id=correlation_id,
+        root_intake_snapshot_json=root_intake_snapshot_json,
+        expected_root_intake_digest=expected_root_intake_digest,  # type: ignore[arg-type]
+        verified_root_intake_digest="" if integrity else expected_root_intake_digest,  # type: ignore[arg-type]
+        declared_data_requirement_keys=declared_keys,
+        data_requirement_registry_snapshot_json=data_requirement_registry_snapshot_json,
+        expected_data_requirement_registry_digest=expected_data_requirement_registry_digest,  # type: ignore[arg-type]
+        verified_data_requirement_registry_digest="" if integrity else expected_data_requirement_registry_digest,  # type: ignore[arg-type]
+        data_requirement_registry_schema_version="" if registry is None else registry.schema_version,
+        registry_keys=registry_keys,
+        pit_policy_source=_PIT_POLICY_SOURCE,
+        feature_input_finality_rule=_FEATURE_INPUT_FINALITY_RULE,
+        rights_vocabulary=_RIGHTS_VOCABULARY,
+        coverage_policy=_COVERAGE_POLICY,
+        series=records,
+        packet_instrument_coverage=coverage,
+        integrity_reason_codes=integrity,
+        verdict_reason_codes=verdict_reasons,
+        packet_evidence_digest="",
+    )
+    return _with_digest(seed)
+
+
+def _with_digest(seed: EdgeSourcePacketEvidence) -> EdgeSourcePacketEvidence:
+    values = {field.name: getattr(seed, field.name) for field in fields(seed)}
+    values[_SELF_DIGEST_FIELD] = edge_source_packet_evidence_digest(seed)
+    return EdgeSourcePacketEvidence(**values)  # type: ignore[arg-type]
 
 
 def build_edge_source_packet_evidence(
@@ -463,76 +525,20 @@ def build_edge_source_packet_evidence(
 
     if type(intake) is not EdgeIdeaIntakeEvidence:
         raise EdgeSourcePacketEvidenceError(_reason("root_intake_malformed"))
-    if not _is_hex64(expected_root_intake_digest):
-        raise EdgeSourcePacketEvidenceError(_reason("expected_root_intake_digest_invalid"))
     if type(data_requirement_registry) is not DataRequirementRegistry:
         raise EdgeSourcePacketEvidenceError(_reason("data_requirement_registry_malformed"))
-    if not _is_hex64(expected_data_requirement_registry_digest):
-        raise EdgeSourcePacketEvidenceError(_reason("expected_data_requirement_registry_digest_invalid"))
-    packet_evidence_id = _require_text(packet_evidence_id, "packet_evidence_id")
-    correlation_id = _require_text(correlation_id, "correlation_id")
-    inputs = _canonical_series(series)
-
-    root_failures, intake_snapshot = _consume_root_intake(
-        verify_edge_idea_intake_evidence(intake), expected_root_intake_digest, correlation_id
-    )
-    registry_failures, registry = _registry_proof(data_requirement_registry, expected_data_requirement_registry_digest)
-    integrity = _sorted_unique(root_failures + registry_failures)
-
-    declared = None if intake_snapshot is None else intake_snapshot.get("data_requirement_keys")
-    declared_keys = tuple(declared) if _is_canonical_key_list(declared) else ()  # type: ignore[arg-type]
-    registry_keys = () if registry is None else tuple(sorted(key.value for key in registry.requirements))
-    records = tuple(_series_record(item, registry) for item in inputs)
-    record_payloads = [_serialize(record) for record in records]
-    coverage = tuple(_coverage_intersection(record_payloads))  # type: ignore[arg-type]
-
-    if integrity:
-        status = EdgeEvidenceStatus.REJECTED
-        verdict = EdgeGateVerdict.NOT_EVALUATED
-        verdict_reasons: tuple[str, ...] = ()
-        verified_root_intake_digest = ""
-        verified_registry_digest = ""
-    else:
-        fail, needs_external, needs_governance = _packet_verdict_reasons(
-            declared_keys=declared_keys,
-            registry_keys=registry_keys,
-            series=record_payloads,  # type: ignore[arg-type]
-            coverage=coverage,
-        )
-        status = EdgeEvidenceStatus.READY
-        verdict = resolve_edge_gate_verdict(fail, needs_external, needs_governance)
-        verdict_reasons = _sorted_unique(fail + needs_external + needs_governance)
-        verified_root_intake_digest = expected_root_intake_digest
-        verified_registry_digest = expected_data_requirement_registry_digest
-
-    seed = EdgeSourcePacketEvidence(
-        schema_version=_SCHEMA_VERSION,
-        gate_id=_GATE_ID,
-        predecessor_gate_id=_PREDECESSOR_GATE_ID,
-        anchor_policy=_ANCHOR_POLICY,
-        status=status,
-        gate_verdict=verdict,
-        advances=status is EdgeEvidenceStatus.READY and verdict is EdgeGateVerdict.PASS,
+    return _assemble_packet(
+        root_intake_snapshot_json=_safe_canonical_snapshot(edge_idea_intake_evidence_to_dict, intake),  # type: ignore[arg-type]
+        expected_root_intake_digest=expected_root_intake_digest,
+        data_requirement_registry_snapshot_json=_safe_canonical_snapshot(
+            data_requirement_registry_to_dict,  # type: ignore[arg-type]
+            data_requirement_registry,
+        ),
+        expected_data_requirement_registry_digest=expected_data_requirement_registry_digest,
+        series=series,
         packet_evidence_id=packet_evidence_id,
         correlation_id=correlation_id,
-        expected_root_intake_digest=expected_root_intake_digest,
-        verified_root_intake_digest=verified_root_intake_digest,
-        declared_data_requirement_keys=declared_keys,
-        expected_data_requirement_registry_digest=expected_data_requirement_registry_digest,
-        verified_data_requirement_registry_digest=verified_registry_digest,
-        data_requirement_registry_schema_version="" if registry is None else registry.schema_version,
-        registry_keys=registry_keys,
-        pit_policy_source=_PIT_POLICY_SOURCE,
-        feature_input_finality_rule=_FEATURE_INPUT_FINALITY_RULE,
-        rights_vocabulary=_RIGHTS_VOCABULARY,
-        coverage_policy=_COVERAGE_POLICY,
-        series=records,
-        packet_instrument_coverage=coverage,
-        integrity_reason_codes=integrity,
-        verdict_reason_codes=verdict_reasons,
-        packet_evidence_digest="",
     )
-    return replace(seed, packet_evidence_digest=edge_source_packet_evidence_digest(seed))
 
 
 def _serialize(value: object) -> object:
@@ -559,113 +565,101 @@ def edge_source_packet_evidence_digest(evidence: EdgeSourcePacketEvidence) -> st
     return _sha256(_canonical_json(payload))
 
 
-def _envelope_failures(body: Mapping[str, object]) -> list[str]:
-    failures: list[str] = []
-    if any(body.get(name) != expected for name, expected in _CONSTANT_FIELDS):
-        failures.append(_reason("constant_field_mismatch"))
-    if any(body.get(name) is not expected for name, expected in EDGE_STRUCTURAL_NON_CLAIM_FLAGS):
-        failures.append(_reason("structural_non_claim_violation"))
-    integrity = body.get("integrity_reason_codes")
-    verdict_codes = body.get("verdict_reason_codes")
-    if not _is_canonical_reason_list(integrity) or not _is_canonical_reason_list(verdict_codes):
-        failures.append(_reason("reason_codes_noncanonical"))
-    status = body.get("status")
-    verdict = body.get("gate_verdict")
-    if status == EdgeEvidenceStatus.READY.value:
-        coherent = verdict != EdgeGateVerdict.NOT_EVALUATED.value and integrity == []
-    elif status == EdgeEvidenceStatus.REJECTED.value:
-        coherent = verdict == EdgeGateVerdict.NOT_EVALUATED.value and bool(integrity) and verdict_codes == []
-    else:
-        coherent = False
-    advances = status == EdgeEvidenceStatus.READY.value and verdict == EdgeGateVerdict.PASS.value
-    if not coherent or body.get("advances") is not advances:
-        failures.append(_reason("status_verdict_incoherent"))
-    return failures
+def _malformed() -> EdgeSourcePacketEvidenceError:
+    return EdgeSourcePacketEvidenceError(_reason("packet_snapshot_malformed"))
 
 
-def _is_text(value: object) -> bool:
-    """Presence check for registry-owned text, whose canonical form belongs to ``data/requirements.py``."""
+def _parse_series_record(value: object) -> EdgeSourceSeriesRecord:
+    if type(value) is not dict or set(value) != _SERIES_RECORD_KEYS:
+        raise _malformed()
+    for name, item in value.items():
+        if name == "instrument_coverage":
+            valid = type(item) is list and all(type(symbol) is str for symbol in item)
+        elif name in _SERIES_OPTIONAL_FIELDS:
+            valid = item is None or type(item) is str
+        else:
+            valid = type(item) is str
+        if not valid:
+            raise _malformed()
+    return EdgeSourceSeriesRecord(**{**value, "instrument_coverage": tuple(value["instrument_coverage"])})
 
-    return type(value) is str and value != ""
+
+def _parse_field(kind: object, value: object) -> object:
+    if kind == "bool":
+        if type(value) is not bool:
+            raise _malformed()
+        return value
+    if kind == "str_tuple":
+        if type(value) is not list or any(type(item) is not str for item in value):
+            raise _malformed()
+        return tuple(value)
+    if kind == "series":
+        if type(value) is not list:
+            raise _malformed()
+        return tuple(_parse_series_record(item) for item in value)
+    if isinstance(kind, type) and issubclass(kind, Enum):
+        if type(value) is not str:
+            raise _malformed()
+        try:
+            return kind(value)
+        except ValueError as exc:
+            raise _malformed() from exc
+    if type(value) is not str:
+        raise _malformed()
+    return value
 
 
-def _is_valid_series_record(record: object, registry_keys: Sequence[str]) -> bool:
-    if type(record) is not dict or set(record) != _SERIES_RECORD_KEYS:
-        return False
-    coverage = record["instrument_coverage"]
-    if (
-        any(not _is_clean_text(record[name]) for name in _SERIES_TEXT_FIELDS)
-        or record["data_requirement_key"] not in _DATA_REQUIREMENT_KEY_VALUES
-        or record["rights_status"] not in _RIGHTS_STATUS_VALUES
-        or record["finality"] not in _FINALITY_VALUES
-        or record["revision_policy"] not in _REVISION_POLICY_VALUES
-        or type(coverage) is not list
-        or not coverage
-        or coverage != sorted(set(coverage))
-        or any(not _is_clean_text(symbol) for symbol in coverage)
-    ):
-        return False
-    if record["data_requirement_key"] in registry_keys:
-        return (
-            record["availability_mode"] in _AVAILABILITY_MODE_VALUES
-            and all(_is_text(record[name]) for name in _REGISTRY_POLICY_FIELDS)
-            and all(record[name] is None or _is_text(record[name]) for name in _REGISTRY_OPTIONAL_FIELDS)
+def edge_source_packet_evidence_from_canonical_json(text: str) -> EdgeSourcePacketEvidence:
+    """Strictly reconstruct EF-3 evidence from its canonical JSON (exact fields and types, canonical reserialization).
+
+    Reconstruction is not verification: downstream gates call ``verify_edge_source_packet_evidence`` on the result.
+    """
+
+    if type(text) is not str:
+        raise _malformed()
+    try:
+        payload = json.loads(text, parse_constant=_reject_json_constant)
+    except ValueError as exc:
+        raise _malformed() from exc
+    names = [field.name for field in fields(EdgeSourcePacketEvidence)]
+    if type(payload) is not dict or set(payload) != set(names) or _canonical_json(payload) != text:
+        raise _malformed()
+    evidence = EdgeSourcePacketEvidence(
+        **{name: _parse_field(_PACKET_FIELD_KINDS.get(name, "str"), payload[name]) for name in names}  # type: ignore[arg-type]
+    )
+    if _canonical_json(edge_source_packet_evidence_to_dict(evidence)) != text:
+        raise _malformed()
+    return evidence
+
+
+def _reassemble_packet(evidence: EdgeSourcePacketEvidence) -> EdgeSourcePacketEvidence:
+    series = tuple(
+        EdgeInputSeries(
+            series_id=record.series_id,
+            data_requirement_key=DataRequirementKey(record.data_requirement_key),
+            source_reference=record.source_reference,
+            rights_status=SourcePacketRightsStatus(record.rights_status),
+            rights_reference=record.rights_reference,
+            finality=EdgeSeriesFinality(record.finality),
+            revision_policy=EdgeSeriesRevisionPolicy(record.revision_policy),
+            instrument_coverage=record.instrument_coverage,
         )
-    return (
-        record["availability_mode"] == ""
-        and all(record[name] == "" for name in _REGISTRY_POLICY_FIELDS)
-        and all(record[name] is None for name in _REGISTRY_OPTIONAL_FIELDS)
+        for record in evidence.series
     )
-
-
-def _packet_semantic_failures(body: Mapping[str, object]) -> list[str]:
-    failures: list[str] = []
-    for name in _TEXT_FIELDS:
-        if not _is_clean_text(body.get(name)):
-            failures.append(_reason(f"text_field_invalid:{name}"))
-    for expected_name, verified_name in (
-        ("expected_root_intake_digest", "verified_root_intake_digest"),
-        ("expected_data_requirement_registry_digest", "verified_data_requirement_registry_digest"),
-    ):
-        if not _is_hex64(body.get(expected_name)) or body.get(verified_name) != body.get(expected_name):
-            failures.append(_reason(f"verified_digest_mismatch:{verified_name}"))
-    declared_keys = body.get("declared_data_requirement_keys")
-    registry_keys = body.get("registry_keys")
-    if not _is_canonical_key_list(declared_keys) or not _is_canonical_key_list(registry_keys):
-        failures.append(_reason("data_requirement_keys_noncanonical"))
-        return failures
-    if not _is_text(body.get("data_requirement_registry_schema_version")):
-        failures.append(_reason("data_requirement_registry_schema_version_invalid"))
-    series = body.get("series")
-    if (
-        type(series) is not list
-        or not series
-        or any(not _is_valid_series_record(record, registry_keys) for record in series)  # type: ignore[arg-type]
-        or [record["series_id"] for record in series] != sorted({record["series_id"] for record in series})
-        or len({record["data_requirement_key"] for record in series}) != len(series)
-    ):
-        failures.append(_reason("series_noncanonical"))
-        return failures
-    coverage = _coverage_intersection(series)
-    if body.get("packet_instrument_coverage") != coverage:
-        failures.append(_reason("packet_instrument_coverage_mismatch"))
-    fail, needs_external, needs_governance = _packet_verdict_reasons(
-        declared_keys=declared_keys,  # type: ignore[arg-type]
-        registry_keys=registry_keys,  # type: ignore[arg-type]
+    return _assemble_packet(
+        root_intake_snapshot_json=evidence.root_intake_snapshot_json,
+        expected_root_intake_digest=evidence.expected_root_intake_digest,
+        data_requirement_registry_snapshot_json=evidence.data_requirement_registry_snapshot_json,
+        expected_data_requirement_registry_digest=evidence.expected_data_requirement_registry_digest,
         series=series,
-        coverage=coverage,
+        packet_evidence_id=evidence.packet_evidence_id,
+        correlation_id=evidence.correlation_id,
     )
-    rederived = resolve_edge_gate_verdict(fail, needs_external, needs_governance)
-    if list(_sorted_unique(fail + needs_external + needs_governance)) != body.get(
-        "verdict_reason_codes"
-    ) or rederived.value != body.get("gate_verdict"):
-        failures.append(_reason("verdict_rederivation_mismatch"))
-    return failures
 
 
 def verify_edge_source_packet_evidence(evidence: object) -> EdgeEvidenceVerification:
-    """Re-prove EF-3 packet evidence: exact type, self-digest, constants, non-claims, status/verdict coherence, and
-    (when READY) the coverage and verdict re-derived from the carried series. Never raises on forged input."""
+    """Re-prove EF-3 evidence by strict parse and reassembly from its carried root and registry snapshots, anchors and
+    series declarations. READY and REJECTED artifacts alike must match field for field. Never raises."""
 
     if (
         type(evidence) is not EdgeSourcePacketEvidence
@@ -675,21 +669,27 @@ def verify_edge_source_packet_evidence(evidence: object) -> EdgeEvidenceVerifica
         return EdgeEvidenceVerification(False, (_reason("evidence_type_invalid"),), "", "")
     try:
         canonical = _canonical_json(edge_source_packet_evidence_to_dict(evidence))
-        snapshot = json.loads(canonical)
     except Exception:  # noqa: BLE001 - a forged or non-serializable artifact must fail closed, never crash
         return EdgeEvidenceVerification(False, (_reason("evidence_serialization_failed"),), "", "")
-    body = dict(snapshot)
-    carried = body.pop(_SELF_DIGEST_FIELD, None)
+    carried_payload = json.loads(canonical)
+    body = dict(carried_payload)
+    carried_digest = body.pop(_SELF_DIGEST_FIELD)
     recomputed = _sha256(_canonical_json(body))
     failures: list[str] = []
-    if carried != recomputed:
+    if carried_digest != recomputed:
         failures.append(_reason("self_digest_mismatch"))
-    failures.extend(_envelope_failures(body))
-    if body.get("status") == EdgeEvidenceStatus.READY.value:
-        try:
-            failures.extend(_packet_semantic_failures(body))
-        except Exception:  # noqa: BLE001 - malformed carried semantics fail closed
-            failures.append(_reason("evidence_semantics_malformed"))
+    try:
+        expected_payload = edge_source_packet_evidence_to_dict(
+            _reassemble_packet(edge_source_packet_evidence_from_canonical_json(canonical))
+        )
+    except Exception:  # noqa: BLE001 - carried semantics that cannot be reassembled fail closed, never crash
+        failures.append(_reason("evidence_semantics_malformed"))
+    else:
+        failures.extend(
+            _reason(f"field_mismatch:{name}")
+            for name in sorted(expected_payload)
+            if _canonical_json(expected_payload[name]) != _canonical_json(carried_payload.get(name))
+        )
     codes = _sorted_unique(failures)
     return EdgeEvidenceVerification(
         intact=not codes, reason_codes=codes, recomputed_digest=recomputed, canonical_json=canonical
@@ -705,6 +705,7 @@ __all__ = [
     "EdgeSourceSeriesRecord",
     "build_edge_source_packet_evidence",
     "edge_source_packet_evidence_digest",
+    "edge_source_packet_evidence_from_canonical_json",
     "edge_source_packet_evidence_to_dict",
     "verify_edge_source_packet_evidence",
 ]

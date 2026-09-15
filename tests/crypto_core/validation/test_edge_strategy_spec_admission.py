@@ -29,11 +29,14 @@ from crypto_core.validation.edge_idea_intake_evidence import (
     EdgeEvidenceStatus,
     EdgeGateVerdict,
     EdgeIdeaIntakeEvidence,
+    EdgeKillCriteriaPolicy,
     EdgeKillCriterion,
     EdgeKillCriterionComparator,
     build_edge_idea_intake_evidence,
+    build_edge_kill_criteria_policy,
     edge_idea_intake_evidence_digest,
     edge_idea_intake_evidence_to_dict,
+    edge_kill_criteria_policy_to_dict,
     verify_edge_idea_intake_evidence,
 )
 from crypto_core.validation.edge_source_packet_evidence import (
@@ -62,6 +65,7 @@ _ETH = "ETH-PERPETUAL"
 _SOL = "SOL-PERPETUAL"
 _CORRELATION = "corr-funding-carry-001"
 _NEED = "venue_funding_interval_mechanics"
+_DEFAULT = object()
 
 
 def _criterion(
@@ -127,7 +131,22 @@ _SPEC_PAYLOAD: dict[str, object] = {
 }
 
 
-def _intake(*, rights_status: str = "own_research", **overrides: object) -> EdgeIdeaIntakeEvidence:
+def _policy(criteria: object = _DRAFT, **overrides: object) -> EdgeKillCriteriaPolicy:
+    kwargs: dict[str, object] = {
+        "policy_id": "policy-kill-criteria-002",
+        "correlation_id": _CORRELATION,
+        "kill_criteria": criteria,
+        "thresholds_approved": True,
+        "approval_reference": "governance-kill-criteria-approval-002",
+        "approval_digest": "b" * 64,
+    }
+    kwargs.update(overrides)
+    return build_edge_kill_criteria_policy(**kwargs)  # type: ignore[arg-type]
+
+
+def _intake(
+    *, rights_status: str = "own_research", policy: object = _DEFAULT, **overrides: object
+) -> EdgeIdeaIntakeEvidence:
     packet = build_source_packet(
         packet_id="pkt-funding-carry-001",
         source_type="academic_paper",
@@ -138,6 +157,7 @@ def _intake(*, rights_status: str = "own_research", **overrides: object) -> Edge
         content_digest="c" * 64,
         market_scope_tags=("perp", "btc", "eth"),
     )
+    policy = _policy(policy_id="policy-kill-criteria-001") if policy is _DEFAULT else policy
     kwargs: dict[str, object] = {
         "expected_source_packet_digest": packet.packet_digest,
         "intake_id": "intake-funding-carry-001",
@@ -148,10 +168,10 @@ def _intake(*, rights_status: str = "own_research", **overrides: object) -> Edge
         "data_requirement_keys": (DataRequirementKey.FUNDING_RATE, DataRequirementKey.MARK_PRICE),
         "declared_regime_dependence": "positive_funding_premium_regime",
         "kill_criteria_draft": _DRAFT,
-        "kill_criteria_thresholds_approved": True,
-        "kill_criteria_approval_reference": "governance-kill-criteria-approval-001",
-        "kill_criteria_approval_digest": "a" * 64,
     }
+    if policy is not None:
+        kwargs["kill_criteria_policy"] = policy
+        kwargs["expected_kill_criteria_policy_digest"] = policy.policy_digest  # type: ignore[union-attr]
     kwargs.update(overrides)
     return build_edge_idea_intake_evidence(packet, **kwargs)  # type: ignore[arg-type]
 
@@ -160,14 +180,13 @@ def _series(
     series_id: str = "funding-rate-archive",
     key: DataRequirementKey = DataRequirementKey.FUNDING_RATE,
     *,
-    source_reference: str = "dataset:funding-history-v1",
     finality: EdgeSeriesFinality = EdgeSeriesFinality.FINALIZED_ONLY,
     instrument_coverage: tuple[str, ...] = (_BTC, _ETH),
 ) -> EdgeInputSeries:
     return EdgeInputSeries(
         series_id=series_id,
         data_requirement_key=key,
-        source_reference=source_reference,
+        source_reference=f"dataset:{series_id}-v1",
         rights_status=SourcePacketRightsStatus.OWN_RESEARCH,
         rights_reference="self-collected-public-archive",
         finality=finality,
@@ -177,12 +196,7 @@ def _series(
 
 
 def _mark_series(instrument_coverage: tuple[str, ...] = (_ETH, _BTC, _SOL)) -> EdgeInputSeries:
-    return _series(
-        "mark-price-archive",
-        DataRequirementKey.MARK_PRICE,
-        source_reference="dataset:mark-price-history-v1",
-        instrument_coverage=instrument_coverage,
-    )
+    return _series("mark-price-archive", DataRequirementKey.MARK_PRICE, instrument_coverage=instrument_coverage)
 
 
 def _packet_evidence(intake: EdgeIdeaIntakeEvidence | None = None, **overrides: object) -> EdgeSourcePacketEvidence:
@@ -209,7 +223,9 @@ def _spec(**overrides: object) -> StrategySpec:
     return result.spec
 
 
-def _build(intake=None, packet=None, spec=None, **overrides: object) -> EdgeStrategySpecAdmission:
+def _build(
+    packet=None, spec=None, *, intake=None, policy: object = _DEFAULT, **overrides: object
+) -> EdgeStrategySpecAdmission:
     intake = _intake() if intake is None else intake
     packet = _packet_evidence(intake) if packet is None else packet
     spec = _spec() if spec is None else spec
@@ -219,19 +235,25 @@ def _build(intake=None, packet=None, spec=None, **overrides: object) -> EdgeStra
         "kill_criteria": _DRAFT,
         "admission_id": "admission-funding-carry-001",
         "correlation_id": _CORRELATION,
-        "kill_criteria_thresholds_approved": True,
-        "kill_criteria_approval_reference": "governance-kill-criteria-approval-002",
-        "kill_criteria_approval_digest": "b" * 64,
     }
     kwargs.update(overrides)
+    policy = _policy(kwargs["kill_criteria"]) if policy is _DEFAULT else policy
+    if policy is not None:
+        kwargs.setdefault("kill_criteria_policy", policy)
+        kwargs.setdefault("expected_kill_criteria_policy_digest", policy.policy_digest)  # type: ignore[union-attr]
     if "expected_strategy_spec_digest" not in kwargs:
         kwargs["expected_strategy_spec_digest"] = strategy_spec_digest(spec)
-    return build_edge_strategy_spec_admission(intake, packet, spec, **kwargs)  # type: ignore[arg-type]
+    return build_edge_strategy_spec_admission(packet, spec, **kwargs)  # type: ignore[arg-type]
 
 
 def _reseal(admission: EdgeStrategySpecAdmission, **changes: object) -> EdgeStrategySpecAdmission:
     forged = replace(admission, **changes)
     return replace(forged, admission_digest=edge_strategy_spec_admission_digest(forged))
+
+
+def _reseal_packet(packet: EdgeSourcePacketEvidence, **changes: object) -> EdgeSourcePacketEvidence:
+    forged = replace(packet, **changes)
+    return replace(forged, packet_evidence_digest=edge_source_packet_evidence_digest(forged))
 
 
 def _codes(admission: object) -> tuple[str, ...]:
@@ -261,15 +283,21 @@ def _assert_rejected(admission: EdgeStrategySpecAdmission, *codes: str) -> None:
 # --- 1. Valid StrategySpec binding ---------------------------------------------------------------------------
 
 
-def test_valid_strategy_spec_binding_is_ready_pass_and_advances() -> None:
+def test_valid_strategy_spec_binding_is_ready_pass_and_carries_linear_authority_snapshots() -> None:
     intake = _intake()
     packet = _packet_evidence(intake)
     spec = _spec()
-    admission = _build(intake, packet, spec)
+    policy = _policy()
+    admission = _build(packet, spec, intake=intake, policy=policy)
     _assert_ready(admission, EdgeGateVerdict.PASS, ())
+    assert json.loads(admission.predecessor_source_packet_snapshot_json) == edge_source_packet_evidence_to_dict(packet)
+    assert json.loads(admission.strategy_spec_snapshot_json) == json.loads(json.dumps(_SPEC_PAYLOAD))
+    assert json.loads(admission.kill_criteria_policy_snapshot_json) == edge_kill_criteria_policy_to_dict(policy)
+    assert not any("root_intake_snapshot" in field.name for field in fields(EdgeStrategySpecAdmission))
     assert admission.verified_root_intake_digest == intake.intake_digest
     assert admission.verified_source_packet_evidence_digest == packet.packet_evidence_digest
     assert admission.verified_strategy_spec_digest == strategy_spec_digest(spec)
+    assert admission.verified_kill_criteria_policy_digest == policy.policy_digest
     assert admission.strategy_id == admission.intake_candidate_strategy_id == "alpha-funding-carry"
     assert admission.edge_family == admission.intake_edge_family == "funding_basis_carry"
     assert admission.instrument_universe == (_BTC, _ETH)
@@ -300,7 +328,7 @@ def test_output_is_frozen() -> None:
         _build().advances = False  # type: ignore[misc]
 
 
-# --- 2. StrategySpec public validation and digest re-proof ---------------------------------------------------
+# --- 2. StrategySpec authority -------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -320,13 +348,11 @@ def test_strategy_spec_failing_public_validation_is_rejected(spec_factory, code:
 def test_non_serializable_spec_is_rejected_without_raw_error() -> None:
     admission = _build(spec=replace(_spec(), market_type="usdt_perp"), expected_strategy_spec_digest="e" * 64)
     _assert_rejected(admission, "strategy_spec_malformed_payload")
+    assert admission.strategy_spec_snapshot_json == ""
 
 
-def test_strategy_spec_anchor_mismatch_is_rejected() -> None:
+def test_strategy_spec_anchor_mismatch_and_post_pin_tamper_are_rejected() -> None:
     _assert_rejected(_build(expected_strategy_spec_digest="0" * 64), "strategy_spec_digest_mismatch")
-
-
-def test_strategy_spec_tampered_after_its_digest_was_pinned_is_rejected() -> None:
     spec = _spec()
     forged = replace(spec, instrument_universe=(_BTC, _ETH, _SOL))
     _assert_rejected(
@@ -347,7 +373,7 @@ def test_resealed_noncanonical_spec_is_rejected() -> None:
         {"invalidation_conditions": ("borsa_signal_break",)},
     ],
 )
-def test_resealed_spec_with_forbidden_or_bist_values_is_rejected(changes: dict[str, object]) -> None:
+def test_spec_with_forbidden_or_bist_values_is_rejected(changes: dict[str, object]) -> None:
     _assert_rejected(_build(spec=replace(_spec(), **changes)), "strategy_spec_scope_violation")
 
 
@@ -356,8 +382,11 @@ def test_resealed_spec_with_forbidden_or_bist_values_is_rejected(changes: dict[s
 
 def test_instrument_universe_outside_packet_coverage_fails() -> None:
     # SOL is covered by the mark-price series but not by the funding series, so it is outside the intersection.
-    admission = _build(spec=_spec(instrument_universe=[_BTC, _SOL]))
-    _assert_ready(admission, EdgeGateVerdict.FAIL, ("instrument_outside_packet_coverage:SOL-PERPETUAL",))
+    _assert_ready(
+        _build(spec=_spec(instrument_universe=[_BTC, _SOL])),
+        EdgeGateVerdict.FAIL,
+        ("instrument_outside_packet_coverage:SOL-PERPETUAL",),
+    )
 
 
 @pytest.mark.parametrize(
@@ -372,8 +401,11 @@ def test_edge_family_or_candidate_identity_mismatch_fails(overrides: dict[str, o
 
 
 def test_spec_data_requirement_outside_the_packet_fails_and_keys_normalize_like_pit_parity() -> None:
-    missing = _build(spec=_spec(data_requirements={"funding_rate": "1h", "order_book": "l2"}))
-    _assert_ready(missing, EdgeGateVerdict.FAIL, ("spec_data_requirement_not_in_packet:order_book",))
+    _assert_ready(
+        _build(spec=_spec(data_requirements={"funding_rate": "1h", "order_book": "l2"})),
+        EdgeGateVerdict.FAIL,
+        ("spec_data_requirement_not_in_packet:order_book",),
+    )
     normalized = _build(spec=_spec(data_requirements={" Funding_Rate ": "1h", "MARK_PRICE": "1m"}))
     _assert_ready(normalized, EdgeGateVerdict.PASS, ())
     assert normalized.spec_data_requirement_keys == ("funding_rate", "mark_price")
@@ -424,7 +456,7 @@ def test_removal_hidden_behind_a_strengthening_addition_is_still_refused() -> No
         {"metric_id": "peak_to_trough_fraction"},
     ],
 )
-def test_changed_or_relaxed_draft_criterion_is_refused(changes: dict[str, object]) -> None:
+def test_changed_or_relaxed_draft_criterion_is_refused_even_with_a_matching_policy(changes: dict[str, object]) -> None:
     admission = _build(kill_criteria=(replace(_MAX_DRAWDOWN, **changes), _FUNDING_FLIP))
     _assert_ready(admission, EdgeGateVerdict.FAIL, ("kill_criterion_modified:max_drawdown_breach",))
 
@@ -436,20 +468,35 @@ def test_threshold_erased_back_to_pending_is_refused_as_a_modification() -> None
     assert _PREFIX + "kill_criterion_threshold_pending_governance:max_drawdown_breach" in admission.verdict_reason_codes
 
 
-# --- 5. Governance at admission ------------------------------------------------------------------------------
+# --- 5. B5: governance approval at admission ----------------------------------------------------------------
 
 
-def test_missing_admission_approval_needs_governance_and_never_advances() -> None:
-    admission = _build(
-        kill_criteria_thresholds_approved=False,
-        kill_criteria_approval_reference=None,
-        kill_criteria_approval_digest=None,
+def test_missing_admission_policy_needs_governance_and_raw_approval_parameters_are_gone() -> None:
+    _assert_ready(_build(policy=None), EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL, ("kill_criteria_policy_missing",))
+    parameters = set(inspect.signature(build_edge_strategy_spec_admission).parameters)
+    assert parameters.isdisjoint(
+        {"kill_criteria_thresholds_approved", "kill_criteria_approval_reference", "kill_criteria_approval_digest"}
     )
-    _assert_ready(admission, EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL, ("kill_criteria_thresholds_not_approved",))
-    parameters = inspect.signature(build_edge_strategy_spec_admission).parameters
-    assert parameters["kill_criteria_thresholds_approved"].default is False
-    assert parameters["kill_criteria_approval_reference"].default is None
-    assert parameters["kill_criteria_approval_digest"].default is None
+
+
+@pytest.mark.parametrize(
+    ("policy_factory", "code"),
+    [
+        (lambda: _policy(thresholds_approved=False), "kill_criteria_policy_not_ready"),
+        (lambda: _policy(correlation_id="corr-other-001"), "kill_criteria_policy_correlation_mismatch"),
+        (lambda: _policy((_MAX_DRAWDOWN,)), "kill_criteria_policy_kill_criteria_mismatch"),
+    ],
+)
+def test_authentic_but_inapplicable_policy_needs_governance(policy_factory, code: str) -> None:
+    _assert_ready(_build(policy=policy_factory()), EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL, (code,))
+
+
+def test_draft_policy_does_not_approve_a_strengthened_set() -> None:
+    spec = _spec(kill_switch_triggers=["basis_blowout", "funding_flip_persistence", "max_drawdown_breach"])
+    admission = _build(spec=spec, kill_criteria=(*_DRAFT, _BASIS_BLOWOUT), policy=_policy(_DRAFT))
+    _assert_ready(
+        admission, EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL, ("kill_criteria_policy_kill_criteria_mismatch",)
+    )
 
 
 def test_added_criterion_with_pending_threshold_needs_governance() -> None:
@@ -458,81 +505,98 @@ def test_added_criterion_with_pending_threshold_needs_governance() -> None:
     _assert_ready(
         admission,
         EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL,
-        ("kill_criterion_threshold_pending_governance:basis_blowout",),
+        ("kill_criteria_policy_not_ready", "kill_criterion_threshold_pending_governance:basis_blowout"),
     )
 
 
-def test_incomplete_admission_approval_needs_governance() -> None:
-    admission = _build(kill_criteria_approval_digest=None)
-    _assert_ready(admission, EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL, ("kill_criteria_approval_incomplete",))
+def test_policy_anchor_mismatch_or_tampered_policy_is_rejected() -> None:
+    _assert_rejected(_build(expected_kill_criteria_policy_digest="0" * 64), "kill_criteria_policy_digest_mismatch")
+    tampered = replace(_policy(), approval_digest="f" * 64)
+    _assert_rejected(
+        _build(policy=tampered),
+        "kill_criteria_policy_integrity_failure:edge_kill_criteria_policy:self_digest_mismatch",
+    )
 
 
-def test_module_holds_no_governance_number() -> None:
-    source = Path(admission_module.__file__).read_text(encoding="utf-8")
-    assert re.search(r"\d\.\d{18}", source) is None
-    assert not any(isinstance(node, ast.Constant) and type(node.value) is float for node in ast.walk(ast.parse(source)))
+# --- 6. B4: dual anchor, predecessor and nested root authority -----------------------------------------------
 
 
-# --- 6. Dual anchor: EF-2 root and EF-3 predecessor ----------------------------------------------------------
-
-
-def test_root_anchor_mismatch_is_rejected() -> None:
-    _assert_rejected(_build(expected_root_intake_digest="0" * 64), "root_intake_digest_mismatch")
-
-
-def test_packet_from_another_valid_root_is_a_rejected_chain_splice() -> None:
-    packet_a = _packet_evidence(_intake())
-    root_b = _intake(intake_id="intake-funding-carry-002")
-    assert root_b.gate_verdict is EdgeGateVerdict.PASS
-    admission = _build(root_b, packet_a)
+def test_root_anchor_that_differs_from_the_authenticated_nested_root_is_a_splice() -> None:
+    admission = _build(expected_root_intake_digest="0" * 64)
     _assert_rejected(admission, "chain_splice_root_intake_mismatch")
     assert admission.integrity_reason_codes == (_PREFIX + "chain_splice_root_intake_mismatch",)
 
 
-def test_consistently_resealed_packet_with_foreign_declared_requirements_is_rejected() -> None:
-    intake = _intake()
-    packet = _packet_evidence(intake)
-    forged = replace(
+def test_packet_from_another_valid_root_is_a_rejected_chain_splice() -> None:
+    root_b = _intake(intake_id="intake-funding-carry-002")
+    assert root_b.gate_verdict is EdgeGateVerdict.PASS
+    _assert_rejected(_build(_packet_evidence(_intake()), intake=root_b), "chain_splice_root_intake_mismatch")
+
+
+def test_predecessor_anchor_mismatch_and_unresealed_tamper_are_rejected() -> None:
+    _assert_rejected(
+        _build(expected_source_packet_evidence_digest="0" * 64), "predecessor_source_packet_digest_mismatch"
+    )
+    packet = replace(_packet_evidence(), packet_instrument_coverage=(_BTC, _ETH, _SOL))
+    _assert_rejected(
+        _build(packet), "predecessor_source_packet_integrity_failure:edge_source_packet_evidence:self_digest_mismatch"
+    )
+
+
+def test_resealed_predecessor_with_foreign_root_owned_requirements_is_rejected() -> None:
+    packet = _packet_evidence()
+    forged = _reseal_packet(
         packet,
         declared_data_requirement_keys=("funding_rate",),
         series=(packet.series[0],),
         packet_instrument_coverage=packet.series[0].instrument_coverage,
     )
-    forged = replace(forged, packet_evidence_digest=edge_source_packet_evidence_digest(forged))
-    assert verify_edge_source_packet_evidence(forged).intact is True
-    admission = _build(intake, forged, spec=_spec(data_requirements={"funding_rate": "1h"}))
-    _assert_rejected(admission, "chain_splice_declared_data_requirements_mismatch")
-
-
-def test_tampered_root_without_reseal_is_rejected() -> None:
-    root = replace(_intake(), candidate_strategy_id="beta-funding-carry")
-    admission = _build(root, _packet_evidence(_intake()))
-    _assert_rejected(admission, "root_intake_integrity_failure:edge_idea_intake_evidence:self_digest_mismatch")
-
-
-def test_predecessor_anchor_mismatch_is_rejected() -> None:
     _assert_rejected(
-        _build(expected_source_packet_evidence_digest="0" * 64), "predecessor_source_packet_digest_mismatch"
+        _build(forged),
+        "predecessor_source_packet_integrity_failure:edge_source_packet_evidence:field_mismatch:declared_data_requirement_keys",
     )
 
 
-def test_tampered_predecessor_without_reseal_is_rejected() -> None:
-    packet = replace(_packet_evidence(), packet_instrument_coverage=(_BTC, _ETH, _SOL))
-    admission = _build(packet=packet)
+def test_resealed_predecessor_carrying_a_forged_passing_root_is_rejected() -> None:
+    needs = _intake(external_fact_needs=(_NEED,))
+    forged_root = replace(needs, gate_verdict=EdgeGateVerdict.PASS, advances=True, verdict_reason_codes=())
+    forged_root = replace(forged_root, intake_digest=edge_idea_intake_evidence_digest(forged_root))
+    genuine_packet = _packet_evidence()
+    forged_packet = _reseal_packet(
+        genuine_packet,
+        root_intake_snapshot_json=verify_edge_idea_intake_evidence(forged_root).canonical_json,
+        expected_root_intake_digest=forged_root.intake_digest,
+        verified_root_intake_digest=forged_root.intake_digest,
+    )
+    admission = _build(forged_packet, intake=forged_root)
+    assert admission.status is EdgeEvidenceStatus.REJECTED
+    assert any(
+        code.startswith(_PREFIX + "predecessor_source_packet_integrity_failure:")
+        for code in admission.integrity_reason_codes
+    )
+
+
+def test_nested_root_is_proven_against_the_explicit_anchor_even_when_the_packet_claims_that_anchor() -> None:
+    # The packet carries root A but claims anchor B; its own receipt is REJECTED. EF-4 anchored to B must still report
+    # that the authenticated nested root is not B, not merely that the predecessor did not pass.
+    root_a = _intake()
+    root_b = _intake(intake_id="intake-funding-carry-002")
+    packet = _packet_evidence(root_a, expected_root_intake_digest=root_b.intake_digest)
+    assert packet.status is EdgeEvidenceStatus.REJECTED
+    assert packet.expected_root_intake_digest == root_b.intake_digest
     _assert_rejected(
-        admission, "predecessor_source_packet_integrity_failure:edge_source_packet_evidence:self_digest_mismatch"
+        _build(packet, intake=root_b),
+        "predecessor_source_packet_not_passed:NOT_EVALUATED",
+        "chain_splice_root_intake_mismatch",
     )
 
 
 def test_correlation_mismatch_is_rejected_for_both_anchors() -> None:
     _assert_rejected(
-        _build(correlation_id="corr-funding-carry-999"),
+        _build(correlation_id="corr-funding-carry-999", policy=_policy(correlation_id="corr-funding-carry-999")),
         "root_intake_correlation_id_mismatch",
         "predecessor_source_packet_correlation_id_mismatch",
     )
-
-
-# --- 7. NEEDS_* and FAIL predecessors never advance ----------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -544,16 +608,15 @@ def test_correlation_mismatch_is_rejected_for_both_anchors() -> None:
 )
 def test_non_passing_predecessor_packet_cannot_advance(series, verdict: str) -> None:
     intake = _intake()
-    admission = _build(intake, _packet_evidence(intake, series=series))
+    admission = _build(_packet_evidence(intake, series=series), intake=intake)
     _assert_rejected(admission, f"predecessor_source_packet_not_passed:{verdict}")
     assert admission.integrity_reason_codes == (_PREFIX + f"predecessor_source_packet_not_passed:{verdict}",)
 
 
 def test_needs_root_cannot_advance_even_through_its_own_rejected_packet() -> None:
-    intake = _intake(kill_criteria_thresholds_approved=False)
-    admission = _build(intake, _packet_evidence(intake))
+    intake = _intake(policy=None)
     _assert_rejected(
-        admission,
+        _build(_packet_evidence(intake), intake=intake),
         "root_intake_not_passed:NEEDS_GOVERNANCE_APPROVAL",
         "predecessor_source_packet_not_passed:NOT_EVALUATED",
     )
@@ -564,25 +627,66 @@ def test_resealed_forged_pass_packet_cannot_manufacture_admission() -> None:
     failing = _packet_evidence(
         intake, series=(_series(finality=EdgeSeriesFinality.INCLUDES_UNFINALIZED), _mark_series())
     )
-    forged = replace(failing, gate_verdict=EdgeGateVerdict.PASS, advances=True, verdict_reason_codes=())
-    forged = replace(forged, packet_evidence_digest=edge_source_packet_evidence_digest(forged))
+    forged = _reseal_packet(failing, gate_verdict=EdgeGateVerdict.PASS, advances=True, verdict_reason_codes=())
     _assert_rejected(
-        _build(intake, forged),
-        "predecessor_source_packet_integrity_failure:edge_source_packet_evidence:verdict_rederivation_mismatch",
+        _build(forged, intake=intake),
+        "predecessor_source_packet_integrity_failure:edge_source_packet_evidence:field_mismatch:gate_verdict",
     )
 
 
-def test_resealed_forged_pass_root_cannot_manufacture_admission() -> None:
-    needs = _intake(external_fact_needs=(_NEED,))
-    forged = replace(needs, gate_verdict=EdgeGateVerdict.PASS, advances=True, verdict_reason_codes=())
-    forged = replace(forged, intake_digest=edge_idea_intake_evidence_digest(forged))
-    _assert_rejected(
-        _build(forged, _packet_evidence(_intake())),
-        "root_intake_integrity_failure:edge_idea_intake_evidence:verdict_rederivation_mismatch",
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"intake_candidate_strategy_id": "beta-funding-carry"},
+        {"intake_edge_family": "momentum_trend"},
+        {"packet_instrument_coverage": (_BTC, _ETH, _SOL)},
+        {"packet_series_keys": ("funding_rate",)},
+        {"strategy_id": "beta-funding-carry"},
+        {"instrument_universe": (_BTC,)},
+        {"spec_data_requirement_keys": ("funding_rate",)},
+        {"spec_kill_switch_triggers": ("max_drawdown_breach",)},
+        {"fee_model_requirement": "maker_rebate_assumed"},
+        {"funding_sensitivity": "none"},
+        {"expected_regime_declared": "any_regime"},
+        {"market_type": "spot"},
+        {"draft_kill_criteria": (_MAX_DRAWDOWN,)},
+        {"draft_kill_criteria_digest": "d" * 64},
+        {"kill_criteria_added_ids": ("phantom",)},
+        {"verified_kill_criteria_policy_digest": ""},
+    ],
+)
+def test_resealed_predecessor_or_spec_derived_summaries_fail_verification(changes: dict[str, object]) -> None:
+    (name,) = changes
+    codes = _codes(_reseal(_build(), **changes))
+    assert _PREFIX + "self_digest_mismatch" not in codes
+    assert _PREFIX + f"field_mismatch:{name}" in codes
+
+
+def test_resealed_coverage_widening_of_a_failing_admission_fails_verification() -> None:
+    failing = _build(spec=_spec(instrument_universe=[_BTC, _SOL]))
+    forged = _reseal(
+        failing,
+        packet_instrument_coverage=(_BTC, _ETH, _SOL),
+        gate_verdict=EdgeGateVerdict.PASS,
+        advances=True,
+        verdict_reason_codes=(),
     )
+    codes = _codes(forged)
+    assert _PREFIX + "field_mismatch:packet_instrument_coverage" in codes
+    assert _PREFIX + "field_mismatch:gate_verdict" in codes
 
 
-# --- 8. Regime pending pattern -------------------------------------------------------------------------------
+def test_swapped_spec_snapshot_cannot_keep_a_passing_admission() -> None:
+    other = json.dumps(
+        json.loads(json.dumps({**_SPEC_PAYLOAD, "edge_family": "momentum_trend"})),
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    forged = _reseal(_build(), strategy_spec_snapshot_json=other)
+    assert _PREFIX + "field_mismatch:status" in _codes(forged)
+
+
+# --- 7. Regime pending pattern -------------------------------------------------------------------------------
 
 
 def test_expected_regime_uses_the_pending_pattern_and_binds_no_rf_label() -> None:
@@ -598,12 +702,13 @@ def test_expected_regime_uses_the_pending_pattern_and_binds_no_rf_label() -> Non
     for changes in (
         {"regime_label_binding_status": "RF_LABEL_BOUND"},
         {"regime_evidence_status": "regime_evidence_available"},
+        {"regime_evidence_available": True},
     ):
-        assert _PREFIX + "constant_field_mismatch" in _codes(_reseal(admission, **changes))
-    assert _PREFIX + "structural_non_claim_violation" in _codes(_reseal(admission, regime_evidence_available=True))
+        (name,) = changes
+        assert _PREFIX + f"field_mismatch:{name}" in _codes(_reseal(admission, **changes))
 
 
-# --- 9. Malformed input --------------------------------------------------------------------------------------
+# --- 8. Malformed input --------------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -618,20 +723,16 @@ def test_expected_regime_uses_the_pending_pattern_and_binds_no_rf_label() -> Non
         ({"kill_criteria": ()}, "kill_criteria_invalid"),
         ({"kill_criteria": (_MAX_DRAWDOWN, _MAX_DRAWDOWN)}, "kill_criteria_invalid"),
         ({"kill_criteria": (replace(_MAX_DRAWDOWN, threshold="0.3"),)}, "kill_criteria_invalid"),
-        ({"kill_criteria_thresholds_approved": 1}, "kill_criteria_thresholds_approved_invalid"),
-        ({"kill_criteria_approval_digest": "b" * 10}, "kill_criteria_approval_digest_invalid"),
-        (
-            {"kill_criteria_approval_reference": "approval-private_api-001"},
-            "forbidden_scope_token:kill_criteria_approval_reference",
-        ),
+        ({"expected_kill_criteria_policy_digest": "b" * 10}, "expected_kill_criteria_policy_digest_invalid"),
+        ({"kill_criteria_policy": {"policy_id": "policy-1"}}, "kill_criteria_policy_malformed"),
     ],
 )
 def test_malformed_input_raises(overrides: dict[str, object], code: str) -> None:
     with pytest.raises(EdgeStrategySpecAdmissionError, match=re.escape(_PREFIX + code)):
-        _build(**overrides)
+        _build(policy=None, **overrides) if "kill_criteria" in overrides else _build(**overrides)
 
 
-def test_wrong_artifact_types_raise() -> None:
+def test_wrong_artifact_types_and_policy_misuse_raise() -> None:
     intake = _intake()
     packet = _packet_evidence(intake)
     spec = _spec()
@@ -643,47 +744,64 @@ def test_wrong_artifact_types_raise() -> None:
         "admission_id": "admission-funding-carry-001",
         "correlation_id": _CORRELATION,
     }
-    with pytest.raises(EdgeStrategySpecAdmissionError, match="root_intake_malformed"):
-        build_edge_strategy_spec_admission(packet, packet, spec, **kwargs)  # type: ignore[arg-type]
     with pytest.raises(EdgeStrategySpecAdmissionError, match="source_packet_evidence_malformed"):
-        build_edge_strategy_spec_admission(intake, intake, spec, **kwargs)  # type: ignore[arg-type]
+        build_edge_strategy_spec_admission(intake, spec, **kwargs)  # type: ignore[arg-type]
     with pytest.raises(EdgeStrategySpecAdmissionError, match="strategy_spec_malformed"):
-        build_edge_strategy_spec_admission(intake, packet, dict(_SPEC_PAYLOAD), **kwargs)  # type: ignore[arg-type]
+        build_edge_strategy_spec_admission(packet, dict(_SPEC_PAYLOAD), **kwargs)  # type: ignore[arg-type]
+    with pytest.raises(EdgeStrategySpecAdmissionError, match="expected_kill_criteria_policy_digest_unexpected"):
+        build_edge_strategy_spec_admission(packet, spec, expected_kill_criteria_policy_digest="b" * 64, **kwargs)  # type: ignore[arg-type]
+    assert "intake" not in inspect.signature(build_edge_strategy_spec_admission).parameters
 
 
-# --- 10. Verification of carried admission evidence ----------------------------------------------------------
+# --- 9. B7: truthful READY and REJECTED receipts -------------------------------------------------------------
 
 
 def test_field_tamper_without_reseal_fails_verification() -> None:
     assert _PREFIX + "self_digest_mismatch" in _codes(replace(_build(), strategy_id="beta-funding-carry"))
 
 
-def test_resealed_weakening_upgraded_to_pass_fails_rederivation() -> None:
+def test_resealed_weakening_upgraded_to_pass_fails_reassembly() -> None:
     weakened = _build(spec=_spec(kill_switch_triggers=["max_drawdown_breach"]), kill_criteria=(_MAX_DRAWDOWN,))
     forged = _reseal(weakened, gate_verdict=EdgeGateVerdict.PASS, advances=True, verdict_reason_codes=())
-    assert _PREFIX + "verdict_rederivation_mismatch" in _codes(forged)
+    assert _PREFIX + "field_mismatch:gate_verdict" in _codes(forged)
 
 
-def test_resealed_draft_erasure_or_added_id_tamper_fails_kill_criteria_binding() -> None:
-    weakened = _build(spec=_spec(kill_switch_triggers=["max_drawdown_breach"]), kill_criteria=(_MAX_DRAWDOWN,))
-    erased = _reseal(
-        weakened,
-        draft_kill_criteria=(_MAX_DRAWDOWN,),
-        gate_verdict=EdgeGateVerdict.PASS,
-        advances=True,
-        verdict_reason_codes=(),
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {"integrity_reason_codes": (_PREFIX + "strategy_spec_digest_mismatch", _PREFIX + "invented_reason")},
+        {"integrity_reason_codes": (_PREFIX + "chain_splice_root_intake_mismatch",)},
+    ],
+)
+def test_rejected_receipt_with_inconsistent_reason_codes_does_not_verify(changes: dict) -> None:
+    rejected = _build(expected_strategy_spec_digest="0" * 64)
+    assert _PREFIX + "field_mismatch:integrity_reason_codes" in _codes(_reseal(rejected, **changes))
+
+
+def test_passing_admission_forged_into_a_rejected_receipt_does_not_verify() -> None:
+    forged = _reseal(
+        _build(),
+        status=EdgeEvidenceStatus.REJECTED,
+        gate_verdict=EdgeGateVerdict.NOT_EVALUATED,
+        advances=False,
+        verified_root_intake_digest="",
+        verified_source_packet_evidence_digest="",
+        verified_strategy_spec_digest="",
+        verified_kill_criteria_policy_digest="",
+        integrity_reason_codes=(_PREFIX + "strategy_spec_digest_mismatch",),
     )
-    assert _PREFIX + "kill_criteria_binding_mismatch" in _codes(erased)
-    assert _PREFIX + "kill_criteria_binding_mismatch" in _codes(_reseal(_build(), kill_criteria_added_ids=("phantom",)))
+    assert _PREFIX + "field_mismatch:integrity_reason_codes" in _codes(forged)
 
 
-def test_resealed_coverage_narrowing_fails_rederivation() -> None:
-    assert _PREFIX + "verdict_rederivation_mismatch" in _codes(_reseal(_build(), packet_instrument_coverage=(_BTC,)))
+def test_malformed_rejected_semantics_do_not_verify() -> None:
+    rejected = _build(expected_strategy_spec_digest="0" * 64)
+    assert _PREFIX + "evidence_semantics_malformed" in _codes(_reseal(rejected, expected_strategy_spec_digest="short"))
+    assert _PREFIX + "evidence_semantics_malformed" in _codes(_reseal(rejected, kill_criteria=("max_drawdown_breach",)))
 
 
 @pytest.mark.parametrize("flag", sorted(_FLAGS))
 def test_resealed_structural_claim_fails_verification(flag: str) -> None:
-    assert _PREFIX + "structural_non_claim_violation" in _codes(_reseal(_build(), **{flag: not _FLAGS[flag]}))
+    assert _PREFIX + f"field_mismatch:{flag}" in _codes(_reseal(_build(), **{flag: not _FLAGS[flag]}))
 
 
 @pytest.mark.parametrize(
@@ -696,29 +814,22 @@ def test_resealed_structural_claim_fails_verification(flag: str) -> None:
     ],
 )
 def test_resealed_constant_tamper_fails(changes: dict[str, object]) -> None:
-    assert _PREFIX + "constant_field_mismatch" in _codes(_reseal(_build(), **changes))
-
-
-def test_resealed_status_verdict_conflation_fails() -> None:
-    admission = _build()
-    for changes in ({"status": EdgeEvidenceStatus.REJECTED}, {"gate_verdict": EdgeGateVerdict.NOT_EVALUATED}):
-        assert _PREFIX + "status_verdict_incoherent" in _codes(_reseal(admission, **changes))
+    (name,) = changes
+    assert _PREFIX + f"field_mismatch:{name}" in _codes(_reseal(_build(), **changes))
 
 
 def test_forged_or_non_serializable_admission_never_raises() -> None:
     assert _codes(replace(_build(), kill_criteria=(object(),))) == (_PREFIX + "evidence_serialization_failed",)  # type: ignore[arg-type]
     assert _codes(replace(_build(), status="READY")) == (_PREFIX + "evidence_type_invalid",)  # type: ignore[arg-type]
-    malformed = _reseal(_build(), kill_criteria=("max_drawdown_breach",))
-    assert _PREFIX + "evidence_semantics_malformed" in _codes(malformed)
 
 
-# --- 11. Cross-contract spine properties ---------------------------------------------------------------------
+# --- 10. Cross-contract spine properties ---------------------------------------------------------------------
 
 
 def _chain() -> tuple[EdgeIdeaIntakeEvidence, EdgeSourcePacketEvidence, EdgeStrategySpecAdmission]:
     intake = _intake()
     packet = _packet_evidence(intake)
-    return intake, packet, _build(intake, packet, _spec())
+    return intake, packet, _build(packet, _spec(), intake=intake)
 
 
 _VERIFIERS = (
@@ -739,11 +850,12 @@ def test_order_irrelevant_permutations_cannot_change_any_spine_identity() -> Non
     intake = _intake(
         kill_criteria_draft=[_FUNDING_FLIP, _MAX_DRAWDOWN],
         data_requirement_keys=(DataRequirementKey.MARK_PRICE, DataRequirementKey.FUNDING_RATE),
+        policy=_policy([_FUNDING_FLIP, _MAX_DRAWDOWN], policy_id="policy-kill-criteria-001"),
     )
     packet = _packet_evidence(
         intake, series=[_mark_series(instrument_coverage=(_SOL, _ETH, _BTC)), _series(instrument_coverage=(_ETH, _BTC))]
     )
-    admission = _build(intake, packet, _spec(), kill_criteria=[_FUNDING_FLIP, _MAX_DRAWDOWN])
+    admission = _build(packet, _spec(), intake=intake, kill_criteria=[_FUNDING_FLIP, _MAX_DRAWDOWN])
     assert intake.intake_digest == base_intake.intake_digest
     assert packet.packet_evidence_digest == base_packet.packet_evidence_digest
     assert admission.admission_digest == base_admission.admission_digest
@@ -756,9 +868,9 @@ def test_order_sensitive_spec_fields_stay_order_sensitive_under_spec_authority()
     assert forward.verified_strategy_spec_digest != backward.verified_strategy_spec_digest
     assert forward.admission_digest != backward.admission_digest
     assert backward.instrument_universe == (_ETH, _BTC)
-    # data_requirements is a mapping under the spec authority, so its key order is not identity.
-    reordered = _spec(data_requirements={"mark_price": "1m", "funding_rate": "1h"})
-    assert strategy_spec_digest(reordered) == strategy_spec_digest(_spec())
+    assert strategy_spec_digest(
+        _spec(data_requirements={"mark_price": "1m", "funding_rate": "1h"})
+    ) == strategy_spec_digest(_spec())
 
 
 def test_status_and_gate_verdict_are_never_conflated_across_outcomes() -> None:
@@ -766,7 +878,7 @@ def test_status_and_gate_verdict_are_never_conflated_across_outcomes() -> None:
         *_chain(),
         _build(expected_root_intake_digest="0" * 64),
         _build(spec=_spec(edge_family="momentum_trend")),
-        _build(kill_criteria_thresholds_approved=False),
+        _build(policy=None),
         _intake(external_fact_needs=(_NEED,)),
         _intake(expected_source_packet_digest="0" * 64),
         _packet_evidence(series=(_series(finality=EdgeSeriesFinality.UNKNOWN), _mark_series())),
@@ -785,13 +897,13 @@ def test_status_and_gate_verdict_are_never_conflated_across_outcomes() -> None:
 
 def test_no_later_gate_manufactures_ready_admission_from_malformed_predecessors() -> None:
     intake, packet, _ = _chain()
+    rejected_root = _intake(expected_source_packet_digest="0" * 64)
     scenarios = (
-        _build(replace(intake, status=EdgeEvidenceStatus.REJECTED), packet),
-        _build(intake, replace(packet, packet_instrument_coverage=())),
-        _build(intake, packet, expected_source_packet_evidence_digest=intake.intake_digest),
-        _build(intake, packet, expected_root_intake_digest=packet.packet_evidence_digest),
-        _build(_intake(expected_source_packet_digest="0" * 64), packet),
-        _build(intake, replace(packet, series=(object(),))),  # type: ignore[arg-type]
+        _build(replace(packet, packet_instrument_coverage=()), intake=intake),
+        _build(packet, intake=intake, expected_source_packet_evidence_digest=intake.intake_digest),
+        _build(packet, intake=intake, expected_root_intake_digest=packet.packet_evidence_digest),
+        _build(_packet_evidence(rejected_root), intake=rejected_root),
+        _build(replace(packet, series=(object(),)), intake=intake),  # type: ignore[arg-type]
     )
     for admission in scenarios:
         assert admission.status is EdgeEvidenceStatus.REJECTED
@@ -808,7 +920,7 @@ def test_verifiers_reject_each_others_artifacts() -> None:
 
 
 def test_every_spine_artifact_shares_the_same_structural_non_claims() -> None:
-    for cls in (EdgeIdeaIntakeEvidence, EdgeSourcePacketEvidence, EdgeStrategySpecAdmission):
+    for cls in (EdgeIdeaIntakeEvidence, EdgeSourcePacketEvidence, EdgeStrategySpecAdmission, EdgeKillCriteriaPolicy):
         assert {field.name: field.default for field in fields(cls) if field.name in _FLAGS} == _FLAGS
     assert set(inspect.signature(build_edge_strategy_spec_admission).parameters).isdisjoint(_FLAGS)
 
@@ -828,15 +940,18 @@ def test_public_digests_follow_the_digest_boundary_rule_for_every_spine_artifact
 
 def test_reason_codes_are_sorted_unique_and_prefixed() -> None:
     for admission in (
-        _build(
-            spec=_spec(edge_family="momentum_trend", instrument_universe=[_BTC, _SOL]),
-            kill_criteria_thresholds_approved=False,
-        ),
+        _build(spec=_spec(edge_family="momentum_trend", instrument_universe=[_BTC, _SOL]), policy=None),
         _build(expected_root_intake_digest="0" * 64, expected_strategy_spec_digest="0" * 64),
     ):
         for codes in (admission.integrity_reason_codes, admission.verdict_reason_codes):
             assert list(codes) == sorted(set(codes))
             assert all(code.startswith(_PREFIX) for code in codes)
+
+
+def test_ready_admission_with_spec_owned_inner_whitespace_still_reverifies() -> None:
+    admission = _build(spec=_spec(expected_regime="positive\tfunding_premium", strategy_family="funding carry"))
+    _assert_ready(admission, EdgeGateVerdict.PASS, ())
+    assert admission.expected_regime_declared == "positive\tfunding_premium"
 
 
 _FORBIDDEN_MODULES = (
@@ -870,9 +985,13 @@ _FORBIDDEN_CALLS = {"open", "Path", "float", "now", "utcnow", "time", "time_ns",
 
 
 @pytest.mark.parametrize("module", [intake_module, packet_module, admission_module])
-def test_spine_modules_have_no_runtime_surfaces_and_import_only_public_names(module) -> None:
-    tree = ast.parse(Path(module.__file__).read_text(encoding="utf-8"))
-    for node in ast.walk(tree):
+def test_spine_modules_have_no_runtime_surfaces_import_only_public_names_and_share_one_scanner(module) -> None:
+    source = Path(module.__file__).read_text(encoding="utf-8")
+    if module is not intake_module:
+        assert "re.compile" not in source
+        assert "edge_scope_violation" in source
+    assert re.search(r"\d\.\d{18}", source) is None
+    for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
             for alias in node.names:
                 assert not any(alias.name == mod or alias.name.startswith(f"{mod}.") for mod in _FORBIDDEN_MODULES)
@@ -885,12 +1004,7 @@ def test_spine_modules_have_no_runtime_surfaces_and_import_only_public_names(mod
         if isinstance(node, ast.Call):
             name = node.func.id if isinstance(node.func, ast.Name) else getattr(node.func, "attr", None)
             assert name not in _FORBIDDEN_CALLS
-
-
-def test_ready_admission_with_spec_owned_inner_whitespace_still_reverifies() -> None:
-    admission = _build(spec=_spec(expected_regime="positive\tfunding_premium", strategy_family="funding carry"))
-    _assert_ready(admission, EdgeGateVerdict.PASS, ())
-    assert admission.expected_regime_declared == "positive\tfunding_premium"
+        assert not (isinstance(node, ast.Constant) and type(node.value) is float)
 
 
 def test_no_equivalent_builder_exists() -> None:
