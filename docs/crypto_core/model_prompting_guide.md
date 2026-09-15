@@ -1,6 +1,7 @@
-# crypto_core Model Prompting Guide (v3, 2026-09-14 — minimal kernel edition)
+# crypto_core Model Prompting Guide (v4, 2026-09-15 — Astra unified audit edition)
 
-Durable authoring guide for the active council of `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1`
+Durable authoring guide for the active council of `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by
+`ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`
 (`docs/crypto_core/agent_workflow.md` section 24 — the authority; this guide teaches how to WRITE prompts for
 it and never overrides it). Claude prompt templates: `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`.
 Research protocol: `docs/crypto_core/deep_research_protocol.md`. On any conflict, section 24 and the stricter
@@ -40,16 +41,20 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 - **Owns:** routing; architecture adjudication; serious prompt compilation; evidence judgement and
   contradiction detection against live GitHub/terminal proof; `CONTROLLER_ACCEPTED_STATE`; merge-readiness
   judgement; exactly one next action.
-- **Budget duty:** count specialist prompts per PR lifecycle (governance operations — state proof, CI/status
+- **Budget duty:** target the fewest specialist prompts (2 clean, 4 repaired, hard maximum 5) and count them
+  per PR lifecycle (governance operations — state proof, CI/status
   reads, adjudication, merge-readiness, the authorization request, merge, post-merge verification, fresh-chat
-  acceptance — do not count); never issue a specialist sixth; never hide specialist work inside governance; apply
-  `FIXED_POINT_STOP`; open a new attempt only through a `TASK_INTENT=ARCHITECTURE` `ROOT_CAUSE_ESCAPE` decision.
-- **Ordinary-audit fallback:** only under every section 24.4 `ORDINARY_INDEPENDENT_AUDIT_FALLBACK` condition —
-  Codex Sol independence-ineligible (it implemented or repaired the candidate), unavailable, quota-blocked or
-  stopped by runtime proof before substantive audit; reason recorded; the controller, including through ChatGPT
-  Work, neither implemented nor repaired the candidate; fresh pinned-head READ_ONLY; complete blocker collection
-  with evidence; zero mutation; never protected T4. No independent eligible reviewer → `STOP_WITH_PROOF`.
-- **Never:** product implementation; the protected Class-C audit; an ordinary audit outside that fallback or of
+  acceptance — do not count); never issue a specialist sixth; never hide specialist work inside governance; adjudicate a
+  disputed severity under `AUDIT_MATERIALITY_BOUNDARY_V1` before applying `FIXED_POINT_STOP`; open a new attempt only through a `TASK_INTENT=ARCHITECTURE` `ROOT_CAUSE_ESCAPE` decision.
+- **Audit routing and last-resort fallback:** route every independent audit to GPT-6 Astra (section 24.4). For
+  a non-protected candidate only, route it to Codex Sol when Astra is unavailable, quota-blocked or stopped by
+  runtime proof, or by explicit selection, recording the reason; the controller audits only as the last resort
+  when Sol cannot legally audit — reason recorded; the controller, including through ChatGPT Work, neither
+  implemented nor repaired the candidate; fresh pinned-head READ_ONLY; complete blocker collection with evidence;
+  zero mutation; never a protected audit. Protected work waits for Astra. No independent eligible reviewer →
+  `STOP_WITH_PROOF`. Exception: the change that introduces this routing is audited under section 24 and the
+  adapters of its base, not its own text (section 24.14 transition).
+- **Never:** product implementation; any protected audit; an independent audit outside that fallback or of
   its own implementation or repair; a substitute for local tests; memory as repository state; GitHub mutation
   without an exact human action authorization; merge authority.
 - **Anti-patterns:** trusting a report because it is detailed; merging on `mergeable` alone; issuing two
@@ -79,22 +84,24 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   proof before mutation; one PR per semantic boundary; its self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`.
 - **Templates:** `opus5_prompting_playbook.md` section 3.
 
-### 2.5 Codex GPT-5.6 Sol — engineering accelerator and ordinary independent reviewer
+### 2.5 Codex GPT-5.6 Sol — engineering accelerator and non-protected audit fallback
 
-- **Best tasks:** repo navigation, code search, dependency tracing, clear-spec implementation where routed,
-  mechanical refactor, test generation, static inspection, debugging, CI analysis, and the PRIMARY ordinary
-  independent large-codebase review — including the exhaustive audit and the one whole-contract re-audit.
-- **Rules:** host label `Ultra` recorded literally; never audits a candidate it implemented or repaired (the
-  controller fallback covers that case); an ordinary Sol review never satisfies protected Class C.
+- **Best tasks:** repo navigation, code search, dependency tracing, static inspection, clear-spec implementation
+  when specifically routed, mechanical refactor, test generation, debugging, CI analysis and large-codebase
+  inspection; an audit or re-audit only as the recorded `NON_PROTECTED_AUDIT_FALLBACK` (section 24.4).
+- **Rules:** host label `Ultra` recorded literally; not the default independent auditor; never audits a candidate
+  it implemented or repaired; never satisfies a protected audit.
 
-### 2.6 GPT-6 Astra — protected T4 terminal audit
+### 2.6 GPT-6 Astra — primary independent auditor
 
-- **Best tasks:** protected T4 `CLASS_C_CROSS_CONTRACT` READ_ONLY terminal frontier audit on the section 24.4
-  protected triggers, including control-plane changes.
-- **Rules:** host labels `Light` / `Medium` / `High` / `Extra High` / `Ultra` recorded literally; default
-  protected effort `Extra High` or `Ultra` per controller task, `Ultra` for setup/control-plane terminal
-  audits; never mutates; a genuine P1/P2 it finds rejects the candidate. Unavailability makes the gate wait;
-  it never reassigns T4.
+- **Best tasks:** the exhaustive independent audit and the one whole-contract re-audit of every serious candidate
+  (`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1`); for protected work, including control-plane changes, the same execution
+  is the protected T4 `CLASS_C_CROSS_CONTRACT` audit and terminal decision.
+- **Rules:** host labels `Light` / `Medium` / `High` / `Extra High` / `Ultra` recorded literally; default requested
+  effort `Ultra`; runtime proof before substantive audit; never mutates, implements or repairs; complete material
+  P1/P2 collection under `AUDIT_MATERIALITY_BOUNDARY_V1` and `FINITE_AUDIT_RULE`. A first-audit P1/P2 opens the one
+  consolidated repair; a genuine P1/P2 remaining after the one re-audit rejects the candidate. Unavailability makes
+  a protected gate wait; it never reassigns T4.
 
 ## 3. Lifecycle prompt skeletons
 
@@ -110,12 +117,13 @@ HANDOFF: AGENT_OS_HANDOFF_V1; MEANINGFUL_PROMPT_COUNT_THIS_PR: 1
 ```
 
 ```text
-TASK_INTENT: AUDIT (exhaustive, fresh context, READ_ONLY) — Codex GPT-5.6 Sol (PRIMARY), or the ChatGPT
-  controller under the section 24.4 fallback with FALLBACK_REASON recorded
-SEMANTIC_BOUNDARY: <the declared contract of PR #<n>>; judge it, do not expand it
-STATE_PIN: PR #<n> head <sha>, base <sha>
-OUTPUT: the COMPLETE current P1/P2 set in one pass, each with file:line evidence and a failure scenario;
-  P3 separately; PROTECTED_CLASS_C_REQUIRED yes/no with the trigger. Zero mutation.
+TASK_INTENT: AUDIT (ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1; exhaustive, fresh context, READ_ONLY) — GPT-6 Astra,
+  effort Ultra; for non-protected work only, the section 24.4 fallback lane with FALLBACK_REASON recorded
+SEMANTIC_BOUNDARY: <the declared contract of PR #<n>>; judge it, do not expand it (FINITE_AUDIT_RULE)
+STATE_PIN: PR #<n> head <sha>, base <sha>; PROTECTED yes/no with the trigger
+OUTPUT: the COMPLETE current material P1/P2 set in one pass, each with invariant, file:line evidence, supported
+  entry/consumer path, effect, materiality and minimum regression proof (AUDIT_MATERIALITY_BOUNDARY_V1); P3
+  separately; for protected work this one audit is also the protected Class-C verdict. Zero mutation.
 ```
 
 ```text
@@ -127,16 +135,11 @@ HANDOFF: AGENT_OS_HANDOFF_V1; this is the candidate's only repair
 ```
 
 ```text
-TASK_INTENT: REAUDIT (the ONE whole-contract re-audit) — Codex GPT-5.6 Sol (PRIMARY), or the ChatGPT controller
-  under the section 24.4 fallback with FALLBACK_REASON recorded
+TASK_INTENT: REAUDIT (the ONE whole-contract re-audit) — GPT-6 Astra, effort Ultra; for non-protected work only,
+  the section 24.4 fallback lane with FALLBACK_REASON recorded
 STATE_PIN: repaired head <sha>; BLOCKER_INVENTORY: <the repaired set>
-OUTPUT: the COMPLETE current P1/P2 set of the whole contract. Any genuine P1/P2 -> FIXED_POINT_STOP.
-```
-
-```text
-TASK_INTENT: TERMINAL_AUDIT (protected T4 CLASS_C_CROSS_CONTRACT, READ_ONLY) — GPT-6 Astra, effort <literal>
-STATE_PIN: PR #<n> head <sha>; prior audit verdicts <...>
-OUTPUT: ACCEPT or REJECT with the complete P1/P2 set; a genuine P1/P2 rejects the candidate (no repair).
+OUTPUT: the COMPLETE current material P1/P2 set of the whole contract, not only the repaired lines. Any genuine
+  material P1/P2 -> FIXED_POINT_STOP after controller severity adjudication; P3 never blocks.
 ```
 
 ```text
@@ -161,6 +164,6 @@ at most one bounded next-PR proposal — never merge authorization.
 
 This guide changes prompting ergonomics only. It does not alter: one open PR; one repository writer; no
 direct `main` push; standard merge only; explicit per-PR, exact-head human merge authorization; pending CI =
-`NOT_READY`; current valid P1/P2 threads block; the protected Astra terminal audit for protected work;
+`NOT_READY`; current valid material P1/P2 threads block; the GPT-6 Astra audit for protected work;
 post-merge verification; crypto_core-only scope; paper-first/fail-closed/deterministic rails; and the
 validity of any open blocker until its own gates close it.

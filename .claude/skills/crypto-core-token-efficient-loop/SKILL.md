@@ -6,7 +6,7 @@ description: Compact execution checklist for crypto_core implementation and cons
 # Crypto Core Token-Efficient Loop
 
 Authority: `AGENTS.md` and `docs/crypto_core/agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`,
-active content `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1`). This checklist restates no authority. Token
+active content `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`). This checklist restates no authority. Token
 saving is subordinate to correctness; no gate may be skipped to save tokens. Operate under
 `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2).
 
@@ -39,15 +39,16 @@ saving is subordinate to correctness; no gate may be skipped to save tokens. Ope
 ## Boundaries
 
 - Council (§24.3): ChatGPT controller (`CONTROLLER_READONLY_FIRST_POLICY`); Claude Opus 5 (`claude-opus-5`) for
-  deep semantic implementation and repair; Codex GPT-5.6 Sol for repo-native engineering and PRIMARY ordinary
-  independent review, with the ChatGPT controller only as the narrow §24.4 fallback; GPT-6 Astra alone for the
-  protected T4 terminal audit, never reassigned; ChatGPT Work; Deep Research. Claude Sonnet 5, Codex Terra and
+  deep semantic implementation and repair; GPT-6 Astra as PRIMARY independent auditor
+  (`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1`), which for protected work is also the protected T4 audit, never
+  reassigned; Codex GPT-5.6 Sol for repo-native engineering and as the first recorded non-protected audit
+  fallback, with the ChatGPT controller as the last (§24.4); ChatGPT Work; Deep Research. Claude Sonnet 5, Codex Terra and
   Codex Luna are `NOT_IN_ACTIVE_COUNCIL`; Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED`; Claude Opus 4.8 is
   `SUPERSEDED_BY_OPUS_5`; Copilot is `INACTIVE_UNAVAILABLE`.
-- Budget (§24.8): about 3 specialist prompts per PR, 5 at most, no specialist sixth; controller governance
-  closeout consumes none. One exhaustive audit, at most one consolidated repair, one whole-contract re-audit,
-  then a terminal decision. Any genuine P1/P2 after that → `FIXED_POINT_STOP`; no mutation of a rejected or
-  frozen candidate.
+- Budget (§24.8): the fewest specialist prompts — target 2 clean, 4 repaired, hard maximum 5, no specialist
+  sixth; controller governance closeout consumes none. One exhaustive audit, at most one consolidated repair,
+  one whole-contract re-audit. Any genuine material P1/P2 after that → `FIXED_POINT_STOP`; P3 never blocks; no
+  mutation of a rejected or frozen candidate.
 - No Claude session self-satisfies an independent or protected audit.
 - `CONTROL_PLANE_CLAIM_MINIMIZATION` (§24.13): no new validator, registry, filesystem or host-discovery
   layer, schema, dependency or process the declared contract does not require.
