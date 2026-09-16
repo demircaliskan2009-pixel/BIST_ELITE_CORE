@@ -11,6 +11,8 @@ import pytest
 
 import crypto_core.validation.edge_artifact_core as core_module
 from crypto_core.validation.edge_artifact_core import (
+    EDGE_MILESTONE_CLAIM_FLAG_NAMES,
+    EDGE_PERMANENT_NON_CLAIM_FLAGS,
     EDGE_REGIME_EVIDENCE_UNAVAILABLE,
     EDGE_REGIME_LABEL_BINDING_PENDING,
     EDGE_STRUCTURAL_NON_CLAIM_FLAGS,
@@ -23,6 +25,8 @@ from crypto_core.validation.edge_artifact_core import (
     edge_authority_binding_snapshot,
     edge_authority_binding_to_payload,
     edge_canonical_json,
+    edge_gate_claim_profile,
+    edge_gate_milestone_claims,
     edge_is_hex64,
     edge_payload_digest,
     edge_scope_violation,
@@ -148,6 +152,112 @@ def test_structural_non_claim_flags_are_unique_and_only_paper_only_is_true() -> 
 def test_regime_pending_pattern_constants() -> None:
     assert EDGE_REGIME_LABEL_BINDING_PENDING == "PENDING_RF_LABEL_ENUM_UNAVAILABLE"
     assert EDGE_REGIME_EVIDENCE_UNAVAILABLE == "regime_evidence_unavailable"
+
+
+# --- gate-aware milestone claim profiles ----------------------------------------------------------------------------
+
+_BASELINE_EXPECTED = (
+    ("paper_only", True),
+    ("edge_proven", False),
+    ("profitability_proven", False),
+    ("candidate_admitted_to_paper", False),
+    ("preregistration_sealed", False),
+    ("kill_criteria_sealed", False),
+    ("performance_data_consumed", False),
+    ("oos_evidence_consumed", False),
+    ("regime_evidence_available", False),
+    ("current_venue_facts_consumed", False),
+    ("operational_readiness", False),
+    ("live_ready", False),
+    ("shadow_ready", False),
+    ("deribit_ready", False),
+    ("private_api_ready", False),
+    ("live_api_called", False),
+    ("connector_invoked", False),
+    ("real_orders_enabled", False),
+    ("real_money_enabled", False),
+    ("real_capital_reserved", False),
+    ("scheduler_enabled", False),
+    ("auto_loop_enabled", False),
+)
+
+
+def test_pre_ef5_baseline_tuple_is_unchanged() -> None:
+    assert EDGE_STRUCTURAL_NON_CLAIM_FLAGS == _BASELINE_EXPECTED
+
+
+@pytest.mark.parametrize("gate_id", ["EF-2", "EF-3", "EF-4"])
+def test_accepted_gates_keep_the_baseline_profile(gate_id: str) -> None:
+    assert edge_gate_claim_profile(gate_id) == EDGE_STRUCTURAL_NON_CLAIM_FLAGS
+
+
+@pytest.mark.parametrize(
+    ("gate_id", "sealed", "consumed"),
+    [
+        ("EF-2", False, False),
+        ("EF-3", False, False),
+        ("EF-4", False, False),
+        ("EF-5", True, False),
+        ("EF-6", True, True),
+    ],
+)
+def test_gate_profiles_raise_only_their_milestone_claims(gate_id: str, sealed: bool, consumed: bool) -> None:
+    profile = dict(edge_gate_claim_profile(gate_id))
+    assert profile["preregistration_sealed"] is sealed
+    assert profile["performance_data_consumed"] is consumed
+    assert {name: profile[name] for name, _ in EDGE_PERMANENT_NON_CLAIM_FLAGS} == dict(EDGE_PERMANENT_NON_CLAIM_FLAGS)
+    assert [name for name, _ in edge_gate_claim_profile(gate_id)] == [name for name, _ in _BASELINE_EXPECTED]
+
+
+def test_permanent_non_claims_exclude_only_the_milestone_flags() -> None:
+    assert EDGE_MILESTONE_CLAIM_FLAG_NAMES == ("preregistration_sealed", "performance_data_consumed")
+    assert dict(EDGE_PERMANENT_NON_CLAIM_FLAGS) == {
+        name: value for name, value in _BASELINE_EXPECTED if name not in EDGE_MILESTONE_CLAIM_FLAG_NAMES
+    }
+    for name in ("edge_proven", "oos_evidence_consumed", "kill_criteria_sealed", "regime_evidence_available"):
+        assert dict(EDGE_PERMANENT_NON_CLAIM_FLAGS)[name] is False
+
+
+@pytest.mark.parametrize("gate_id", ["EF-1", "EF-7", "EF-8", "", "ef-5"])
+def test_unknown_or_unimplemented_gates_have_no_profile(gate_id: str) -> None:
+    with pytest.raises(EdgeArtifactError, match="edge_milestone_claim_gate_unknown"):
+        edge_gate_claim_profile(gate_id)
+
+
+@pytest.mark.parametrize(
+    ("gate_id", "sealed", "consumed"),
+    [
+        ("EF-2", False, False),
+        ("EF-5", False, False),
+        ("EF-5", True, False),
+        ("EF-6", False, False),
+        ("EF-6", True, False),
+        ("EF-6", True, True),
+    ],
+)
+def test_milestone_claims_within_the_gate_ceiling_are_returned(gate_id: str, sealed: bool, consumed: bool) -> None:
+    assert edge_gate_milestone_claims(gate_id, preregistration_sealed=sealed, performance_data_consumed=consumed) == {
+        "preregistration_sealed": sealed,
+        "performance_data_consumed": consumed,
+    }
+
+
+@pytest.mark.parametrize(
+    ("gate_id", "sealed", "consumed", "code"),
+    [
+        ("EF-4", True, False, "edge_milestone_claim_exceeds_gate:EF-4:preregistration_sealed"),
+        ("EF-5", True, True, "edge_milestone_claim_exceeds_gate:EF-5:performance_data_consumed"),
+        ("EF-3", False, True, "edge_milestone_claim_exceeds_gate:EF-3:performance_data_consumed"),
+        ("EF-6", False, True, "edge_milestone_claim_performance_without_sealed_preregistration"),
+        ("EF-6", 1, False, "edge_milestone_claim_invalid:preregistration_sealed"),
+        ("EF-6", True, None, "edge_milestone_claim_invalid:performance_data_consumed"),
+    ],
+)
+def test_milestone_claims_above_the_ceiling_or_without_a_seal_raise(
+    gate_id: str, sealed: object, consumed: object, code: str
+) -> None:
+    with pytest.raises(EdgeArtifactError, match=f"^{code}$"):
+        edge_gate_milestone_claims(gate_id, preregistration_sealed=sealed, performance_data_consumed=consumed)  # type: ignore[arg-type]
 
 
 # --- authority bindings ---------------------------------------------------------------------------------------------

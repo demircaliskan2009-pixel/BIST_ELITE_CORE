@@ -1,4 +1,4 @@
-"""Edge Factory trust kernel shared by the EF-2, EF-3 and EF-4 evidence gates.
+"""Edge Factory trust kernel shared by the EF-2 through EF-6 evidence gates.
 
 This module is deliberately small. It holds only the shared trust concepts whose duplication across gates produced
 repeated authority-binding and verifier-boundary defects:
@@ -17,7 +17,10 @@ repeated authority-binding and verifier-boundary defects:
   public ``verify_edge_*`` returns an ``EdgeEvidenceVerification`` for ANY Python object
   (``VERIFY_IS_TOTAL_FAIL_CLOSED_FOR_ANY_OBJECT``);
 * canonical JSON and SHA-256 primitives, the structural non-claim flags, the regime pending pattern and the single
-  Edge Factory scope policy.
+  Edge Factory scope policy;
+* gate-aware milestone claim profiles: ``EDGE_STRUCTURAL_NON_CLAIM_FLAGS`` stays the pre-EF-5 baseline, and only
+  ``preregistration_sealed`` (EF-5 onward) and ``performance_data_consumed`` (EF-6 onward) may be raised, each within
+  its gate ceiling and never performance without a sealed preregistration.
 
 Gate-specific business semantics stay in the gate modules. No IO, clock, randomness, network or environment access;
 paper-only.
@@ -65,6 +68,21 @@ EDGE_STRUCTURAL_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
     ("scheduler_enabled", False),
     ("auto_loop_enabled", False),
 )
+
+# Milestone claims are the only claims a later gate may truthfully raise. EDGE_STRUCTURAL_NON_CLAIM_FLAGS stays the
+# unchanged pre-EF-5 baseline (EF-2/EF-3/EF-4); each gate's ceiling below bounds what its artifacts may claim, and the
+# permanent non-claims stay fixed through every implemented gate.
+EDGE_MILESTONE_CLAIM_FLAG_NAMES: tuple[str, ...] = ("preregistration_sealed", "performance_data_consumed")
+EDGE_PERMANENT_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = tuple(
+    (name, value) for name, value in EDGE_STRUCTURAL_NON_CLAIM_FLAGS if name not in EDGE_MILESTONE_CLAIM_FLAG_NAMES
+)
+_GATE_MILESTONE_CLAIM_CEILINGS: dict[str, tuple[bool, bool]] = {
+    "EF-2": (False, False),
+    "EF-3": (False, False),
+    "EF-4": (False, False),
+    "EF-5": (True, False),
+    "EF-6": (True, True),
+}
 
 # Token starts are delimited by any non-alphanumeric character, underscore included, so snake_case embeddings
 # ("carry_scheduler_loop", "funding_bist30") are caught; "kap" and "live" must stand alone ("kappa", "delivery" pass).
@@ -169,6 +187,40 @@ def resolve_edge_gate_verdict(
     if needs_governance_reasons:
         return EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL
     return EdgeGateVerdict.PASS
+
+
+def edge_gate_claim_profile(gate_id: str) -> tuple[tuple[str, bool], ...]:
+    """The complete ordered claim profile of an artifact of ``gate_id`` that reached its gate milestone.
+
+    EF-2/EF-3/EF-4 equal ``EDGE_STRUCTURAL_NON_CLAIM_FLAGS``; EF-5 raises only ``preregistration_sealed``; EF-6 raises
+    ``preregistration_sealed`` and ``performance_data_consumed``. Raises ``EdgeArtifactError`` for an unknown gate.
+    """
+
+    if gate_id not in _GATE_MILESTONE_CLAIM_CEILINGS:
+        raise EdgeArtifactError(f"edge_milestone_claim_gate_unknown:{gate_id}")
+    ceiling = dict(zip(EDGE_MILESTONE_CLAIM_FLAG_NAMES, _GATE_MILESTONE_CLAIM_CEILINGS[gate_id], strict=True))
+    return tuple((name, ceiling.get(name, value)) for name, value in EDGE_STRUCTURAL_NON_CLAIM_FLAGS)
+
+
+def edge_gate_milestone_claims(
+    gate_id: str, *, preregistration_sealed: bool, performance_data_consumed: bool
+) -> dict[str, bool]:
+    """Validate an artifact's milestone claims against its gate ceiling and return them.
+
+    A claim above the gate ceiling, a non-bool claim, or performance consumption without a sealed preregistration
+    raises ``EdgeArtifactError``: no performance is ever interpreted without a sealed EF-5 ledger.
+    """
+
+    profile = dict(edge_gate_claim_profile(gate_id))
+    claims = {"preregistration_sealed": preregistration_sealed, "performance_data_consumed": performance_data_consumed}
+    for name, claimed in claims.items():
+        if type(claimed) is not bool:
+            raise EdgeArtifactError(f"edge_milestone_claim_invalid:{name}")
+        if claimed and not profile[name]:
+            raise EdgeArtifactError(f"edge_milestone_claim_exceeds_gate:{gate_id}:{name}")
+    if performance_data_consumed and not preregistration_sealed:
+        raise EdgeArtifactError("edge_milestone_claim_performance_without_sealed_preregistration")
+    return claims
 
 
 def _reject_json_constant(value: str) -> object:
@@ -333,6 +385,8 @@ def verify_edge_artifact_total(
 
 
 __all__ = [
+    "EDGE_MILESTONE_CLAIM_FLAG_NAMES",
+    "EDGE_PERMANENT_NON_CLAIM_FLAGS",
     "EDGE_REGIME_EVIDENCE_UNAVAILABLE",
     "EDGE_REGIME_LABEL_BINDING_PENDING",
     "EDGE_STRUCTURAL_NON_CLAIM_FLAGS",
@@ -346,6 +400,8 @@ __all__ = [
     "edge_authority_binding_snapshot",
     "edge_authority_binding_to_payload",
     "edge_canonical_json",
+    "edge_gate_claim_profile",
+    "edge_gate_milestone_claims",
     "edge_is_hex64",
     "edge_payload_digest",
     "edge_scope_violation",
