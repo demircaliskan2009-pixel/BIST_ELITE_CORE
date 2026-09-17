@@ -3,9 +3,15 @@
 A ``HistoricalDecisionRun`` is the first executable-strategy authority of the historical evaluation substrate. It
 binds an authenticated ``HistoricalPitDataset`` and an authenticated ``StrategyExecutableBinding`` (both re-proven
 through their public verifiers against caller anchors, same correlation, READY), requires both to come from the same
-EF-3 source manifest, validates the exact governed parameter assignment against the code-defined profile schema, and
-re-executes the registered profile over PIT views for one instrument inside ``[evaluation_start_ns,
-evaluation_end_ns)``.
+EF-3 source manifest, validates the exact governed parameter assignment against the registered profile schema and
+numeric policy, and re-executes the registered profile over PIT views for one instrument inside
+``[evaluation_start_ns, evaluation_end_ns)``.
+
+Parameter governance precedes execution. The variant parameters (N, entry_threshold, exit_threshold, unit_size) are
+executed only under a ``StrategyExecutableParameterApproval`` that matches the exact executable binding digest,
+StrategySpec digest, registered profile semantics digest and canonical parameter assignment digest. A missing or
+non-matching approval yields ``READY`` + ``NEEDS_GOVERNANCE_APPROVAL`` with an empty trace, and the profile is never
+evaluated for that run. The mapping approval inside the executable binding never approves parameter values.
 
 Decision schedule (H2): one decision per distinct ``max(available_at_ns, finalized_at_ns)`` of a final funding record
 of the profile's required series for the instrument. At each decision instant the PIT view exposes only final records
@@ -17,6 +23,9 @@ action, prior and resulting direction, target units where applicable, the exact 
 input records used and of the records that triggered the instant, and a decision digest. There is no order, fill,
 execution price, position, PnL or performance metric. The verifier re-executes the complete run, so a copied or
 resealed decision trace never becomes authoritative.
+
+Native integer wire fields (evaluation bounds, decision sequence and time, counts) are bounded to signed int64 by
+integer comparison before any serialization; the strict parser refuses values outside that representation domain.
 
 Status is integrity only; REJECTED implies NOT_EVALUATED; a non-advancing dataset or binding propagates its verdict and
 produces no decisions; only READY + PASS advances. Deterministic, historical-evaluation only: no IO, clock, randomness,
@@ -58,6 +67,9 @@ from crypto_core.validation.historical_pit_dataset import (
 )
 from crypto_core.validation.strategy_executable_binding import (
     StrategyExecutableBinding,
+    StrategyExecutableBindingError,
+    StrategyExecutableParameterApproval,
+    canonical_strategy_executable_parameter_approval,
     strategy_executable_binding_from_payload,
     strategy_executable_binding_payload_is_well_formed,
     strategy_executable_binding_to_dict,
@@ -72,9 +84,11 @@ from crypto_core.validation.strategy_executable_profiles import (
     evaluate_strategy_executable_profile,
     get_strategy_executable_profile,
     profile_parameter_assignment_digest,
+    strategy_executable_profile_accepts_decimal,
 )
 
 _SCHEMA_VERSION = "historical-decision-run.v1"
+_MAX_WIRE_INT = 9223372036854775807
 _REASON_PREFIX = "historical_decision_run"
 _SELF_DIGEST_FIELD = "run_digest"
 _DECISION_DIGEST_FIELD = "decision_digest"
@@ -141,6 +155,7 @@ class HistoricalDecisionRun:
     profile_semantics_digest: str
     parameter_assignment: tuple[ProfileParameterAssignment, ...]
     parameter_assignment_digest: str
+    parameter_approval: StrategyExecutableParameterApproval | None
     instrument: str
     evaluation_start_ns: int
     evaluation_end_ns: int
@@ -222,7 +237,7 @@ def _require_instrument(value: object) -> str:
 
 
 def _require_positive_int(value: object, field_name: str) -> int:
-    if type(value) is not int or value <= 0:
+    if type(value) is not int or value <= 0 or value > _MAX_WIRE_INT:
         raise _fail(f"{field_name}_invalid")
     return value
 
@@ -320,14 +335,42 @@ def _required_series(
     if len(candidates) > 1:
         return [_reason("required_final_series_ambiguous")], ""
     series_id = candidates[0].series_id
-    missing_values = sorted(
-        record.record_digest
-        for record in dataset.records
-        if record.series_id == series_id
-        and record.instrument == instrument
-        and not set(profile.required_value_names) <= {value.name for value in record.values}
-    )
-    return [_reason(f"required_value_missing:{digest}") for digest in missing_values], series_id
+    codes: list[str] = []
+    for record in dataset.records:
+        if record.series_id != series_id or record.instrument != instrument:
+            continue
+        values = {value.name: value.value for value in record.values}
+        if not set(profile.required_value_names) <= set(values):
+            codes.append(_reason(f"required_value_missing:{record.record_digest}"))
+        elif not all(
+            strategy_executable_profile_accepts_decimal(profile, values[name]) for name in profile.required_value_names
+        ):
+            codes.append(_reason(f"required_value_not_profile_representable:{record.record_digest}"))
+    return sorted(codes), series_id
+
+
+def _parameter_approval_reasons(
+    approval: StrategyExecutableParameterApproval | None,
+    *,
+    executable_binding_digest: str,
+    strategy_spec_digest: str,
+    profile_semantics_digest: str,
+    parameter_assignment_digest: str,
+) -> list[str]:
+    """Exact parameter governance: every committed digest must match before any profile execution."""
+
+    if approval is None:
+        return [_reason("parameter_approval_missing")]
+    codes: list[str] = []
+    if approval.approved_executable_binding_digest != executable_binding_digest:
+        codes.append(_reason("parameter_approval_executable_binding_digest_mismatch"))
+    if approval.approved_strategy_spec_digest != strategy_spec_digest:
+        codes.append(_reason("parameter_approval_strategy_spec_digest_mismatch"))
+    if approval.approved_profile_semantics_digest != profile_semantics_digest:
+        codes.append(_reason("parameter_approval_profile_semantics_digest_mismatch"))
+    if approval.approved_parameter_assignment_digest != parameter_assignment_digest:
+        codes.append(_reason("parameter_approval_parameter_assignment_digest_mismatch"))
+    return codes
 
 
 def _decision_trace(
@@ -340,9 +383,11 @@ def _decision_trace(
     start_ns: int,
     end_ns: int,
 ) -> tuple[HistoricalDecisionRecord, ...]:
-    """Re-execute the registered profile at every scheduled decision instant (H2) in ``[start_ns, end_ns)``."""
+    """Re-execute the registered profile at every scheduled decision instant (H2) in ``[start_ns, end_ns)``.
 
-    lookback = int({item.parameter_id: item.value for item in parameters}["final_funding_lookback_count"])
+    Called only after dataset, binding and exact parameter governance have all passed.
+    """
+
     value_name = profile.required_value_names[0]
     triggers: dict[int, list[str]] = {}
     for record in dataset.records:
@@ -361,7 +406,7 @@ def _decision_trace(
         decision = evaluate_strategy_executable_profile(
             profile, final_funding_rates=rates, parameter_assignment=parameters, prior_direction=direction
         )
-        used = view.records[-lookback:] if len(view.records) >= lookback else view.records
+        used = view.records[len(view.records) - decision.used_observation_count :]
         seed = HistoricalDecisionRecord(
             decision_sequence=sequence,
             decision_time_ns=decision_time,
@@ -393,11 +438,16 @@ def _assemble_run(
     run_id: object,
     correlation_id: object,
     parameter_assignment: object,
+    parameter_approval: object,
     instrument: object,
     evaluation_start_ns: object,
     evaluation_end_ns: object,
 ) -> HistoricalDecisionRun:
-    """The one decision-run assembly path, shared by the builder and verifier re-execution."""
+    """The one decision-run assembly path, shared by the builder and verifier re-execution.
+
+    Order: structural input → dataset and binding re-proof → registered profile → safe parameter canonicalization and
+    digest → verdict including exact parameter governance → profile execution only when everything passed.
+    """
 
     dataset_ref = require_edge_authority_binding(
         dataset_binding,
@@ -421,6 +471,10 @@ def _assemble_run(
     if start_ns >= end_ns:
         raise _fail("evaluation_bounds_invalid")
     parameters = _structural_parameter_assignment(parameter_assignment)
+    try:
+        approval = canonical_strategy_executable_parameter_approval(parameter_approval)
+    except StrategyExecutableBindingError as exc:
+        raise _fail("parameter_approval_malformed") from exc
 
     dataset_codes, dataset = _dataset_authority(dataset_ref, correlation_id=correlation_id)  # type: ignore[arg-type]
     binding_codes, executable = _binding_authority(binding_ref, correlation_id=correlation_id)  # type: ignore[arg-type]
@@ -444,6 +498,7 @@ def _assemble_run(
             parameters = canonical_profile_parameter_assignment(profile, parameters)
         except StrategyExecutableProfileError as exc:
             raise _fail("parameter_assignment_invalid") from exc
+    parameter_digest = profile_parameter_assignment_digest(parameters)
     integrity = _sorted_unique(codes)
 
     series_id = ""
@@ -460,20 +515,32 @@ def _assemble_run(
             buckets[0].append(_reason("instrument_outside_strategy_universe"))
         series_codes, series_id = _required_series(dataset, profile, instrument)
         buckets[0].extend(series_codes)
+        buckets[2].extend(
+            _parameter_approval_reasons(
+                approval,
+                executable_binding_digest=binding_ref.expected_digest,  # type: ignore[union-attr]
+                strategy_spec_digest=executable.strategy_spec_digest,
+                profile_semantics_digest=profile.profile_semantics_digest,
+                parameter_assignment_digest=parameter_digest,
+            )
+        )
         fail, needs_external, needs_governance = buckets
         status = EdgeEvidenceStatus.READY
         verdict = resolve_edge_gate_verdict(fail, needs_external, needs_governance)
         verdict_reasons = _sorted_unique(fail + needs_external + needs_governance)
         if verdict is EdgeGateVerdict.PASS:
-            decisions = _decision_trace(
-                dataset,
-                profile,
-                parameters,
-                series_id=series_id,
-                instrument=instrument,
-                start_ns=start_ns,
-                end_ns=end_ns,
-            )
+            try:
+                decisions = _decision_trace(
+                    dataset,
+                    profile,
+                    parameters,
+                    series_id=series_id,
+                    instrument=instrument,
+                    start_ns=start_ns,
+                    end_ns=end_ns,
+                )
+            except StrategyExecutableProfileError as exc:
+                raise _fail("profile_execution_failed") from exc
 
     seed = HistoricalDecisionRun(
         schema_version=_SCHEMA_VERSION,
@@ -493,7 +560,8 @@ def _assemble_run(
         profile_version="" if profile is None else profile.profile_version,
         profile_semantics_digest="" if profile is None else profile.profile_semantics_digest,
         parameter_assignment=parameters,
-        parameter_assignment_digest=profile_parameter_assignment_digest(parameters),
+        parameter_assignment_digest=parameter_digest,
+        parameter_approval=approval,
         instrument=instrument,
         evaluation_start_ns=start_ns,
         evaluation_end_ns=end_ns,
@@ -520,12 +588,14 @@ def build_historical_decision_run(
     instrument: str,
     evaluation_start_ns: int,
     evaluation_end_ns: int,
+    parameter_approval: StrategyExecutableParameterApproval | None = None,
 ) -> HistoricalDecisionRun:
     """Build a deterministic historical decision run by executing the bound profile over PIT views.
 
-    Malformed caller input, an invalid parameter assignment or a non-serializable upstream object raises
-    ``HistoricalDecisionRunError``. A dataset or binding that fails re-proof, or a cross-chain splice, yields
-    ``REJECTED``/``NOT_EVALUATED``. Non-advancing upstream authority propagates without decisions.
+    Malformed caller input, an invalid parameter assignment, a malformed parameter approval or a non-serializable
+    upstream object raises ``HistoricalDecisionRunError``. A dataset or binding that fails re-proof, or a cross-chain
+    splice, yields ``REJECTED``/``NOT_EVALUATED``. Non-advancing upstream authority propagates without decisions. A
+    missing or non-matching parameter approval yields ``NEEDS_GOVERNANCE_APPROVAL`` without executing the profile.
     """
 
     if type(dataset) is not HistoricalPitDataset:
@@ -560,6 +630,7 @@ def build_historical_decision_run(
         run_id=run_id,
         correlation_id=correlation_id,
         parameter_assignment=parameter_assignment,
+        parameter_approval=parameter_approval,
         instrument=instrument,
         evaluation_start_ns=evaluation_start_ns,
         evaluation_end_ns=evaluation_end_ns,
@@ -598,7 +669,7 @@ def _as_bool(value: object) -> bool:
 
 
 def _as_int(value: object) -> int:
-    if type(value) is not int:
+    if type(value) is not int or value < 0 or value > _MAX_WIRE_INT:
         raise _fail("payload_field_malformed")
     return value
 
@@ -655,6 +726,10 @@ def _parse_executable_binding(value: object) -> EdgeAuthorityBinding | None:
     )
 
 
+def _as_parameter_approval(value: object) -> object:
+    return None if value is None else _parse_exact(StrategyExecutableParameterApproval, value, {})
+
+
 _DECISION_CONVERTERS: dict[str, Callable[[object], object]] = {
     "decision_sequence": _as_int,
     "decision_time_ns": _as_int,
@@ -671,6 +746,7 @@ _RUN_CONVERTERS: dict[str, Callable[[object], object]] = {
     "dataset_binding": _parse_dataset_binding,
     "executable_binding": _parse_executable_binding,
     "parameter_assignment": _as_records(ProfileParameterAssignment, {}),
+    "parameter_approval": _as_parameter_approval,
     "evaluation_start_ns": _as_int,
     "evaluation_end_ns": _as_int,
     "decisions": _as_records(HistoricalDecisionRecord, _DECISION_CONVERTERS),
@@ -704,6 +780,7 @@ def _reassemble_run(run: object) -> HistoricalDecisionRun:
         run_id=run.run_id,  # type: ignore[attr-defined]
         correlation_id=run.correlation_id,  # type: ignore[attr-defined]
         parameter_assignment=run.parameter_assignment,  # type: ignore[attr-defined]
+        parameter_approval=run.parameter_approval,  # type: ignore[attr-defined]
         instrument=run.instrument,  # type: ignore[attr-defined]
         evaluation_start_ns=run.evaluation_start_ns,  # type: ignore[attr-defined]
         evaluation_end_ns=run.evaluation_end_ns,  # type: ignore[attr-defined]

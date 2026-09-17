@@ -4,8 +4,23 @@ A ``StrategyExecutableProfile`` is the only executable authority a historical de
 only as module constants here: there is no dynamic import, plugin loading, entry point, ``eval``/``exec`` or caller
 callable, and a profile is looked up by id through a closed mapping. Each profile declares its implementation
 identifier, required PIT data semantics, parameter schema and constraints, structured semantic elements, decision
-schedule and state rule; ``profile_semantics_digest`` is recomputed from those code-defined constants and can never be
-chosen by a caller.
+schedule, state rule and numeric policy; ``profile_semantics_digest`` is recomputed from those code-defined constants
+and can never be chosen by a caller.
+
+Registry authority: every public function that takes a profile accepts only the registered profile object itself and
+reads parameter schema, constraints and numeric policy from that registered object. An equal-comparing copy (for
+example one whose ``str``-enum fields were replaced by equal plain strings) is refused.
+
+Numeric policy: ``ProfileNumericPolicy`` is a first-class field committed by ``profile_semantics_digest``. Execution
+reads every load-bearing numeric rule from the registered profile's policy and refuses a policy naming an identity it
+does not implement:
+
+* scale-18 decimals are ASCII ``-?(0|[1-9][0-9]*).[0-9]{scale}`` without exponent, plus sign or negative zero, and at
+  most ``max_decimal_text_length`` characters (a representation-safety bound, not a trading threshold);
+* positive integers are ASCII without leading zeros and at most ``max_positive_integer`` (int64), checked lexically
+  before any integer conversion, never through interpreter digit limits;
+* the mean is exact ``Fraction`` arithmetic, rendered with exact integer ``ROUND_HALF_EVEN`` at the policy scale. No
+  ``decimal`` context is used anywhere, so results never depend on the caller's ambient ``Decimal`` context.
 
 The first and only profile, ``passive_funding_carry.v1``, implements the human-authorized H1 rule structure over final
 funding settlements of one instrument with the H2 decision schedule ``max(available_at_ns, finalized_at_ns)``:
@@ -23,10 +38,8 @@ semantics are deterministic historical-evaluation mechanics only: they prove no 
 
 from __future__ import annotations
 
-import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, replace
-from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 from enum import Enum
 from fractions import Fraction
 
@@ -41,12 +54,15 @@ PASSIVE_FUNDING_CARRY_V1 = "passive_funding_carry.v1"
 
 _REASON_PREFIX = "strategy_executable_profile"
 _SELF_DIGEST_FIELD = "profile_semantics_digest"
-_CANONICAL_DECIMAL = re.compile(r"-?(?:0|[1-9][0-9]*)\.[0-9]{18}")
-_CANONICAL_POSITIVE_INTEGER = re.compile(r"[1-9][0-9]*")
-_NEGATIVE_ZERO = "-0.000000000000000000"
-_ZERO = "0.000000000000000000"
-_MEAN_PRECISION = 80
-_MEAN_QUANTUM = Decimal("0.000000000000000001")
+
+# Identities of the numeric rules this module implements. A registered policy naming any other identity is refused
+# at execution; the rule VALUES (scale, length, integer maximum) live only in the committed policy constant below.
+_DECIMAL_GRAMMAR_ID = "ascii_signed_canonical_integer_dot_fixed_scale_no_exponent_no_plus_no_negative_zero.v1"
+_INTEGER_GRAMMAR_ID = "ascii_positive_integer_no_leading_zero_lexically_bounded_int64.v1"
+_MEAN_ARITHMETIC_ID = "exact_fraction_arithmetic_mean.v1"
+_MEAN_ROUNDING_ID = "round_half_even"
+_MEAN_RENDER_ID = "exact_integer_divmod_fixed_scale_render.v1"
+_INT64_BIT_LENGTH = 63
 
 
 class StrategyExecutableProfileError(EdgeArtifactError):
@@ -103,6 +119,22 @@ class ProfileSemanticElement:
 
 
 @dataclass(frozen=True)
+class ProfileNumericPolicy:
+    """Every load-bearing numeric representation and execution rule of a profile; committed by its semantics digest."""
+
+    numeric_policy_id: str
+    decimal_grammar_id: str
+    decimal_scale: int
+    max_decimal_text_length: int
+    integer_grammar_id: str
+    max_positive_integer: int
+    mean_arithmetic_id: str
+    mean_rounding_id: str
+    mean_output_scale: int
+    mean_render_id: str
+
+
+@dataclass(frozen=True)
 class StrategyExecutableProfile:
     """Code-defined executable profile; ``profile_semantics_digest`` covers every other field."""
 
@@ -117,12 +149,13 @@ class StrategyExecutableProfile:
     semantic_elements: tuple[ProfileSemanticElement, ...]
     decision_schedule_id: str
     state_rule_id: str
+    numeric_policy: ProfileNumericPolicy
     profile_semantics_digest: str
 
 
 @dataclass(frozen=True)
 class ProfileParameterAssignment:
-    """One governed parameter value as a canonical ASCII string (integer or 18-place decimal per schema)."""
+    """One governed parameter value as a canonical ASCII string (integer or scale-18 decimal per schema)."""
 
     parameter_id: str
     value: str
@@ -145,17 +178,13 @@ def _fail(code: str) -> StrategyExecutableProfileError:
     return StrategyExecutableProfileError(f"{_REASON_PREFIX}:{code}")
 
 
-def _is_canonical_decimal(value: object) -> bool:
-    return type(value) is str and _CANONICAL_DECIMAL.fullmatch(value) is not None and value != _NEGATIVE_ZERO
-
-
 def _profile_payload(profile: StrategyExecutableProfile) -> dict[str, object]:
     def serialize(value: object) -> object:
         if isinstance(value, Enum):
             return value.value
         if isinstance(value, tuple):
             return [serialize(item) for item in value]
-        if isinstance(value, (ProfileParameterSpec, ProfileSemanticElement)):
+        if isinstance(value, (ProfileParameterSpec, ProfileSemanticElement, ProfileNumericPolicy)):
             return {field.name: serialize(getattr(value, field.name)) for field in fields(value)}
         return value
 
@@ -285,10 +314,25 @@ _PASSIVE_FUNDING_CARRY_DEFINITION = StrategyExecutableProfile(
     ),
     decision_schedule_id="final_funding_record_max_available_finalized.v1",
     state_rule_id="exit_precedes_reentry_same_instant.v1",
+    numeric_policy=ProfileNumericPolicy(
+        numeric_policy_id="passive_funding_carry_numeric_policy.v1",
+        decimal_grammar_id=_DECIMAL_GRAMMAR_ID,
+        decimal_scale=18,
+        max_decimal_text_length=60,
+        integer_grammar_id=_INTEGER_GRAMMAR_ID,
+        max_positive_integer=9223372036854775807,
+        mean_arithmetic_id=_MEAN_ARITHMETIC_ID,
+        mean_rounding_id=_MEAN_ROUNDING_ID,
+        mean_output_scale=18,
+        mean_render_id=_MEAN_RENDER_ID,
+    ),
     profile_semantics_digest="",
 )
 
 _REGISTRY: dict[str, StrategyExecutableProfile] = {PASSIVE_FUNDING_CARRY_V1: _sealed(_PASSIVE_FUNDING_CARRY_DEFINITION)}
+
+
+# --- registry authority and numeric policy --------------------------------------------------------------------------
 
 
 def strategy_executable_profile_ids() -> tuple[str, ...]:
@@ -305,20 +349,129 @@ def get_strategy_executable_profile(profile_id: object) -> StrategyExecutablePro
     return _REGISTRY[profile_id]
 
 
+def _authoritative_profile(profile: object) -> StrategyExecutableProfile:
+    """The registered profile object itself; any other object, including an equal-comparing copy, is refused."""
+
+    if type(profile) is not StrategyExecutableProfile:
+        raise _fail("profile_unregistered")
+    profile_id = getattr(profile, "profile_id", None)
+    registered = _REGISTRY.get(profile_id) if type(profile_id) is str else None
+    if registered is None or profile is not registered:
+        raise _fail("profile_unregistered")
+    return registered
+
+
+def _supported_numeric_policy(policy: object) -> ProfileNumericPolicy:
+    if type(policy) is not ProfileNumericPolicy:
+        raise _fail("numeric_policy_unsupported")
+    identities = (
+        policy.decimal_grammar_id,
+        policy.integer_grammar_id,
+        policy.mean_arithmetic_id,
+        policy.mean_rounding_id,
+        policy.mean_render_id,
+    )
+    if identities != (
+        _DECIMAL_GRAMMAR_ID,
+        _INTEGER_GRAMMAR_ID,
+        _MEAN_ARITHMETIC_ID,
+        _MEAN_ROUNDING_ID,
+        _MEAN_RENDER_ID,
+    ):
+        raise _fail("numeric_policy_unsupported")
+    for value in (
+        policy.decimal_scale,
+        policy.max_decimal_text_length,
+        policy.max_positive_integer,
+        policy.mean_output_scale,
+    ):
+        if type(value) is not int or value < 1 or value.bit_length() > _INT64_BIT_LENGTH:
+            raise _fail("numeric_policy_unsupported")
+    return policy
+
+
+def _ascii_digits(text: str) -> bool:
+    return text != "" and all("0" <= char <= "9" for char in text)
+
+
+def _is_policy_decimal(policy: ProfileNumericPolicy, value: object) -> bool:
+    """Canonical fixed-scale ASCII decimal within the policy's representation-safety length."""
+
+    if type(value) is not str or len(value) > policy.max_decimal_text_length or not value.isascii():
+        return False
+    negative = value.startswith("-")
+    integer, dot, fraction = (value[1:] if negative else value).partition(".")
+    if dot != "." or len(fraction) != policy.decimal_scale:
+        return False
+    if not _ascii_digits(integer) or not _ascii_digits(fraction):
+        return False
+    if integer != "0" and integer.startswith("0"):
+        return False
+    if negative and integer == "0" and fraction.strip("0") == "":
+        return False
+    return True
+
+
+def _policy_positive_integer(policy: ProfileNumericPolicy, value: object) -> int | None:
+    """Parse a canonical positive integer; bounded lexically against the policy maximum before any conversion."""
+
+    limit = str(policy.max_positive_integer)
+    if type(value) is not str or len(value) > len(limit) or not _ascii_digits(value) or value.startswith("0"):
+        return None
+    if len(value) == len(limit) and value > limit:
+        return None
+    return int(value)
+
+
+def _render_half_even(value: Fraction, scale: int) -> str:
+    """Exact ``ROUND_HALF_EVEN`` rendering at ``scale`` places using integer arithmetic only; never negative zero."""
+
+    magnitude = abs(value)
+    quotient, remainder = divmod(magnitude.numerator * 10**scale, magnitude.denominator)
+    twice_remainder = 2 * remainder
+    if twice_remainder > magnitude.denominator or (twice_remainder == magnitude.denominator and quotient % 2 == 1):
+        quotient += 1
+    digits = str(quotient).rjust(scale + 1, "0")
+    rendered = f"{digits[:-scale]}.{digits[-scale:]}"
+    if value < 0 and quotient != 0:
+        return f"-{rendered}"
+    return rendered
+
+
+def _parameter_value_is_valid(policy: ProfileNumericPolicy, kind: object, value: object) -> bool:
+    if type(kind) is not ProfileParameterKind:
+        raise _fail("parameter_kind_invalid")
+    if kind is ProfileParameterKind.POSITIVE_INTEGER:
+        return _policy_positive_integer(policy, value) is not None
+    if not _is_policy_decimal(policy, value):
+        return False
+    if kind is ProfileParameterKind.POSITIVE_DECIMAL:
+        return Fraction(value) > 0  # type: ignore[arg-type]
+    if kind is ProfileParameterKind.NONNEGATIVE_DECIMAL:
+        return Fraction(value) >= 0  # type: ignore[arg-type]
+    raise _fail("parameter_kind_invalid")
+
+
+def strategy_executable_profile_accepts_decimal(profile: StrategyExecutableProfile, value: object) -> bool:
+    """Whether ``value`` is a canonical decimal under the registered profile's numeric policy."""
+
+    registered = _authoritative_profile(profile)
+    return _is_policy_decimal(_supported_numeric_policy(registered.numeric_policy), value)
+
+
 def canonical_profile_parameter_assignment(
     profile: StrategyExecutableProfile, assignment: object
 ) -> tuple[ProfileParameterAssignment, ...]:
-    """Validate an assignment against the profile schema and constraints; returns it ordered by parameter id."""
+    """Validate an assignment against the REGISTERED profile's schema, constraints and numeric policy.
 
-    if (
-        type(profile) is not StrategyExecutableProfile
-        or type(profile.profile_id) is not str
-        or _REGISTRY.get(profile.profile_id) != profile
-    ):
-        raise _fail("profile_unregistered")
+    Returns the assignment ordered by parameter id; raises ``StrategyExecutableProfileError`` otherwise.
+    """
+
+    registered = _authoritative_profile(profile)
+    policy = _supported_numeric_policy(registered.numeric_policy)
     if type(assignment) not in (tuple, list):
         raise _fail("parameter_assignment_malformed")
-    schema = {spec.parameter_id: spec for spec in profile.parameter_schema}
+    schema = {spec.parameter_id: spec for spec in registered.parameter_schema}
     canonical: dict[str, ProfileParameterAssignment] = {}
     for item in assignment:  # type: ignore[union-attr]
         if type(item) is not ProfileParameterAssignment or type(item.parameter_id) is not str:
@@ -328,22 +481,15 @@ def canonical_profile_parameter_assignment(
             raise _fail(f"parameter_unknown:{item.parameter_id}")
         if item.parameter_id in canonical:
             raise _fail(f"parameter_duplicate:{item.parameter_id}")
-        value = item.value
-        if spec.kind is ProfileParameterKind.POSITIVE_INTEGER:
-            valid = type(value) is str and _CANONICAL_POSITIVE_INTEGER.fullmatch(value) is not None
-        elif spec.kind is ProfileParameterKind.POSITIVE_DECIMAL:
-            valid = _is_canonical_decimal(value) and Decimal(value) > 0
-        else:
-            valid = _is_canonical_decimal(value) and Decimal(value) >= 0
-        if not valid:
+        if not _parameter_value_is_valid(policy, spec.kind, item.value):
             raise _fail(f"parameter_value_invalid:{item.parameter_id}")
-        canonical[item.parameter_id] = ProfileParameterAssignment(parameter_id=item.parameter_id, value=value)
+        canonical[item.parameter_id] = ProfileParameterAssignment(parameter_id=item.parameter_id, value=item.value)
     missing = sorted(set(schema) - set(canonical))
     if missing:
         raise _fail(f"parameter_missing:{missing[0]}")
-    if "exit_threshold_lte_entry_threshold" in profile.parameter_constraints and Decimal(
+    if "exit_threshold_lte_entry_threshold" in registered.parameter_constraints and Fraction(
         canonical["exit_threshold"].value
-    ) > Decimal(canonical["entry_threshold"].value):
+    ) > Fraction(canonical["entry_threshold"].value):
         raise _fail("parameter_constraint_violated:exit_threshold_lte_entry_threshold")
     return tuple(canonical[key] for key in sorted(canonical))
 
@@ -356,26 +502,22 @@ def profile_parameter_assignment_digest(assignment: Sequence[ProfileParameterAss
     )
 
 
-def _render_mean(mean: Fraction) -> str:
-    with localcontext() as context:
-        context.prec = _MEAN_PRECISION
-        context.rounding = ROUND_HALF_EVEN
-        rendered = format(
-            (Decimal(mean.numerator) / Decimal(mean.denominator)).quantize(_MEAN_QUANTUM, rounding=ROUND_HALF_EVEN),
-            "f",
-        )
-    return _ZERO if rendered == _NEGATIVE_ZERO else rendered
+# --- passive_funding_carry.v1 -------------------------------------------------------------------------------------------
 
 
 def _decide_passive_funding_carry_v1(
+    policy: ProfileNumericPolicy,
     final_funding_rates: Sequence[str],
     parameters: Mapping[str, str],
     prior_direction: ProfileDirection,
 ) -> ProfileDecision:
-    lookback = int(parameters["final_funding_lookback_count"])
+    lookback = _policy_positive_integer(policy, parameters["final_funding_lookback_count"])
+    if lookback is None:
+        raise _fail("parameter_value_invalid:final_funding_lookback_count")
     entry = Fraction(parameters["entry_threshold"])
     exit_threshold = Fraction(parameters["exit_threshold"])
     unit_size = parameters["unit_size"]
+    zero_units = _render_half_even(Fraction(0), policy.decimal_scale)
     if len(final_funding_rates) < lookback:
         return ProfileDecision(
             action=ProfileAction.NO_ACTION,
@@ -388,7 +530,7 @@ def _decide_passive_funding_carry_v1(
         )
     window = final_funding_rates[-lookback:]
     mean = sum((Fraction(rate) for rate in window), Fraction(0)) / lookback
-    rendered = _render_mean(mean)
+    rendered = _render_half_even(mean, policy.mean_output_scale)
     if prior_direction is ProfileDirection.FLAT:
         if mean > entry:
             action, resulting, units, reason = (
@@ -411,12 +553,17 @@ def _decide_passive_funding_carry_v1(
             prior_direction is ProfileDirection.LONG and mean > 0
         )
         if sign_flip:
-            action, resulting, units, reason = ProfileAction.EXIT, ProfileDirection.FLAT, _ZERO, "exit_on_sign_flip"
+            action, resulting, units, reason = (
+                ProfileAction.EXIT,
+                ProfileDirection.FLAT,
+                zero_units,
+                "exit_on_sign_flip",
+            )
         elif abs(mean) < exit_threshold:
             action, resulting, units, reason = (
                 ProfileAction.EXIT,
                 ProfileDirection.FLAT,
-                _ZERO,
+                zero_units,
                 "exit_below_exit_threshold",
             )
         else:
@@ -442,18 +589,29 @@ def evaluate_strategy_executable_profile(
     parameter_assignment: Sequence[ProfileParameterAssignment],
     prior_direction: ProfileDirection,
 ) -> ProfileDecision:
-    """Run the registered implementation of ``profile`` over visible final funding rates (oldest first)."""
+    """Run the registered implementation of the registered ``profile`` over visible final funding rates (oldest first).
 
-    assignment = canonical_profile_parameter_assignment(profile, parameter_assignment)
+    Schema, constraints and numeric policy are read from the registered profile only. Raises
+    ``StrategyExecutableProfileError`` for any unregistered profile, unsupported numeric policy or malformed input.
+    """
+
+    registered = _authoritative_profile(profile)
+    policy = _supported_numeric_policy(registered.numeric_policy)
+    assignment = canonical_profile_parameter_assignment(registered, parameter_assignment)
     if type(prior_direction) is not ProfileDirection:
         raise _fail("prior_direction_invalid")
     if type(final_funding_rates) not in (tuple, list) or not all(
-        _is_canonical_decimal(rate) for rate in final_funding_rates
+        _is_policy_decimal(policy, rate) for rate in final_funding_rates
     ):
         raise _fail("final_funding_rates_malformed")
-    implementation = _IMPLEMENTATIONS[profile.profile_id]
+    implementation = _IMPLEMENTATIONS.get(registered.profile_id)
+    if implementation is None:
+        raise _fail("profile_unregistered")
     return implementation(
-        tuple(final_funding_rates), {item.parameter_id: item.value for item in assignment}, prior_direction
+        policy,
+        tuple(final_funding_rates),
+        {item.parameter_id: item.value for item in assignment},
+        prior_direction,
     )
 
 
@@ -462,6 +620,7 @@ __all__ = [
     "ProfileAction",
     "ProfileDecision",
     "ProfileDirection",
+    "ProfileNumericPolicy",
     "ProfileParameterAssignment",
     "ProfileParameterKind",
     "ProfileParameterSpec",
@@ -473,6 +632,7 @@ __all__ = [
     "evaluate_strategy_executable_profile",
     "get_strategy_executable_profile",
     "profile_parameter_assignment_digest",
+    "strategy_executable_profile_accepts_decimal",
     "strategy_executable_profile_ids",
     "strategy_executable_profile_semantics_digest",
     "strategy_executable_profile_to_dict",

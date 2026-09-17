@@ -824,6 +824,7 @@ FORBIDDEN_MODULES = (
     "importlib",
     "pkgutil",
     "pickle",
+    "decimal",
 )
 FORBIDDEN_CALLS = frozenset(
     {
@@ -840,6 +841,9 @@ FORBIDDEN_CALLS = frozenset(
         "print",
         "import_module",
         "entry_points",
+        "localcontext",
+        "getcontext",
+        "setcontext",
     }
 )
 FORBIDDEN_BUILTINS = frozenset({"eval", "exec", "compile", "__import__", "globals", "locals", "setattr"})
@@ -851,6 +855,7 @@ FORBIDDEN_IDENTIFIERS = (
     "realized_pnl",
     "place_order",
     "submit_order",
+    "int_max_str_digits",
 )
 
 
@@ -918,3 +923,118 @@ def test_single_assembly_path_serves_builder_and_verifier() -> None:
         "build_historical_pit_dataset",
         "_reassemble_dataset",
     )
+
+
+# --- F1/F2: representation safety ---------------------------------------------------------------------------------------
+
+INT64_MAX = 9223372036854775807
+MAX_POSITIVE_SCALE18 = "9" * 41 + "." + "9" * 18
+MAX_NEGATIVE_SCALE18 = "-" + "9" * 40 + "." + "9" * 18
+OVER_POSITIVE_SCALE18 = "1" * 42 + "." + "0" * 18
+EIGHTY_DIGIT_SCALE18 = "1" * 80 + "." + "0" * 18
+
+
+def test_scale18_values_are_bounded_to_sixty_characters() -> None:
+    for value in (MAX_POSITIVE_SCALE18, MAX_NEGATIVE_SCALE18):
+        assert len(value) == 60
+        assert is_canonical_pit_decimal(value) is True
+        assert funding(0, 1_000, value).values[0].value == value
+    for value in (OVER_POSITIVE_SCALE18, "-" + "1" * 41 + "." + "0" * 18, EIGHTY_DIGIT_SCALE18):
+        assert is_canonical_pit_decimal(value) is False
+        with pytest.raises(HistoricalPitDatasetError, match="record_value_noncanonical"):
+            funding(0, 1_000, value)
+
+
+def _huge(kind: str) -> int:
+    return {"int64_plus_one": INT64_MAX + 1, "ten_pow_5000": 10**5000, "two_pow_128": 2**128}[kind]
+
+
+@pytest.mark.parametrize("magnitude", ["int64_plus_one", "ten_pow_5000", "two_pow_128"])
+@pytest.mark.parametrize("field_name", ["sequence_id", "event_time_ns", "available_at_ns", "finalized_at_ns"])
+def test_native_integer_fields_are_bounded_before_serialization(field_name: str, magnitude: str) -> None:
+    arguments: dict[str, object] = {
+        "series_id": SERIES,
+        "data_requirement_key": "funding_rate",
+        "instrument": BTC,
+        "sequence_id": 0,
+        "event_time_ns": 1_000,
+        "available_at_ns": 1_010,
+        "finalized_at_ns": 1_020,
+        "revision_vintage_id": None,
+        "values": (HistoricalPitValue("funding_rate", RATES[0]),),
+    }
+    arguments[field_name] = _huge(magnitude)
+    with pytest.raises(HistoricalPitDatasetError, match=f"record_{field_name}_invalid"):
+        build_historical_pit_record(**arguments)  # type: ignore[arg-type]
+
+
+def test_int64_maximum_native_integers_are_representable_end_to_end() -> None:
+    manifest, registry = _base()
+    record = build_historical_pit_record(
+        series_id=SERIES,
+        data_requirement_key="funding_rate",
+        instrument=BTC,
+        sequence_id=INT64_MAX,
+        event_time_ns=INT64_MAX,
+        available_at_ns=INT64_MAX,
+        finalized_at_ns=INT64_MAX,
+        revision_vintage_id=None,
+        values=(HistoricalPitValue("funding_rate", MAX_NEGATIVE_SCALE18),),
+    )
+    dataset = pit_dataset(manifest, registry, pit_records=(record,))
+    _assert_receipt_invariants(dataset)
+    assert dataset.advances is True
+    view = select_visible_pit_records(dataset, series_id=SERIES, instrument=BTC, decision_time_ns=INT64_MAX)
+    assert view.records == (record,)
+
+
+@pytest.mark.parametrize("magnitude", ["int64_plus_one", "ten_pow_5000"])
+def test_view_decision_time_is_bounded(magnitude: str) -> None:
+    manifest, registry = _base()
+    dataset = pit_dataset(manifest, registry)
+    with pytest.raises(HistoricalPitDatasetError, match="view_decision_time_ns_invalid"):
+        select_visible_pit_records(dataset, series_id=SERIES, instrument=BTC, decision_time_ns=_huge(magnitude))
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("records", 0, "sequence_id"), INT64_MAX + 1),
+        (("records", 0, "event_time_ns"), -1),
+        (("records", 0, "finalized_at_ns"), 10**5000),
+        (("coverage_last_event_time_ns",), INT64_MAX + 1),
+        (("records", 0, "values", 0, "value"), EIGHTY_DIGIT_SCALE18),
+        (("records", 0, "values", 0, "value"), "0.0002"),
+        (("records", 0, "values", 0, "value"), "-0.000000000000000000"),
+    ],
+    ids=["seq_over", "event_negative", "finalized_huge", "coverage_over", "value_80_digits", "value_short", "neg_zero"],
+)
+def test_parser_refuses_values_outside_the_representation_domain(path: tuple[object, ...], value: object) -> None:
+    manifest, registry = _base()
+    payload = historical_pit_dataset_to_dict(pit_dataset(manifest, registry))
+    target: object = payload
+    for step in path[:-1]:
+        target = target[step]  # type: ignore[index]
+    target[path[-1]] = value  # type: ignore[index]
+    assert historical_pit_dataset_payload_is_well_formed(payload) is False
+
+
+def test_verifier_is_total_for_oversized_carried_integers_and_values() -> None:
+    manifest, registry = _base()
+    dataset = pit_dataset(manifest, registry)
+    for change in (
+        {"coverage_last_event_time_ns": 10**5000},
+        {"records": (replace(dataset.records[0], sequence_id=10**5000),) + dataset.records[1:]},
+        {
+            "records": (
+                replace(dataset.records[0], values=(HistoricalPitValue("funding_rate", EIGHTY_DIGIT_SCALE18),)),
+            )
+            + dataset.records[1:]
+        },
+    ):
+        copy = replace(dataset)
+        for name, value in change.items():
+            object.__setattr__(copy, name, value)
+        verification = verify_historical_pit_dataset(copy)
+        assert verification.intact is False
+        assert verification.reason_codes

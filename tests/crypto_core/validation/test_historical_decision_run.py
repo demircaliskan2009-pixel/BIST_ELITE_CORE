@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import decimal
 import inspect
 import json
 from dataclasses import fields, replace
@@ -9,6 +10,7 @@ from dataclasses import fields, replace
 import pytest
 
 import crypto_core.validation.historical_decision_run as run_module
+import crypto_core.validation.strategy_executable_profiles as profiles_module
 from crypto_core.validation.edge_artifact_core import (
     EDGE_STRUCTURAL_NON_CLAIM_FLAGS,
     EdgeEvidenceStatus,
@@ -38,6 +40,7 @@ from crypto_core.validation.historical_pit_dataset import (
 from crypto_core.validation.strategy_executable_profiles import (
     PASSIVE_FUNDING_CARRY_V1,
     ProfileParameterAssignment,
+    evaluate_strategy_executable_profile,
     get_strategy_executable_profile,
     profile_parameter_assignment_digest,
 )
@@ -57,6 +60,12 @@ def _world(**chain_kwargs: object):
 
 
 def decision_run(dataset, binding, **overrides) -> HistoricalDecisionRun:
+    """Build a run; unless overridden, with the exact parameter approval for the assignment and binding used."""
+
+    if "parameter_approval" not in overrides:
+        overrides["parameter_approval"] = bind.parameter_approval_for(
+            binding, overrides.get("parameter_assignment", PARAMS)
+        )
     arguments: dict[str, object] = {
         "expected_dataset_digest": dataset.dataset_digest,
         "expected_executable_binding_digest": binding.binding_digest,
@@ -547,6 +556,9 @@ _TOTALITY_OBJECTS: list[object] = [
     _corrupted(evaluation_start_ns=True),
     _corrupted(status="ACCEPTED"),
     _corrupted(pnl_computed=True),
+    _corrupted(parameter_approval="approved"),
+    _corrupted(parameter_approval=None),
+    _corrupted(evaluation_end_ns=10**5000),
 ]
 
 
@@ -600,6 +612,8 @@ def test_every_builder_state_round_trips_through_the_verifier() -> None:
         decision_run(dataset, bind.executable_binding(admission_b)),
         decision_run(dataset, binding, correlation_id="corr-2"),
         decision_run(dataset, binding, evaluation_start_ns=10**11),
+        decision_run(dataset, binding, parameter_approval=None),
+        decision_run(dataset, binding, parameter_assignment=prof.params(n="3"), parameter_approval=None),
     ):
         _assert_receipt_invariants(run)
 
@@ -680,3 +694,286 @@ def test_single_assembly_path_serves_builder_and_verifier() -> None:
 def test_parameter_assignment_entries_are_the_profile_type() -> None:
     run, _, _ = _standard()
     assert all(type(item) is ProfileParameterAssignment for item in run.parameter_assignment)
+
+
+# --- F5: exact parameter governance precedes execution -----------------------------------------------------------------
+
+
+class EvaluationSpy:
+    """Counts profile evaluations performed by the decision-run module, delegating to the real evaluator."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def __call__(self, *args: object, **kwargs: object):
+        self.calls += 1
+        return evaluate_strategy_executable_profile(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def _spy(monkeypatch: pytest.MonkeyPatch) -> EvaluationSpy:
+    spy = EvaluationSpy()
+    monkeypatch.setattr(run_module, "evaluate_strategy_executable_profile", spy)
+    return spy
+
+
+def _assert_governance_blocked(run: HistoricalDecisionRun, codes: set[str], spy: EvaluationSpy) -> None:
+    _assert_receipt_invariants(run)
+    assert (run.status, run.gate_verdict, run.advances) == (
+        EdgeEvidenceStatus.READY,
+        EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL,
+        False,
+    )
+    assert set(run.verdict_reason_codes) == {_code(code) for code in codes}
+    assert (run.decisions, run.decision_count) == ((), 0)
+    assert spy.calls == 0
+
+
+def test_exact_parameter_approval_executes_and_is_carried(monkeypatch: pytest.MonkeyPatch) -> None:
+    spy = _spy(monkeypatch)
+    run, _, binding = _standard()
+    assert run.advances is True
+    assert run.parameter_approval == bind.parameter_approval_for(binding, PARAMS)
+    assert run.decision_count == 6
+    assert spy.calls == 6
+    _assert_receipt_invariants(run)
+    assert spy.calls == 12  # verification re-executes; nothing else evaluates
+
+
+def test_missing_parameter_approval_needs_governance_without_execution(monkeypatch: pytest.MonkeyPatch) -> None:
+    spy = _spy(monkeypatch)
+    run, _, _ = _standard(parameter_approval=None)
+    _assert_governance_blocked(run, {"parameter_approval_missing"}, spy)
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        {"n": "3"},
+        {"entry": "0.000200000000000000"},
+        {"exit_": "0.000010000000000000"},
+        {"unit": "2.000000000000000000"},
+    ],
+    ids=["lookback", "entry_threshold", "exit_threshold", "unit_size"],
+)
+def test_changed_parameter_under_the_original_approval_never_executes(
+    changed: dict[str, str], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, admission, registry = _world()
+    dataset = pit.pit_dataset(manifest, registry)
+    binding = bind.executable_binding(admission)
+    original_approval = bind.parameter_approval_for(binding, PARAMS)
+    spy = _spy(monkeypatch)
+    run = decision_run(
+        dataset, binding, parameter_assignment=prof.params(**changed), parameter_approval=original_approval
+    )
+    _assert_governance_blocked(run, {"parameter_approval_parameter_assignment_digest_mismatch"}, spy)
+    approved = decision_run(dataset, binding, parameter_assignment=prof.params(**changed))
+    assert approved.advances is True
+    assert spy.calls > 0
+
+
+def test_approval_for_spec_a_never_executes_under_spec_b(monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest, admission_a, registry = _world()
+    _, admission_b, _ = _world(spec_changes={"latency_sensitivity": "medium"})
+    dataset = pit.pit_dataset(manifest, registry)
+    approval_a = bind.parameter_approval_for(bind.executable_binding(admission_a), PARAMS)
+    binding_b = bind.executable_binding(admission_b)
+    assert binding_b.advances is True
+    spy = _spy(monkeypatch)
+    run = decision_run(dataset, binding_b, parameter_approval=approval_a)
+    _assert_governance_blocked(
+        run,
+        {
+            "parameter_approval_executable_binding_digest_mismatch",
+            "parameter_approval_strategy_spec_digest_mismatch",
+        },
+        spy,
+    )
+
+
+def test_approval_for_binding_a_never_executes_under_binding_b(monkeypatch: pytest.MonkeyPatch) -> None:
+    manifest, admission, registry = _world()
+    dataset = pit.pit_dataset(manifest, registry)
+    approval_a = bind.parameter_approval_for(bind.executable_binding(admission), PARAMS)
+    binding_b = bind.executable_binding(admission, binding_id="binding-2")
+    spy = _spy(monkeypatch)
+    run = decision_run(dataset, binding_b, parameter_approval=approval_a)
+    _assert_governance_blocked(run, {"parameter_approval_executable_binding_digest_mismatch"}, spy)
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        {"numeric_policy_id": "passive_funding_carry_numeric_policy.v2"},
+        {"max_decimal_text_length": 59},
+        {"max_positive_integer": 2**31 - 1},
+        {"mean_output_scale": 8},
+    ],
+    ids=lambda drift: next(iter(drift)),
+)
+def test_approval_from_old_profile_semantics_never_executes_after_numeric_policy_drift(
+    drift: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    manifest, admission, registry = _world()
+    dataset = pit.pit_dataset(manifest, registry)
+    old_approval = bind.parameter_approval_for(bind.executable_binding(admission), PARAMS)
+    drifted = bind.drifted_registry_profile(**drift)
+    monkeypatch.setitem(profiles_module._REGISTRY, PASSIVE_FUNDING_CARRY_V1, drifted)
+    rebound = bind.executable_binding(admission, expected_profile_semantics_digest=drifted.profile_semantics_digest)
+    assert rebound.advances is True
+    spy = _spy(monkeypatch)
+    run = decision_run(dataset, rebound, parameter_approval=old_approval)
+    assert spy.calls == 0
+    assert {
+        _code("parameter_approval_executable_binding_digest_mismatch"),
+        _code("parameter_approval_profile_semantics_digest_mismatch"),
+    } <= set(run.verdict_reason_codes)
+    assert run.advances is False
+    assert run.decisions == ()
+
+
+def test_copied_or_resealed_run_cannot_substitute_the_parameter_approval() -> None:
+    run, _, binding = _standard()
+    for substitute in (None, bind.parameter_approval_for(binding, prof.params(n="3"))):
+        forged = _reseal(run, parameter_approval=substitute)
+        verification = verify_historical_decision_run(forged)
+        assert verification.intact is False
+        assert {_code("field_mismatch:gate_verdict"), _code("field_mismatch:decisions")} <= set(
+            verification.reason_codes
+        )
+    blocked, _, _ = _standard(parameter_approval=None)
+    promoted = _fully_resealed_trace(
+        _reseal(blocked, parameter_approval=run.parameter_approval, gate_verdict=EdgeGateVerdict.PASS, advances=True),
+        run.decisions,
+    )
+    assert verify_historical_decision_run(promoted).intact is False
+
+
+@pytest.mark.parametrize(
+    "approval",
+    ["approved", {"approval_reference": "x"}, "bad_hex"],
+    ids=["string", "mapping", "bad_hex"],
+)
+def test_malformed_parameter_approval_is_a_construction_error(approval: object) -> None:
+    manifest, admission, registry = _world()
+    dataset = pit.pit_dataset(manifest, registry)
+    binding = bind.executable_binding(admission)
+    if approval == "bad_hex":
+        approval = bind.parameter_approval_for(binding, PARAMS, approved_parameter_assignment_digest="Z" * 64)
+    with pytest.raises(HistoricalDecisionRunError, match="parameter_approval_malformed"):
+        decision_run(dataset, binding, parameter_approval=approval)
+
+
+# --- F1/F2: representation safety at the run boundary -------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "override",
+    [
+        {"entry": prof.OVER_POSITIVE_SCALE18},
+        {"entry": prof.EIGHTY_DIGIT_SCALE18},
+        {"exit_": prof.OVER_POSITIVE_SCALE18},
+        {"unit": prof.EIGHTY_DIGIT_SCALE18},
+        {"n": "1" * 4301},
+        {"n": "9223372036854775808"},
+    ],
+    ids=["entry_61", "entry_80_digits", "exit_61", "unit_80_digits", "lookback_4301_digits", "lookback_int64_plus_one"],
+)
+def test_oversized_parameters_are_run_domain_errors(override: dict[str, str]) -> None:
+    with pytest.raises(HistoricalDecisionRunError, match="parameter_assignment_invalid"):
+        _standard(parameter_assignment=prof.params(**override))
+
+
+def test_boundary_representations_run_end_to_end() -> None:
+    rates = (prof.MAX_POSITIVE_SCALE18,) * 3
+    run, _, _ = _standard(
+        pit.records(rates),
+        parameter_assignment=prof.params(entry=prof.TINY, exit_="0.000000000000000000", unit=prof.MAX_POSITIVE_SCALE18),
+    )
+    assert run.advances is True
+    assert [d.feature_mean for d in run.decisions] == [None, prof.MAX_POSITIVE_SCALE18, prof.MAX_POSITIVE_SCALE18]
+    assert run.decisions[1].target_units == prof.MAX_POSITIVE_SCALE18
+    lookback_max, _, _ = _standard(parameter_assignment=prof.params(n=prof.INT64_MAX_TEXT))
+    assert lookback_max.advances is True
+    assert {d.action for d in lookback_max.decisions} == {"NO_ACTION"}
+    far_end, _, _ = _standard(evaluation_end_ns=9223372036854775807)
+    assert far_end.decision_count == 6
+
+
+def test_forged_dataset_with_an_oversized_value_is_a_domain_error() -> None:
+    manifest, admission, registry = _world()
+    dataset = pit.pit_dataset(manifest, registry)
+    forged_record = replace(dataset.records[0], values=(HistoricalPitValue("funding_rate", prof.EIGHTY_DIGIT_SCALE18),))
+    forged = replace(dataset, records=(forged_record,) + dataset.records[1:])
+    with pytest.raises(HistoricalDecisionRunError, match="dataset_not_serializable"):
+        decision_run(forged, bind.executable_binding(admission), expected_dataset_digest=dataset.dataset_digest)
+
+
+@pytest.mark.parametrize(
+    ("field_name", "magnitude"),
+    [
+        ("evaluation_start_ns", "int64_plus_one"),
+        ("evaluation_end_ns", "int64_plus_one"),
+        ("evaluation_end_ns", "ten_pow_5000"),
+    ],
+    ids=["start_int64_plus_one", "end_int64_plus_one", "end_ten_pow_5000"],
+)
+def test_oversized_evaluation_bounds_are_domain_errors(field_name: str, magnitude: str) -> None:
+    with pytest.raises(HistoricalDecisionRunError, match=f"{field_name}_invalid"):
+        _standard(**{field_name: pit._huge(magnitude)})
+
+
+@pytest.mark.parametrize(
+    ("path", "value"),
+    [
+        (("decisions", 0, "decision_time_ns"), 9223372036854775808),
+        (("decisions", 0, "decision_sequence"), -1),
+        (("evaluation_end_ns",), 9223372036854775808),
+        (("parameter_approval",), {"approval_reference": "governance-parameters-1"}),
+        (("parameter_approval", "approval_digest"), 7),
+    ],
+    ids=["time_over", "sequence_negative", "end_over", "approval_partial", "approval_digest_int"],
+)
+def test_parser_refuses_out_of_domain_integers_and_approvals(path: tuple[object, ...], value: object) -> None:
+    payload = historical_decision_run_to_dict(_standard()[0])
+    target: object = payload
+    for step in path[:-1]:
+        target = target[step]  # type: ignore[index]
+    target[path[-1]] = value  # type: ignore[index]
+    assert historical_decision_run_payload_is_well_formed(payload) is False
+
+
+def test_verifier_is_total_for_oversized_carried_integers() -> None:
+    run, _, _ = _standard()
+    for name, value in (("evaluation_end_ns", 10**5000), ("decision_count", 10**5000), ("evaluation_start_ns", -5)):
+        copy = replace(run)
+        object.__setattr__(copy, name, value)
+        verification = verify_historical_decision_run(copy)
+        assert verification.intact is False
+        assert verification.reason_codes
+
+
+# --- F3: ambient Decimal context independence of the whole run ---------------------------------------------------------
+
+
+def _astra_run() -> HistoricalDecisionRun:
+    tiny = prof.TINY
+    return _standard(
+        pit.records((tiny, tiny, "0.000000000000000002")),
+        parameter_assignment=prof.params(entry=tiny, exit_="0.000000000000000000", n="3"),
+    )[0]
+
+
+@pytest.mark.parametrize("context_name", sorted(prof._AMBIENT_CONTEXTS))
+def test_run_digest_is_independent_of_the_ambient_decimal_context(context_name: str) -> None:
+    baseline = _astra_run()
+    assert baseline.decisions[-1].feature_mean == prof.TINY
+    with decimal.localcontext(prof._AMBIENT_CONTEXTS[context_name]()) as active:
+        before = prof.context_state(active)
+        run = _astra_run()
+        verification = verify_historical_decision_run(run)
+        assert prof.context_state(decimal.getcontext()) == before
+    assert run.run_digest == baseline.run_digest
+    assert run.decision_trace_digest == baseline.decision_trace_digest
+    assert verification.intact is True
+    assert verification.canonical_json == verify_historical_decision_run(baseline).canonical_json

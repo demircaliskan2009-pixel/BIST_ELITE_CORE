@@ -22,7 +22,9 @@ from crypto_core.validation.strategy_executable_binding import (
     StrategyExecutableBindingApproval,
     StrategyExecutableBindingError,
     StrategyExecutableCoverageEntry,
+    StrategyExecutableParameterApproval,
     build_strategy_executable_binding,
+    canonical_strategy_executable_parameter_approval,
     strategy_executable_binding_digest,
     strategy_executable_binding_from_payload,
     strategy_executable_binding_payload_is_well_formed,
@@ -32,10 +34,15 @@ from crypto_core.validation.strategy_executable_binding import (
 )
 from crypto_core.validation.strategy_executable_profiles import (
     PASSIVE_FUNDING_CARRY_V1,
+    ProfileNumericPolicy,
+    StrategyExecutableProfileError,
+    canonical_profile_parameter_assignment,
     get_strategy_executable_profile,
+    profile_parameter_assignment_digest,
     strategy_executable_profile_semantics_digest,
 )
 from tests.crypto_core.validation import test_historical_pit_dataset as support
+from tests.crypto_core.validation import test_strategy_executable_profiles as prof
 
 _PREFIX = "strategy_executable_binding"
 
@@ -100,6 +107,35 @@ def executable_binding(admission, coverage=COVERAGE, *, approve: bool = True, **
     }
     arguments.update(overrides)
     return build_strategy_executable_binding(admission, **arguments)  # type: ignore[arg-type]
+
+
+def parameter_approval_for(binding, assignment=None, **overrides: str) -> StrategyExecutableParameterApproval:
+    """Synthetic exact parameter approval for ``assignment`` (default H1 test parameters) under ``binding``."""
+
+    profile = get_strategy_executable_profile(PASSIVE_FUNDING_CARRY_V1)
+    try:
+        canonical = canonical_profile_parameter_assignment(profile, prof.params() if assignment is None else assignment)
+        assignment_digest = profile_parameter_assignment_digest(canonical)
+    except StrategyExecutableProfileError:
+        assignment_digest = "0" * 64
+    arguments = {
+        "approval_reference": "governance-parameters-1",
+        "approval_digest": "f" * 64,
+        "approved_executable_binding_digest": binding.binding_digest,
+        "approved_strategy_spec_digest": binding.strategy_spec_digest or "0" * 64,
+        "approved_profile_semantics_digest": profile.profile_semantics_digest,
+        "approved_parameter_assignment_digest": assignment_digest,
+    }
+    arguments.update(overrides)
+    return StrategyExecutableParameterApproval(**arguments)
+
+
+def drifted_registry_profile(**policy_changes: object):
+    """The registered profile with a changed numeric policy, resealed from its own constants."""
+
+    profile = get_strategy_executable_profile(PASSIVE_FUNDING_CARRY_V1)
+    changed = replace(profile, numeric_policy=replace(profile.numeric_policy, **policy_changes))
+    return replace(changed, profile_semantics_digest=strategy_executable_profile_semantics_digest(changed))
 
 
 def _admission(**chain_kwargs: object):
@@ -526,3 +562,96 @@ def test_single_assembly_path_serves_builder_and_verifier() -> None:
         "build_strategy_executable_binding",
         "_reassemble_binding",
     )
+
+
+# --- F4: numeric policy drift invalidates bindings and mapping approvals -------------------------------------------
+
+
+def test_numeric_policy_is_a_first_class_committed_profile_field() -> None:
+    profile = get_strategy_executable_profile(PASSIVE_FUNDING_CARRY_V1)
+    assert type(profile.numeric_policy) is ProfileNumericPolicy
+    assert strategy_executable_profile_semantics_digest(profile) == profile.profile_semantics_digest
+    assert drifted_registry_profile().profile_semantics_digest == profile.profile_semantics_digest
+
+
+@pytest.mark.parametrize("drift", prof.POLICY_DRIFTS, ids=lambda drift: next(iter(drift)))
+def test_numeric_policy_drift_invalidates_binding_and_old_mapping_approval(
+    drift: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    admission = _admission()
+    original_profile = get_strategy_executable_profile(PASSIVE_FUNDING_CARRY_V1)
+    original = executable_binding(admission)
+    old_approval = approval_for(admission)
+    drifted = drifted_registry_profile(**drift)
+    assert drifted.profile_semantics_digest != original_profile.profile_semantics_digest
+    monkeypatch.setitem(profiles_module._REGISTRY, PASSIVE_FUNDING_CARRY_V1, drifted)
+    assert verify_strategy_executable_binding(original).intact is False
+    stale_expectation = executable_binding(
+        admission, expected_profile_semantics_digest=original_profile.profile_semantics_digest, approval=old_approval
+    )
+    assert stale_expectation.integrity_reason_codes == (_code("profile_semantics_digest_mismatch"),)
+    stale_approval = executable_binding(
+        admission, expected_profile_semantics_digest=drifted.profile_semantics_digest, approval=old_approval
+    )
+    _assert_receipt_invariants(stale_approval)
+    assert stale_approval.advances is False
+    assert stale_approval.verdict_reason_codes == (_code("approval_profile_semantics_digest_mismatch"),)
+
+
+# --- F5: parameter approval structure --------------------------------------------------------------------------------
+
+
+def test_parameter_approval_is_a_separate_structural_authority() -> None:
+    binding = executable_binding(_admission())
+    approval = parameter_approval_for(binding)
+    assert canonical_strategy_executable_parameter_approval(None) is None
+    assert canonical_strategy_executable_parameter_approval(approval) == approval
+    assert {field.name for field in fields(StrategyExecutableParameterApproval)} == {
+        "approval_reference",
+        "approval_digest",
+        "approved_executable_binding_digest",
+        "approved_strategy_spec_digest",
+        "approved_profile_semantics_digest",
+        "approved_parameter_assignment_digest",
+    }
+    assert not {field.name for field in fields(StrategyExecutableBindingApproval)} & {
+        "approved_parameter_assignment_digest",
+        "approved_executable_binding_digest",
+    }
+    assert "parameter_approval" not in inspect.signature(build_strategy_executable_binding).parameters
+
+
+@pytest.mark.parametrize(
+    "candidate",
+    [
+        "approved",
+        {"approval_reference": "governance-parameters-1"},
+        StrategyExecutableBindingApproval("governance-binding-1", "e" * 64, "a" * 64, "b" * 64, "c" * 64),
+    ],
+)
+def test_non_parameter_approval_objects_raise(candidate: object) -> None:
+    with pytest.raises(StrategyExecutableBindingError, match="parameter_approval_malformed"):
+        canonical_strategy_executable_parameter_approval(candidate)
+
+
+def test_hollow_parameter_approval_raises_a_domain_error() -> None:
+    with pytest.raises(StrategyExecutableBindingError, match="parameter_approval_reference_invalid"):
+        canonical_strategy_executable_parameter_approval(object.__new__(StrategyExecutableParameterApproval))
+
+
+@pytest.mark.parametrize(
+    ("change", "code"),
+    [
+        ({"approval_reference": ""}, "parameter_approval_reference_invalid"),
+        ({"approval_reference": "approval scheduler"}, "parameter_approval_reference"),
+        ({"approval_digest": "E" * 64}, "parameter_approval_digest_invalid"),
+        ({"approved_executable_binding_digest": "x"}, "approved_executable_binding_digest_invalid"),
+        ({"approved_strategy_spec_digest": ""}, "parameter_approved_strategy_spec_digest_invalid"),
+        ({"approved_profile_semantics_digest": None}, "parameter_approved_profile_semantics_digest_invalid"),
+        ({"approved_parameter_assignment_digest": "a" * 63}, "approved_parameter_assignment_digest_invalid"),
+    ],
+)
+def test_malformed_parameter_approval_fields_raise(change: dict[str, object], code: str) -> None:
+    candidate = replace(parameter_approval_for(executable_binding(_admission())), **change)
+    with pytest.raises(StrategyExecutableBindingError, match=code):
+        canonical_strategy_executable_parameter_approval(candidate)

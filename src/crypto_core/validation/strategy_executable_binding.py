@@ -17,6 +17,8 @@ Free-text StrategySpec conditions are NOT machine-equivalent to implementation s
 Outcomes: a malformed or integrity-invalid binding (EF-4 re-proof, unknown profile, profile version or semantics digest
 drift) is ``REJECTED``; a coverage gap is ``READY`` + ``FAIL``; a missing or non-matching approval is
 ``NEEDS_GOVERNANCE_APPROVAL``; a complete approved binding over an advancing EF-4 admission is ``READY`` + ``PASS``.
+The mapping approval never approves variant parameter values: ``StrategyExecutableParameterApproval`` is the separate
+exact parameter-governance authority, checked by the historical decision run before any profile execution.
 One assembly path serves the builder and verifier reassembly; ``verify_strategy_executable_binding`` is total.
 Historical evaluation only; proves no edge, profitability or readiness.
 """
@@ -123,6 +125,24 @@ class StrategyExecutableBindingApproval:
     approved_strategy_spec_digest: str
     approved_profile_semantics_digest: str
     approved_coverage_digest: str
+
+
+@dataclass(frozen=True)
+class StrategyExecutableParameterApproval:
+    """Human governance approval of one exact parameter assignment for one exact executable binding.
+
+    Deliberately separate from ``StrategyExecutableBindingApproval`` (the semantic mapping approval). It commits to the
+    executable binding digest, the authenticated StrategySpec digest, the registered profile semantics digest (which
+    includes the numeric policy) and the canonical parameter assignment digest, so a changed variant parameter, spec,
+    binding or profile never executes under a previous approval. It is consumed by the historical decision run.
+    """
+
+    approval_reference: str
+    approval_digest: str
+    approved_executable_binding_digest: str
+    approved_strategy_spec_digest: str
+    approved_profile_semantics_digest: str
+    approved_parameter_assignment_digest: str
 
 
 @dataclass(frozen=True)
@@ -292,6 +312,34 @@ def _canonical_approval(approval: object) -> StrategyExecutableBindingApproval |
             approval.approved_profile_semantics_digest, "approved_profile_semantics_digest"
         ),
         approved_coverage_digest=_require_hex64(approval.approved_coverage_digest, "approved_coverage_digest"),
+    )
+
+
+def canonical_strategy_executable_parameter_approval(approval: object) -> StrategyExecutableParameterApproval | None:
+    """Structurally validate a parameter approval (``None`` stays ``None``); raises on any malformed state.
+
+    Structural only: whether the approval MATCHES a binding, spec, profile and assignment is decided by its consumer.
+    """
+
+    if approval is None:
+        return None
+    if type(approval) is not StrategyExecutableParameterApproval:
+        raise _fail("parameter_approval_malformed")
+    return StrategyExecutableParameterApproval(
+        approval_reference=_require_text(getattr(approval, "approval_reference", None), "parameter_approval_reference"),
+        approval_digest=_require_hex64(getattr(approval, "approval_digest", None), "parameter_approval_digest"),
+        approved_executable_binding_digest=_require_hex64(
+            getattr(approval, "approved_executable_binding_digest", None), "approved_executable_binding_digest"
+        ),
+        approved_strategy_spec_digest=_require_hex64(
+            getattr(approval, "approved_strategy_spec_digest", None), "parameter_approved_strategy_spec_digest"
+        ),
+        approved_profile_semantics_digest=_require_hex64(
+            getattr(approval, "approved_profile_semantics_digest", None), "parameter_approved_profile_semantics_digest"
+        ),
+        approved_parameter_assignment_digest=_require_hex64(
+            getattr(approval, "approved_parameter_assignment_digest", None), "approved_parameter_assignment_digest"
+        ),
     )
 
 
@@ -641,8 +689,10 @@ __all__ = [
     "StrategyExecutableBindingApproval",
     "StrategyExecutableBindingError",
     "StrategyExecutableCoverageEntry",
+    "StrategyExecutableParameterApproval",
     "StrategySpecElementKind",
     "build_strategy_executable_binding",
+    "canonical_strategy_executable_parameter_approval",
     "strategy_executable_binding_digest",
     "strategy_executable_binding_from_payload",
     "strategy_executable_binding_payload_is_well_formed",

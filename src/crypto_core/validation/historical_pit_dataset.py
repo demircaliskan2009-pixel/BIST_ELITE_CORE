@@ -23,7 +23,11 @@ authenticated semantics require final data it must also carry ``finalized_at_ns 
 becomes final. For vintage-revised series only the latest vintage available at ``t`` is visible per logical record.
 
 Numeric values use one ASCII canonical decimal grammar (18 fraction digits, no exponent, no plus sign, no negative
-zero, no Unicode digits). Status is integrity only (READY/REJECTED); the verdict is the outcome; REJECTED implies
+zero, no Unicode digits) with a representation-safety bound of 60 characters; native integer wire fields (sequence ids
+and nanosecond timestamps) are bounded to signed int64 by integer comparison before any serialization. Both bounds are
+representation safety only, never trading or data-quality thresholds, and never depend on interpreter digit-limit
+settings. The strict parser refuses values outside them, so builder, parser and verifier share one domain. Status is
+integrity only (READY/REJECTED); the verdict is the outcome; REJECTED implies
 NOT_EVALUATED and only READY + PASS advances. One assembly path serves the builder and verifier reassembly;
 ``verify_historical_pit_dataset`` is total. Deterministic, historical-evaluation only: no IO, clock, randomness,
 network, environment, orders, fills, PnL or metrics.
@@ -70,6 +74,8 @@ _SELF_DIGEST_FIELD = "dataset_digest"
 _RECORD_DIGEST_FIELD = "record_digest"
 _CANONICAL_DECIMAL = re.compile(r"-?(?:0|[1-9][0-9]*)\.[0-9]{18}")
 _NEGATIVE_ZERO = "-0.000000000000000000"
+_MAX_SCALE18_TEXT_LENGTH = 60
+_MAX_WIRE_INT = 9223372036854775807
 _VINTAGE_REVISION = "revised_with_point_in_time_vintages"
 _INSTRUMENT_EXTRA_CHARS = frozenset("-_./:")
 _DATA_REQUIREMENT_KEY_VALUES = frozenset(key.value for key in DataRequirementKey)
@@ -214,9 +220,14 @@ def _sorted_unique(reasons: Sequence[str]) -> tuple[str, ...]:
 
 
 def is_canonical_pit_decimal(value: object) -> bool:
-    """ASCII canonical decimal: optional minus, no leading zeros, exactly 18 fraction digits, no negative zero."""
+    """ASCII canonical decimal: optional minus, no leading zeros, exactly 18 fraction digits, no negative zero, <= 60."""
 
-    return type(value) is str and _CANONICAL_DECIMAL.fullmatch(value) is not None and value != _NEGATIVE_ZERO
+    return (
+        type(value) is str
+        and len(value) <= _MAX_SCALE18_TEXT_LENGTH
+        and _CANONICAL_DECIMAL.fullmatch(value) is not None
+        and value != _NEGATIVE_ZERO
+    )
 
 
 def _require_text(value: object, field_name: str) -> str:
@@ -250,13 +261,13 @@ def _require_instrument(value: object) -> str:
 
 
 def _require_positive_int(value: object, field_name: str) -> int:
-    if type(value) is not int or value <= 0:
+    if type(value) is not int or value <= 0 or value > _MAX_WIRE_INT:
         raise _fail(f"{field_name}_invalid")
     return value
 
 
 def _require_nonnegative_int(value: object, field_name: str) -> int:
-    if type(value) is not int or value < 0:
+    if type(value) is not int or value < 0 or value > _MAX_WIRE_INT:
         raise _fail(f"{field_name}_invalid")
     return value
 
@@ -650,9 +661,15 @@ def _as_bool(value: object) -> bool:
 
 
 def _as_int(value: object) -> int:
-    if type(value) is not int:
+    if type(value) is not int or value < 0 or value > _MAX_WIRE_INT:
         raise _fail("payload_field_malformed")
     return value
+
+
+def _as_canonical_decimal(value: object) -> str:
+    if not is_canonical_pit_decimal(value):
+        raise _fail("payload_field_malformed")
+    return value  # type: ignore[return-value]
 
 
 def _as_optional_int(value: object) -> int | None:
@@ -707,7 +724,7 @@ _RECORD_CONVERTERS: dict[str, Callable[[object], object]] = {
     "available_at_ns": _as_int,
     "finalized_at_ns": _as_optional_int,
     "revision_vintage_id": _as_optional_str,
-    "values": _as_records(HistoricalPitValue, {}),
+    "values": _as_records(HistoricalPitValue, {"value": _as_canonical_decimal}),
 }
 _DATASET_CONVERTERS: dict[str, Callable[[object], object]] = {
     "status": _as_enum(EdgeEvidenceStatus),
@@ -791,7 +808,7 @@ def select_visible_pit_records(
     then sequence. Raises ``HistoricalPitDatasetError`` for an unknown series or a non-positive decision time.
     """
 
-    if type(decision_time_ns) is not int or decision_time_ns <= 0:
+    if type(decision_time_ns) is not int or decision_time_ns <= 0 or decision_time_ns > _MAX_WIRE_INT:
         raise _fail("view_decision_time_ns_invalid")
     semantics = {item.series_id: item for item in dataset.series_semantics}
     series = semantics.get(series_id)

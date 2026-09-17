@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import decimal
 import inspect
 from dataclasses import replace
 
@@ -20,6 +21,7 @@ from crypto_core.validation.strategy_executable_profiles import (
     evaluate_strategy_executable_profile,
     get_strategy_executable_profile,
     profile_parameter_assignment_digest,
+    strategy_executable_profile_accepts_decimal,
     strategy_executable_profile_ids,
     strategy_executable_profile_semantics_digest,
     strategy_executable_profile_to_dict,
@@ -336,3 +338,318 @@ def test_evaluation_is_deterministic() -> None:
 
 def test_module_is_pure_and_has_no_dynamic_execution_surface() -> None:
     support.assert_module_is_pure(profiles_module, {"crypto_core.validation.edge_artifact_core"})
+
+
+# --- F1: scale-18 representation safety ---------------------------------------------------------------------------------
+
+TINY = "0.000000000000000001"
+MAX_POSITIVE_SCALE18 = "9" * 41 + "." + "9" * 18
+MAX_NEGATIVE_SCALE18 = "-" + "9" * 40 + "." + "9" * 18
+OVER_POSITIVE_SCALE18 = "1" * 42 + "." + "0" * 18
+OVER_NEGATIVE_SCALE18 = "-" + "1" * 41 + "." + "0" * 18
+EIGHTY_DIGIT_SCALE18 = "1" * 80 + "." + "0" * 18
+
+
+def test_scale18_representation_boundary_is_exactly_sixty_characters() -> None:
+    assert (len(MAX_POSITIVE_SCALE18), len(MAX_NEGATIVE_SCALE18)) == (60, 60)
+    assert (len(OVER_POSITIVE_SCALE18), len(OVER_NEGATIVE_SCALE18)) == (61, 61)
+    profile = _profile()
+    for value in (MAX_POSITIVE_SCALE18, MAX_NEGATIVE_SCALE18, TINY):
+        assert strategy_executable_profile_accepts_decimal(profile, value) is True
+    for value in (OVER_POSITIVE_SCALE18, OVER_NEGATIVE_SCALE18, EIGHTY_DIGIT_SCALE18, "１.000000000000000000"):
+        assert strategy_executable_profile_accepts_decimal(profile, value) is False
+
+
+def test_every_accepted_boundary_value_is_safely_consumable() -> None:
+    maximum = _decide((MAX_POSITIVE_SCALE18,) * 2, entry=TINY, exit_=_ZERO, unit=MAX_POSITIVE_SCALE18)
+    assert (maximum.action, maximum.feature_mean, maximum.target_units) == (
+        ProfileAction.SHORT,
+        MAX_POSITIVE_SCALE18,
+        MAX_POSITIVE_SCALE18,
+    )
+    minimum = _decide((MAX_NEGATIVE_SCALE18,) * 2, entry=TINY, exit_=_ZERO)
+    assert (minimum.action, minimum.feature_mean) == (ProfileAction.LONG, MAX_NEGATIVE_SCALE18)
+    mixed = _decide((MAX_POSITIVE_SCALE18, MAX_NEGATIVE_SCALE18), ProfileDirection.SHORT, entry=TINY, exit_=TINY)
+    assert mixed.feature_mean == "45" + "0" * 39 + "." + "0" * 18
+    assert mixed.action is ProfileAction.HOLD
+    thresholds = _decide((MAX_NEGATIVE_SCALE18,) * 2, entry=MAX_POSITIVE_SCALE18, exit_=MAX_POSITIVE_SCALE18)
+    assert thresholds.action is ProfileAction.NO_ACTION
+
+
+@pytest.mark.parametrize("rate", [EIGHTY_DIGIT_SCALE18, OVER_POSITIVE_SCALE18, OVER_NEGATIVE_SCALE18])
+def test_oversized_funding_rates_are_domain_errors(rate: str) -> None:
+    with pytest.raises(StrategyExecutableProfileError, match="final_funding_rates_malformed"):
+        _decide((rate,), n="1")
+
+
+@pytest.mark.parametrize("oversized", [OVER_POSITIVE_SCALE18, EIGHTY_DIGIT_SCALE18])
+@pytest.mark.parametrize(
+    ("override", "parameter"),
+    [
+        ("entry", "entry_threshold"),
+        ("exit_", "exit_threshold"),
+        ("unit", "unit_size"),
+    ],
+)
+def test_oversized_decimal_parameters_are_domain_errors(oversized: str, override: str, parameter: str) -> None:
+    assignment = params(**{override: oversized})
+    with pytest.raises(StrategyExecutableProfileError, match=f"parameter_value_invalid:{parameter}"):
+        canonical_profile_parameter_assignment(_profile(), assignment)
+    with pytest.raises(StrategyExecutableProfileError, match=f"parameter_value_invalid:{parameter}"):
+        evaluate_strategy_executable_profile(
+            _profile(),
+            final_funding_rates=("0.000200000000000000",) * 2,
+            parameter_assignment=assignment,
+            prior_direction=ProfileDirection.FLAT,
+        )
+
+
+# --- F2: integer representation safety ----------------------------------------------------------------------------------
+
+INT64_MAX_TEXT = "9223372036854775807"
+
+
+@pytest.mark.parametrize(
+    "lookback",
+    ["1" * 4301, "9223372036854775808", "10000000000000000000", "9" * 20, "99999999999999999999999999"],
+    ids=["4301_digits", "int64_max_plus_one", "twenty_digits_low", "twenty_nines", "twenty_six_digits"],
+)
+def test_oversized_lookback_is_a_domain_error_without_interpreter_limits(lookback: str) -> None:
+    with pytest.raises(StrategyExecutableProfileError, match="parameter_value_invalid:final_funding_lookback_count"):
+        canonical_profile_parameter_assignment(_profile(), params(n=lookback))
+    with pytest.raises(StrategyExecutableProfileError, match="parameter_value_invalid:final_funding_lookback_count"):
+        _decide(("0.000200000000000000",) * 3, n=lookback)
+
+
+def test_int64_max_lookback_is_representation_valid_and_never_invents_a_signal() -> None:
+    assert canonical_profile_parameter_assignment(_profile(), params(n=INT64_MAX_TEXT))
+    decision = _decide(("0.000200000000000000",) * 3, ProfileDirection.SHORT, n=INT64_MAX_TEXT)
+    assert (decision.action, decision.resulting_direction, decision.feature_mean, decision.used_observation_count) == (
+        ProfileAction.NO_ACTION,
+        ProfileDirection.SHORT,
+        None,
+        3,
+    )
+
+
+# --- F3: ambient Decimal context independence ---------------------------------------------------------------------------
+
+_AMBIENT_CONTEXTS = {
+    "default": lambda: decimal.Context(),
+    "round_down": lambda: decimal.Context(rounding=decimal.ROUND_DOWN),
+    "round_up_prec_2": lambda: decimal.Context(prec=2, rounding=decimal.ROUND_UP),
+    "inexact_trap": lambda: decimal.Context(traps=[decimal.Inexact]),
+    "rounded_trap": lambda: decimal.Context(traps=[decimal.Rounded]),
+    "tight_exponents_all_traps": lambda: decimal.Context(
+        prec=1,
+        Emin=-1,
+        Emax=1,
+        traps=[
+            decimal.Inexact,
+            decimal.Rounded,
+            decimal.Overflow,
+            decimal.Underflow,
+            decimal.Subnormal,
+            decimal.Clamped,
+            decimal.InvalidOperation,
+        ],
+    ),
+}
+
+
+def context_state(context: decimal.Context) -> tuple[object, ...]:
+    return (
+        context.prec,
+        context.rounding,
+        context.Emin,
+        context.Emax,
+        context.capitals,
+        context.clamp,
+        tuple(sorted((signal.__name__, bool(enabled)) for signal, enabled in context.traps.items())),
+        tuple(sorted((signal.__name__, bool(raised)) for signal, raised in context.flags.items())),
+    )
+
+
+def _astra_decision():
+    return _decide((TINY, TINY, "0.000000000000000002"), entry=TINY, exit_=_ZERO, n="3")
+
+
+@pytest.mark.parametrize("context_name", sorted(_AMBIENT_CONTEXTS))
+def test_evaluation_is_independent_of_the_ambient_decimal_context(context_name: str) -> None:
+    baseline = _astra_decision()
+    assert (baseline.action, baseline.feature_mean) == (ProfileAction.SHORT, TINY)
+    with decimal.localcontext(_AMBIENT_CONTEXTS[context_name]()) as active:
+        before = context_state(active)
+        assert _astra_decision() == baseline
+        assert _decide(("-0.000000000000000005", _ZERO), entry=TINY, exit_=_ZERO).feature_mean == (
+            "-0.000000000000000002"
+        )
+        assert context_state(decimal.getcontext()) == before
+        assert decimal.getcontext() is active
+
+
+@pytest.mark.parametrize(
+    ("rates", "rendered"),
+    [
+        ((TINY, _ZERO), _ZERO),
+        (("0.000000000000000003", _ZERO), "0.000000000000000002"),
+        (("0.000000000000000005", _ZERO), "0.000000000000000002"),
+        (("0.000000000000000007", _ZERO), "0.000000000000000004"),
+        (("-0.000000000000000001", _ZERO), _ZERO),
+        (("-0.000000000000000003", _ZERO), "-0.000000000000000002"),
+        (("-0.000000000000000007", _ZERO), "-0.000000000000000004"),
+        (("1.000000000000000001", "0.000000000000000000"), "0.500000000000000000"),
+        (("1.000000000000000003", "0.000000000000000000"), "0.500000000000000002"),
+    ],
+)
+def test_mean_rendering_is_exact_round_half_even(rates: tuple[str, str], rendered: str) -> None:
+    assert _decide(rates, entry=TINY, exit_=_ZERO).feature_mean == rendered
+
+
+# --- F4: numeric policy committed and consumed ---------------------------------------------------------------------------
+
+POLICY_DRIFTS: list[dict[str, object]] = [
+    {"numeric_policy_id": "passive_funding_carry_numeric_policy.v2"},
+    {"decimal_grammar_id": "ascii_decimal_with_exponent.v1"},
+    {"decimal_scale": 17},
+    {"max_decimal_text_length": 59},
+    {"integer_grammar_id": "ascii_positive_integer_unbounded.v1"},
+    {"max_positive_integer": 2**31 - 1},
+    {"mean_arithmetic_id": "binary_float_mean.v1"},
+    {"mean_rounding_id": "round_half_up"},
+    {"mean_output_scale": 8},
+    {"mean_render_id": "decimal_context_quantize.v1"},
+]
+
+
+def _drifted(**changes: object):
+    profile = _profile()
+    changed = replace(profile, numeric_policy=replace(profile.numeric_policy, **changes))
+    return replace(changed, profile_semantics_digest=strategy_executable_profile_semantics_digest(changed))
+
+
+def test_numeric_policy_commits_every_load_bearing_rule() -> None:
+    policy = _profile().numeric_policy
+    assert strategy_executable_profile_to_dict(_profile())["numeric_policy"] == {
+        "numeric_policy_id": "passive_funding_carry_numeric_policy.v1",
+        "decimal_grammar_id": "ascii_signed_canonical_integer_dot_fixed_scale_no_exponent_no_plus_no_negative_zero.v1",
+        "decimal_scale": 18,
+        "max_decimal_text_length": 60,
+        "integer_grammar_id": "ascii_positive_integer_no_leading_zero_lexically_bounded_int64.v1",
+        "max_positive_integer": 9223372036854775807,
+        "mean_arithmetic_id": "exact_fraction_arithmetic_mean.v1",
+        "mean_rounding_id": "round_half_even",
+        "mean_output_scale": 18,
+        "mean_render_id": "exact_integer_divmod_fixed_scale_render.v1",
+    }
+    assert type(policy.max_positive_integer) is int
+    assert _drifted().profile_semantics_digest == _profile().profile_semantics_digest
+    assert strategy_executable_profile_semantics_digest(_profile()) == _profile().profile_semantics_digest
+    source = inspect.getsource(profiles_module)
+    assert "_MEAN_PRECISION" not in source
+    assert "_MEAN_QUANTUM" not in source
+
+
+@pytest.mark.parametrize("drift", POLICY_DRIFTS, ids=lambda drift: next(iter(drift)))
+def test_every_numeric_policy_change_changes_the_semantics_digest(drift: dict[str, object]) -> None:
+    assert _drifted(**drift).profile_semantics_digest != _profile().profile_semantics_digest
+
+
+@pytest.mark.parametrize(
+    "drift",
+    [
+        {"decimal_grammar_id": "ascii_decimal_with_exponent.v1"},
+        {"integer_grammar_id": "ascii_positive_integer_unbounded.v1"},
+        {"mean_arithmetic_id": "binary_float_mean.v1"},
+        {"mean_rounding_id": "round_half_up"},
+        {"mean_render_id": "decimal_context_quantize.v1"},
+        {"decimal_scale": 0},
+        {"max_positive_integer": 2**64},
+    ],
+    ids=lambda drift: next(iter(drift)),
+)
+def test_execution_refuses_an_unimplemented_numeric_policy(
+    drift: dict[str, object], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setitem(profiles_module._REGISTRY, PASSIVE_FUNDING_CARRY_V1, _drifted(**drift))
+    with pytest.raises(StrategyExecutableProfileError, match="numeric_policy_unsupported"):
+        _decide(("0.000200000000000000",) * 2)
+
+
+def test_execution_consumes_the_registered_policy_values(monkeypatch: pytest.MonkeyPatch) -> None:
+    sixty = "1" * 41 + "." + "0" * 18
+    assert _decide((sixty, sixty)).action is ProfileAction.SHORT
+    monkeypatch.setitem(profiles_module._REGISTRY, PASSIVE_FUNDING_CARRY_V1, _drifted(max_decimal_text_length=59))
+    with pytest.raises(StrategyExecutableProfileError, match="final_funding_rates_malformed"):
+        _decide((sixty, sixty))
+    monkeypatch.setitem(profiles_module._REGISTRY, PASSIVE_FUNDING_CARRY_V1, _drifted(max_positive_integer=2**31 - 1))
+    with pytest.raises(StrategyExecutableProfileError, match="parameter_value_invalid:final_funding_lookback_count"):
+        _decide(("0.000200000000000000",) * 2, n="2147483648")
+    monkeypatch.setitem(profiles_module._REGISTRY, PASSIVE_FUNDING_CARRY_V1, _drifted(mean_output_scale=2))
+    assert _decide(("0.000200000000000000",) * 2).feature_mean == "0.00"
+
+
+# --- F6: registry schema authority --------------------------------------------------------------------------------------
+
+
+def _kind_aliased(kind: ProfileParameterKind):
+    profile = _profile()
+    schema = tuple(
+        replace(spec, kind=spec.kind.value) if spec.kind is kind else spec for spec in profile.parameter_schema
+    )
+    return replace(profile, parameter_schema=schema)
+
+
+@pytest.mark.parametrize("kind", list(ProfileParameterKind), ids=lambda kind: kind.value)
+def test_plain_string_parameter_kind_alias_is_refused(kind: ProfileParameterKind) -> None:
+    aliased = _kind_aliased(kind)
+    assert aliased == _profile()  # equal-comparing: dataclass equality alone cannot be the authority
+    assert strategy_executable_profile_semantics_digest(aliased) == _profile().profile_semantics_digest
+    with pytest.raises(StrategyExecutableProfileError, match="profile_unregistered"):
+        canonical_profile_parameter_assignment(aliased, params())
+    with pytest.raises(StrategyExecutableProfileError, match="profile_unregistered"):
+        evaluate_strategy_executable_profile(
+            aliased,
+            final_funding_rates=("0.000200000000000000",) * 2,
+            parameter_assignment=params(),
+            prior_direction=ProfileDirection.FLAT,
+        )
+    with pytest.raises(StrategyExecutableProfileError, match="profile_unregistered"):
+        strategy_executable_profile_accepts_decimal(aliased, TINY)
+
+
+@pytest.mark.parametrize(
+    ("kind", "assignment", "parameter"),
+    [
+        (ProfileParameterKind.POSITIVE_DECIMAL, params(unit=_ZERO), "unit_size"),
+        (ProfileParameterKind.POSITIVE_DECIMAL, params(entry=_ZERO, exit_=_ZERO), "entry_threshold"),
+        (ProfileParameterKind.POSITIVE_INTEGER, params(n="2.000000000000000000"), "final_funding_lookback_count"),
+    ],
+    ids=["unit_size_zero", "entry_threshold_zero", "decimal_lookback"],
+)
+def test_alias_widened_domains_are_rejected_and_registry_rejects_them_too(
+    kind: ProfileParameterKind, assignment: tuple[ProfileParameterAssignment, ...], parameter: str
+) -> None:
+    with pytest.raises(StrategyExecutableProfileError, match="profile_unregistered"):
+        canonical_profile_parameter_assignment(_kind_aliased(kind), assignment)
+    with pytest.raises(StrategyExecutableProfileError, match=f"parameter_value_invalid:{parameter}"):
+        canonical_profile_parameter_assignment(_profile(), assignment)
+
+
+def test_only_the_registered_object_is_authoritative() -> None:
+    copy = replace(_profile())
+    assert copy == _profile()
+    assert copy is not _profile()
+    with pytest.raises(StrategyExecutableProfileError, match="profile_unregistered"):
+        canonical_profile_parameter_assignment(copy, params())
+    hollow = object.__new__(type(_profile()))
+    with pytest.raises(StrategyExecutableProfileError, match="profile_unregistered"):
+        canonical_profile_parameter_assignment(hollow, params())
+    assert canonical_profile_parameter_assignment(_profile(), params()) == params()
+
+
+@pytest.mark.parametrize("kind", ["positive_integer", "positive_decimal", "nonnegative_decimal", None])
+def test_schema_dispatch_requires_the_exact_enum_type(kind: object) -> None:
+    policy = _profile().numeric_policy
+    with pytest.raises(StrategyExecutableProfileError, match="parameter_kind_invalid"):
+        profiles_module._parameter_value_is_valid(policy, kind, "1.000000000000000000")
