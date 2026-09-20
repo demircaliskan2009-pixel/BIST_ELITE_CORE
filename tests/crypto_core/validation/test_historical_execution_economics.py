@@ -43,6 +43,7 @@ from crypto_core.validation.historical_execution_economics import (
     HistoricalExecutionIntentAction,
     HistoricalExecutionTradeStatus,
     HistoricalExecutionTransitionKind,
+    HistoricalExecutionValuation,
     HistoricalExecutionValuationKind,
     build_historical_execution_economics,
     historical_execution_economics_digest,
@@ -121,7 +122,7 @@ default_book = book_with()
 
 
 def _record(
-    series: str, key: str, seq: int, event: int, values: Values, available: int, finalized: int
+    series: str, key: str, seq: int, event: int, values: Values, available: int, finalized: int | None
 ) -> HistoricalPitRecord:
     return build_historical_pit_record(
         series_id=series,
@@ -130,7 +131,7 @@ def _record(
         sequence_id=seq,
         event_time_ns=event,
         available_at_ns=event + available,
-        finalized_at_ns=event + finalized,
+        finalized_at_ns=None if finalized is None else event + finalized,
         revision_vintage_id=None,
         values=tuple(HistoricalPitValue(name, value) for name, value in sorted(values.items())),
     )
@@ -144,8 +145,15 @@ def market_records(
     observations: int = 101,
     extra_marks: tuple[tuple[int, int, Values], ...] = (),
     extra_books: tuple[tuple[int, int, Values], ...] = (),
+    funding_times: tuple[int, int | None] = (INTERVAL + 10, INTERVAL + 20),
+    funding_overrides: dict[int, tuple[int, int | None]] | None = None,
 ) -> tuple[HistoricalPitRecord, ...]:
-    """Funding every INTERVAL (final after window close); marks and books every 1000 ns; extras renumbered by time."""
+    """Funding every INTERVAL; marks and books every 1000 ns; extras renumbered by time.
+
+    ``funding_times`` and ``funding_overrides`` are ``(available, finalized)`` offsets from the funding window open
+    (``event_time``). The default publishes and finalizes a record after its own cycle closes, as
+    ``finality=funding_cycle_closed`` requires; a ``None`` finalized offset is a record that never becomes final.
+    """
 
     records = [
         _record(
@@ -154,8 +162,7 @@ def market_records(
             k,
             BASE + k * INTERVAL,
             {"funding_rate": rate},
-            INTERVAL + 10,
-            INTERVAL + 20,
+            *(funding_overrides or {}).get(k, funding_times),
         )
         for k, rate in enumerate(rates)
     ]
@@ -573,6 +580,120 @@ def test_duplicate_funding_records_never_reach_economics() -> None:
     assert result.integrity_reason_codes == (_code("run_rejected"),)
 
 
+# --- funding cycle finality ---------------------------------------------------------------------------------------------
+
+
+def test_funding_final_before_its_own_cycle_closes_fails_before_any_simulation() -> None:
+    w = world(records=market_records(funding_times=(0, 0)))  # published and "final" already at the window open
+    assert (w.run.status, w.run.gate_verdict) == (EdgeEvidenceStatus.READY, EdgeGateVerdict.PASS)
+    entry_decision = next(d for d in w.run.decisions if d.resulting_direction == "SHORT")
+    unclosed = [
+        record
+        for record in w.dataset.records
+        if record.record_digest in entry_decision.input_record_digests
+        and entry_decision.decision_time_ns < record.event_time_ns + INTERVAL
+    ]
+    assert unclosed  # the frozen entry reads a rate whose own cycle has not closed, and would then collect it
+    result = economics(w)
+    _blocked(result, EdgeGateVerdict.FAIL, "funding_finalized_before_cycle_close")
+    assert (result.simulated_economics_computed, result.advances) == (False, False)
+
+
+@pytest.mark.parametrize(
+    "finalized", [INTERVAL - 1, INTERVAL // 2, 0], ids=["one_ns_early", "mid_cycle", "at_window_open"]
+)
+def test_a_single_early_final_funding_record_fails_the_whole_result(finalized: int) -> None:
+    w = world(records=market_records(funding_overrides={2: (finalized, finalized)}))
+    assert w.run.gate_verdict is EdgeGateVerdict.PASS
+    _blocked(economics(w), EdgeGateVerdict.FAIL, "funding_finalized_before_cycle_close")
+
+
+def test_finality_exactly_at_the_cycle_close_is_supported() -> None:
+    result = economics(world(records=market_records(funding_times=(INTERVAL, INTERVAL))))
+    _assert_receipt_invariants(result)
+    assert result.advances is True
+    assert result.funding_cashflows
+    for cashflow in result.funding_cashflows:
+        assert cashflow.liability_time_ns == cashflow.funding_event_time_ns + INTERVAL
+
+
+def test_archive_finality_after_the_liability_keeps_settlement_at_the_governed_instant() -> None:
+    w = world(records=market_records(funding_times=(INTERVAL + 10, 2 * INTERVAL)))
+    result = economics(w)
+    _assert_receipt_invariants(result)
+    assert result.advances is True
+    assert result.funding_cashflows
+    records = {r.record_digest: r for r in w.dataset.records}
+    for cashflow in result.funding_cashflows:
+        record = records[cashflow.funding_record_digest]
+        assert record.finalized_at_ns > cashflow.liability_time_ns  # the archive finalizes it only later
+        assert cashflow.liability_time_ns == record.event_time_ns + INTERVAL  # settlement never moves
+        valuation = next(v for v in result.valuations if v.trigger_digest == cashflow.cashflow_digest)
+        assert valuation.time_ns == cashflow.liability_time_ns
+
+
+def test_never_final_funding_keeps_its_coverage_failure() -> None:
+    w = world(records=market_records(funding_overrides={2: (INTERVAL + 10, None)}))
+    _blocked(economics(w), EdgeGateVerdict.FAIL, "funding_coverage_incomplete")
+
+
+def test_a_liability_instant_outside_the_wire_domain_fails_closed() -> None:
+    edge = build_historical_pit_record(
+        series_id="funding-final",
+        data_requirement_key="funding_rate",
+        instrument=INS,
+        sequence_id=len(RATES),
+        event_time_ns=polt.INT64_MAX,
+        available_at_ns=polt.INT64_MAX,
+        finalized_at_ns=polt.INT64_MAX,
+        revision_vintage_id=None,
+        values=(HistoricalPitValue("funding_rate", RATES[0]),),
+    )
+    w = world(records=market_records() + (edge,))
+    assert w.run.gate_verdict is EdgeGateVerdict.PASS
+    _blocked(economics(w), EdgeGateVerdict.FAIL, "economic_value_out_of_representation:funding_liability_time_ns")
+
+
+def test_no_settlement_pays_a_rate_its_own_entry_decision_could_not_know() -> None:
+    for w in (default_world(), world(records=market_records(funding_times=(INTERVAL, INTERVAL)))):
+        result = economics(w)
+        assert result.advances is True
+        decisions = {d.decision_digest: d for d in w.run.decisions}
+        fills = {f.fill_digest: f for f in result.fills}
+        for cashflow in result.funding_cashflows:
+            liable = [t for t in result.position_transitions if t.time_ns < cashflow.liability_time_ns]
+            decision = decisions[fills[liable[-1].fill_digest].decision_digest]
+            if decision.decision_time_ns < cashflow.liability_time_ns:
+                assert cashflow.funding_record_digest not in decision.input_record_digests
+
+
+def test_the_funding_finality_failure_is_re_derived_and_cannot_be_resealed_away() -> None:
+    failed = economics(world(records=market_records(funding_times=(0, 0))))
+    assert verify_historical_execution_economics(failed).intact is True
+    good = default_result()
+    upgraded = _reseal(
+        failed,
+        gate_verdict=EdgeGateVerdict.PASS,
+        advances=True,
+        simulated_economics_computed=True,
+        verdict_reason_codes=(),
+        fills=good.fills,
+        funding_cashflows=good.funding_cashflows,
+        valuations=good.valuations,
+        terminal_state=good.terminal_state,
+    )
+    assert verify_historical_execution_economics(upgraded).intact is False
+
+
+def test_the_funding_repair_never_re_runs_the_frozen_decision_trace() -> None:
+    w = world(records=market_records(funding_times=(0, 0)))
+    failed = economics(w)
+    snapshot = json.loads(failed.run_binding.snapshot_json)
+    expected = json.loads(edge_canonical_json(runt.historical_decision_run_to_dict(w.run)))
+    assert snapshot["decisions"] == expected["decisions"]
+    assert (failed.intents, failed.position_transitions) == ((), ())
+
+
 # --- valuation and marks -----------------------------------------------------------------------------------------------
 
 
@@ -858,6 +979,157 @@ def test_leverage_breach_is_an_explicit_rejection_never_a_clip() -> None:
 def test_leverage_within_cap_fills() -> None:
     fills = economics(policy=polt.cited_policy(initial_equity=d(101))).fills
     assert fills[0].outcome is HistoricalExecutionFillOutcome.FILLED
+
+
+# --- risk: the cap binds the candidate POST-fill state, including this fill's own fee and mark-to-market ---------------
+
+_UNIT = Fraction(1, 10**18)
+_REFERENCE_EQUITY = Fraction(10_000)
+
+
+def _first_fill_valuation(result: HistoricalExecutionEconomicsResult) -> HistoricalExecutionValuation:
+    return next(v for v in result.valuations if v.valuation_kind is HistoricalExecutionValuationKind.FILL)
+
+
+def _candidate_carry(w: World | None = None, **policy_overrides: object) -> tuple[Fraction, Fraction]:
+    """``(post-fill notional, carry)`` of the first fill, where carry is its own fee plus mark-to-market.
+
+    The carry does not depend on initial equity, so ``notional - carry`` is the exact initial equity at which the
+    accepted FILL valuation would sit precisely on the authenticated ``max_leverage`` boundary of 1x.
+    """
+
+    policy = polt.cited_policy(initial_equity=d(_REFERENCE_EQUITY), **policy_overrides)
+    valuation = _first_fill_valuation(economics(w, policy=policy))
+    notional = abs(Fraction(valuation.position_quantity)) * Fraction(valuation.mark_price)
+    return notional, Fraction(valuation.equity) - _REFERENCE_EQUITY
+
+
+def _risk_reasons(result: HistoricalExecutionEconomicsResult) -> list[str]:
+    return [f.reason for f in result.fills]
+
+
+def test_pre_fill_equity_alone_no_longer_authorizes_a_fill() -> None:
+    notional, carry = _candidate_carry()
+    assert carry < 0  # the fee and the adverse fill-versus-mark move both cost equity
+    result = economics(policy=polt.cited_policy(initial_equity=d(notional)))  # the old pre-fill boundary
+    _assert_receipt_invariants(result)
+    assert _risk_reasons(result) == ["risk_limit_exceeded"] * len(result.fills)
+    assert (result.position_transitions, result.fee_cashflows) == ((), ())
+
+
+def test_the_exact_post_fill_boundary_is_accepted_and_one_scale_unit_below_is_rejected() -> None:
+    notional, carry = _candidate_carry()
+    boundary = notional - carry
+    accepted = economics(policy=polt.cited_policy(initial_equity=d(boundary)))
+    _assert_receipt_invariants(accepted)
+    assert accepted.fills[0].outcome is HistoricalExecutionFillOutcome.FILLED
+    valuation = _first_fill_valuation(accepted)
+    assert abs(Fraction(valuation.position_quantity)) * Fraction(valuation.mark_price) == Fraction(valuation.equity)
+    rejected = economics(policy=polt.cited_policy(initial_equity=d(boundary - _UNIT)))
+    assert rejected.fills[0].reason == "risk_limit_exceeded"
+
+
+def test_a_high_taker_fee_is_charged_to_the_candidate_state() -> None:
+    expensive = {"taker_fee_bps": d(500)}
+    notional, carry = _candidate_carry()
+    on_the_cheap_boundary = economics(policy=polt.cited_policy(initial_equity=d(notional - carry), **expensive))
+    assert on_the_cheap_boundary.fills[0].reason == "risk_limit_exceeded"
+    expensive_notional, expensive_carry = _candidate_carry(**expensive)
+    assert expensive_carry < carry
+    accepted = economics(policy=polt.cited_policy(initial_equity=d(expensive_notional - expensive_carry), **expensive))
+    assert accepted.fills[0].outcome is HistoricalExecutionFillOutcome.FILLED
+
+
+def test_the_adverse_fill_versus_mark_alone_can_breach_the_cap() -> None:
+    free = {"taker_fee_bps": d(0)}
+    notional, carry = _candidate_carry(**free)
+    assert carry < 0  # no fee at all: the fill price is worse than the mark
+    rejected = economics(policy=polt.cited_policy(initial_equity=d(notional), **free))
+    assert rejected.fills[0].reason == "risk_limit_exceeded"
+    accepted = economics(policy=polt.cited_policy(initial_equity=d(notional - carry), **free))
+    assert accepted.fills[0].outcome is HistoricalExecutionFillOutcome.FILLED
+
+
+def test_fee_and_mark_to_market_are_both_required_to_clear_the_cap() -> None:
+    free_notional, free_carry = _candidate_carry(**{"taker_fee_bps": d(0)})
+    covers_only_the_mark_to_market = free_notional - free_carry
+    result = economics(policy=polt.cited_policy(initial_equity=d(covers_only_the_mark_to_market)))
+    assert result.fills[0].reason == "risk_limit_exceeded"
+
+
+@pytest.mark.parametrize(
+    "gap", [Fraction(0), -_UNIT, Fraction(-1, 20)], ids=["zero", "one_unit_below_zero", "negative"]
+)
+def test_a_candidate_post_fill_equity_at_or_below_zero_is_rejected(gap: Fraction) -> None:
+    _, carry = _candidate_carry()
+    result = economics(policy=polt.cited_policy(initial_equity=d(gap - carry)))  # post-fill equity lands on gap
+    _assert_receipt_invariants(result)
+    assert result.advances is True
+    assert _risk_reasons(result) == ["risk_limit_exceeded"] * len(result.fills)
+    assert result.position_transitions == ()
+
+
+def test_the_partial_fill_boundary_uses_the_filled_quantity_and_its_own_fee() -> None:
+    w = world(records=market_records(book=book_with(quantity=10)))
+    notional, carry = _candidate_carry(w)
+    reference = economics(w, policy=polt.cited_policy(initial_equity=d(_REFERENCE_EQUITY)))
+    assert reference.fills[0].outcome is HistoricalExecutionFillOutcome.PARTIALLY_FILLED
+    assert Fraction(reference.fills[0].filled_quantity) == Fraction("0.2")
+    accepted = economics(w, policy=polt.cited_policy(initial_equity=d(notional - carry)))
+    assert accepted.fills[0].outcome is HistoricalExecutionFillOutcome.PARTIALLY_FILLED
+    rejected = economics(w, policy=polt.cited_policy(initial_equity=d(notional - carry - _UNIT)))
+    assert rejected.fills[0].reason == "risk_limit_exceeded"
+
+
+@pytest.mark.parametrize("direction", ["short", "long"], ids=["short", "long"])
+def test_increases_are_capped_while_reductions_and_closes_still_execute(direction: str) -> None:
+    rates = RATES if direction == "short" else tuple(r[1:] if r.startswith("-") else "-" + r for r in RATES)
+    w = world(records=market_records(rates=rates, book=book_with(quantity=10)))
+    notional, carry = _candidate_carry(w)
+    result = economics(w, policy=polt.cited_policy(initial_equity=d(notional - carry)))
+    _assert_receipt_invariants(result)
+    kinds = [t.transition_kind for t in result.position_transitions]
+    assert kinds[0] is HistoricalExecutionTransitionKind.OPEN
+    assert HistoricalExecutionTransitionKind.INCREASE not in kinds  # every top-up is judged on its own candidate state
+    assert {HistoricalExecutionTransitionKind.REDUCE, HistoricalExecutionTransitionKind.CLOSE} & set(kinds)
+    rejected = {f.fill_digest for f in result.fills if f.reason == "risk_limit_exceeded"}
+    assert rejected
+    applied = {t.fill_digest for t in result.position_transitions}
+    charged = {f.fill_digest for f in result.fee_cashflows}
+    assert not rejected & (applied | charged)  # no transition, no fee, no state mutation
+
+
+@pytest.mark.parametrize("scenario", ["default", "tight", "partial", "long", "leverage_3x"])
+def test_every_accepted_exposure_increase_respects_the_cap_in_its_own_valuation(scenario: str) -> None:
+    max_leverage = Fraction(1)
+    w, policy = None, None
+    if scenario == "tight":
+        notional, carry = _candidate_carry()
+        policy = polt.cited_policy(initial_equity=d(notional - carry))
+    elif scenario == "partial":
+        w = world(records=market_records(book=book_with(quantity=10)))
+    elif scenario == "long":
+        rates = tuple(r[1:] if r.startswith("-") else "-" + r for r in RATES)
+        w = world(records=market_records(rates=rates))
+    elif scenario == "leverage_3x":
+        max_leverage = Fraction(3)
+        w = world(spec_changes={"risk_caps": {"max_leverage": 3}})
+        notional, carry = _candidate_carry(w)
+        policy = polt.cited_policy(initial_equity=d(notional / 3 - carry + Fraction(1, 1_000)))
+    result = economics(w, policy=policy)
+    _assert_receipt_invariants(result)
+    valuations = {
+        v.trigger_digest: v for v in result.valuations if v.valuation_kind is HistoricalExecutionValuationKind.FILL
+    }
+    increases = [
+        t for t in result.position_transitions if abs(Fraction(t.post_quantity)) > abs(Fraction(t.prior_quantity))
+    ]
+    assert increases
+    for transition in increases:
+        valuation = valuations[transition.fill_digest]
+        equity = Fraction(valuation.equity)
+        assert equity > 0
+        assert abs(Fraction(valuation.position_quantity)) * Fraction(valuation.mark_price) <= max_leverage * equity
 
 
 # --- external facts and governance --------------------------------------------------------------------------------------

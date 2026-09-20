@@ -32,12 +32,18 @@ Execution semantics (v1, linear USDT perpetual, base-asset quantity):
 * fill ratio (``visible_depth_linear_v1``): filled = min(requested, cap × visible side depth), truncated to scale 18;
   the remainder is cancelled; zero → ``REJECTED``;
 * price: mid × (1 ± max(slippage_floor_bps, half_spread_bps + coefficient × participation_pct) / 10 000);
-* risk: an exposure-increasing fill whose post-fill |q| × mark exceeds spec ``max_leverage`` × current equity is
-  ``REJECTED`` (``risk_limit_exceeded``), never clipped;
+* risk: an exposure-increasing fill is ``REJECTED`` (``risk_limit_exceeded``, never clipped) when its candidate
+  post-fill equity — the exact equity the accepted FILL valuation would record, including this fill's own fee and its
+  mark-to-market at the fill mark — is not positive, or when post-fill |q| × mark exceeds spec ``max_leverage`` ×
+  that candidate equity; one shared transition preview serves the decision and the applied transition;
 * fee: every fill is taker; fee = fill_price × filled × taker_fee_bps / 10 000, always a cost;
 * funding: each final settlement at most once; liability time = event_time + funding_interval_ns; the liable position
   is the one before any fill at the same nanosecond; cashflow = −q × mark(liability) × rate (positive rate: LONG pays,
-  SHORT receives); the funding grid must be consistent with the approved interval and cover every liable instant;
+  SHORT receives); the funding grid must be consistent with the approved interval and cover every liable instant; a
+  record whose ``finalized_at_ns`` precedes its own liability instant is ``FAIL``
+  (``funding_finalized_before_cycle_close``), because under the authenticated ``funding_cycle_closed`` finality a
+  final rate cannot exist before its own cycle closed; settlement itself stays at the governed liability instant even
+  when the archive finalizes or publishes the record later (ex-post settlement accounting);
 * valuation: latest visible mark (by event time) not older than ``max_mark_staleness_ns``; observations at the initial
   anchor, every fill, every settlement, every UTC day boundary (integer nanoseconds) and evaluation end;
   equity = initial_equity + realized gross − fees + funding + unrealized;
@@ -706,6 +712,20 @@ class _Trade:
 
 
 @dataclass(frozen=True)
+class _Transition:
+    """Candidate position change of one priced fill; the leverage decision and the applied transition share it."""
+
+    kind: HistoricalExecutionTransitionKind
+    prior_quantity: Fraction
+    prior_average: Fraction | None
+    signed: Fraction
+    post_quantity: Fraction
+    post_average: Fraction | None
+    closed_quantity: Fraction
+    realized_gross: Fraction
+
+
+@dataclass(frozen=True)
 class _Book:
     visibility: int
     record: HistoricalPitRecord
@@ -829,13 +849,22 @@ class _Simulation:
 
     # -- rendering helpers --
 
-    def _unrealized(self, mark: _Mark | None) -> Fraction:
-        if self.quantity == 0 or mark is None or self.average is None:
+    def _unrealized_of(self, quantity: Fraction, average: Fraction | None, mark: _Mark | None) -> Fraction:
+        if quantity == 0 or mark is None or average is None:
             return Fraction(0)
-        return Fraction(_amount(self.quantity * (mark.price - self.average), "unrealized_pnl"))
+        return Fraction(_amount(quantity * (mark.price - average), "unrealized_pnl"))
 
-    def _equity(self, unrealized: Fraction) -> Fraction:
-        return self.initial_equity + self.realized - self.fees + self.funding_total + unrealized
+    def _unrealized(self, mark: _Mark | None) -> Fraction:
+        return self._unrealized_of(self.quantity, self.average, mark)
+
+    def _equity(
+        self, unrealized: Fraction, *, realized: Fraction | None = None, fees: Fraction | None = None
+    ) -> Fraction:
+        """The one equity identity; a candidate state passes its own realized/fees totals."""
+
+        realized = self.realized if realized is None else realized
+        fees = self.fees if fees is None else fees
+        return self.initial_equity + realized - fees + self.funding_total + unrealized
 
     # -- events --
 
@@ -1071,11 +1100,21 @@ class _Simulation:
         if price <= 0:
             reject("fill_price_non_positive", **quoted)
             return
-        post = self.quantity + signed
-        if abs(post) > abs(self.quantity):
+        transition = self._preview(signed, price)
+        fee_amount = Fraction(_amount(price * filled * self.fee_bps / _BPS, "fee_amount"))
+        if abs(transition.post_quantity) > abs(self.quantity):
             mark = self.marks.at(book.visibility, "fill")
-            equity = self._equity(self._unrealized(mark))
-            if abs(post) * mark.price > self.max_leverage * equity:
+            post_equity = Fraction(
+                _amount(
+                    self._equity(
+                        self._unrealized_of(transition.post_quantity, transition.post_average, mark),
+                        realized=self.realized + transition.realized_gross,
+                        fees=self.fees + fee_amount,
+                    ),
+                    "equity",
+                )
+            )
+            if post_equity <= 0 or abs(transition.post_quantity) * mark.price > self.max_leverage * post_equity:
                 reject("risk_limit_exceeded", **quoted)
                 return
         notional = Fraction(_amount(price * filled, "fill_notional"))
@@ -1096,7 +1135,6 @@ class _Simulation:
             **observed,
             **quoted,
         )
-        fee_amount = Fraction(_amount(price * filled * self.fee_bps / _BPS, "fee_amount"))
         fee: HistoricalExecutionFeeCashflow = _sealed(  # type: ignore[assignment]
             HistoricalExecutionFeeCashflow(
                 fee_id=_derived_id("fee", fill.fill_digest),
@@ -1110,17 +1148,11 @@ class _Simulation:
             "fee_digest",
         )
         self.ledgers.fees.append(fee)
-        self._apply(fill, fee, signed, price, fee_amount, book.visibility)
+        self._apply(fill, fee, transition, fee_amount, book.visibility)
 
-    def _apply(
-        self,
-        fill: HistoricalExecutionFill,
-        fee: HistoricalExecutionFeeCashflow,
-        signed: Fraction,
-        price: Fraction,
-        fee_amount: Fraction,
-        time_ns: int,
-    ) -> None:
+    def _preview(self, signed: Fraction, price: Fraction) -> _Transition:
+        """Pure candidate transition arithmetic. No state mutation: a rejected fill leaves the position untouched."""
+
         prior_quantity, prior_average = self.quantity, self.average
         post = prior_quantity + signed
         closed = Fraction(0)
@@ -1140,48 +1172,62 @@ class _Simulation:
                 kind, average = HistoricalExecutionTransitionKind.CLOSE, None
             else:
                 kind, average = HistoricalExecutionTransitionKind.REDUCE, prior_average
-        transition: HistoricalExecutionPositionTransition = _sealed(  # type: ignore[assignment]
+        return _Transition(kind, prior_quantity, prior_average, signed, post, average, closed, realized)
+
+    def _apply(
+        self,
+        fill: HistoricalExecutionFill,
+        fee: HistoricalExecutionFeeCashflow,
+        transition: _Transition,
+        fee_amount: Fraction,
+        time_ns: int,
+    ) -> None:
+        record: HistoricalExecutionPositionTransition = _sealed(  # type: ignore[assignment]
             HistoricalExecutionPositionTransition(
                 transition_id=_derived_id("transition", fill.fill_digest),
                 fill_digest=fill.fill_digest,
-                transition_kind=kind,
+                transition_kind=transition.kind,
                 time_ns=time_ns,
-                prior_quantity=_amount(prior_quantity, "prior_quantity"),
+                prior_quantity=_amount(transition.prior_quantity, "prior_quantity"),
                 prior_average_entry_price=None
-                if prior_average is None
-                else _amount(prior_average, "average_entry_price"),
-                delta_quantity=_amount(signed, "delta_quantity"),
-                post_quantity=_amount(post, "post_quantity"),
-                post_average_entry_price=None if average is None else _amount(average, "average_entry_price"),
-                closed_quantity=_amount(closed, "closed_quantity"),
-                realized_gross_pnl=_amount(realized, "realized_gross_pnl"),
+                if transition.prior_average is None
+                else _amount(transition.prior_average, "average_entry_price"),
+                delta_quantity=_amount(transition.signed, "delta_quantity"),
+                post_quantity=_amount(transition.post_quantity, "post_quantity"),
+                post_average_entry_price=None
+                if transition.post_average is None
+                else _amount(transition.post_average, "average_entry_price"),
+                closed_quantity=_amount(transition.closed_quantity, "closed_quantity"),
+                realized_gross_pnl=_amount(transition.realized_gross, "realized_gross_pnl"),
                 transition_digest="",
             ),
             "transition_digest",
         )
-        self.ledgers.transitions.append(transition)
-        self.quantity, self.average = post, average
-        self.realized += realized
+        self.ledgers.transitions.append(record)
+        self.quantity, self.average = transition.post_quantity, transition.post_average
+        self.realized += transition.realized_gross
         self.fees += fee_amount
         _amount(self.realized, "cumulative_realized_gross_pnl")
         _amount(self.fees, "cumulative_fees")
-        if kind is HistoricalExecutionTransitionKind.OPEN:
+        if transition.kind is HistoricalExecutionTransitionKind.OPEN:
             self.trade = _Trade(
-                _derived_id("trade", self.run_digest, fill.fill_digest), "LONG" if signed > 0 else "SHORT", time_ns
+                _derived_id("trade", self.run_digest, fill.fill_digest),
+                "LONG" if transition.signed > 0 else "SHORT",
+                time_ns,
             )
         trade = self.trade
         if trade is None:
             raise _EconomicFailure("trade_state_inconsistent")
-        if kind in (HistoricalExecutionTransitionKind.OPEN, HistoricalExecutionTransitionKind.INCREASE):
+        if transition.kind in (HistoricalExecutionTransitionKind.OPEN, HistoricalExecutionTransitionKind.INCREASE):
             trade.entry_fills.append(fill.fill_digest)
         else:
             trade.exit_fills.append(fill.fill_digest)
         trade.fees.append(fee.fee_digest)
-        trade.realized_gross += realized
+        trade.realized_gross += transition.realized_gross
         trade.total_fees += fee_amount
-        self.segments.append((time_ns, post))
+        self.segments.append((time_ns, transition.post_quantity))
         self._valuation(HistoricalExecutionValuationKind.FILL, time_ns, fill.fill_digest)
-        if kind is HistoricalExecutionTransitionKind.CLOSE:
+        if transition.kind is HistoricalExecutionTransitionKind.CLOSE:
             self._close_trade(time_ns)
 
     def _trade_record(
@@ -1224,6 +1270,25 @@ class _Simulation:
         )
         self.trade = None
 
+    def _liability(self, record: HistoricalPitRecord, interval: int) -> int:
+        """Governed settlement instant of one funding window: event time + approved interval, inside the wire domain."""
+
+        return _wire_int(record.event_time_ns + interval, "funding_liability_time_ns")
+
+    def _check_funding_cycle_finality(self, interval: int) -> None:
+        """A FINAL funding rate is authoritative only once its own cycle closes at the liability instant.
+
+        The authenticated funding requirement declares ``event_time`` as the window open and finality as
+        ``funding_cycle_closed``. A record claiming finality before that instant is a predicted rate wearing final
+        semantics: the frozen P1 trace could act on it before the cycle closed and this layer would then book exactly
+        that rate as settled economics. Fail closed for the whole result.
+        """
+
+        for record in self.funding:
+            liability = self._liability(record, interval)
+            if record.finalized_at_ns is not None and record.finalized_at_ns < liability:
+                raise _EconomicFailure("funding_finalized_before_cycle_close")
+
     def _check_funding_grid(self, interval: int) -> int | None:
         """The approved interval must separate consecutive settlements; returns the last liability time."""
 
@@ -1232,7 +1297,7 @@ class _Simulation:
                 raise _EconomicFailure("funding_interval_inconsistent")
         if not self.funding:
             return None
-        return self.funding[-1].event_time_ns + interval
+        return self._liability(self.funding[-1], interval)
 
     def _check_tail_coverage(self, last_liability: int | None, interval: int, end_ns: int) -> None:
         """Fail when a liable instant lies after the last available settlement (no silent interpolation)."""
@@ -1252,10 +1317,11 @@ class _Simulation:
         run = self.run
         start_ns, end_ns = run.evaluation_start_ns, run.evaluation_end_ns
         interval = self.policy.funding_interval_ns
+        self._check_funding_cycle_finality(interval)
         last_liability = self._check_funding_grid(interval)
         events: list[tuple[int, int, int]] = []
         for index, record in enumerate(self.funding):
-            liability = record.event_time_ns + interval
+            liability = self._liability(record, interval)
             if start_ns <= liability < end_ns:
                 events.append((liability, _PRIORITY_FUNDING, index))
         decisions = run.decisions
