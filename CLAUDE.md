@@ -13,12 +13,15 @@ fail-closed, audit-first, governance-first — never a generic coding assistant.
 
 ## Claude lane
 
-- The only active Claude lane is `Claude Opus 5` (`claude-opus-5`): primary deep semantic IMPLEMENTATION and
-  REPAIR, including the single consolidated repair of a candidate (section 24.8). Prompt construction and
-  templates live in `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`.
-- Claude Sonnet 5 is `NOT_IN_ACTIVE_COUNCIL`, Claude Opus 4.8 is `SUPERSEDED_BY_OPUS_5`, and Claude Fable 5 is
-  `INACTIVE_EXPIRED_RETIRED`. None is a lane, fallback or dependency; dated records of them are HISTORICAL
-  evidence only.
+- The only active Claude lane is `Claude Opus 5.5` (`claude-opus-5-5`): primary deep semantic IMPLEMENTATION and
+  REPAIR, including the single consolidated repair of a candidate and the `ROOT_CAUSE_ESCAPE` implementation
+  (section 24.8), together with the repo-native navigation, mechanical, static-inspection, test-generation,
+  local validation and CI-diagnosis work that belongs to that same task. Prompt construction and templates live
+  in `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`.
+- Claude Opus 5 is `SUPERSEDED_BY_OPUS_5_5`, Claude Sonnet 5 is `NOT_IN_ACTIVE_COUNCIL`, Claude Opus 4.8 is
+  `SUPERSEDED_BY_OPUS_5`, and Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED`. None is a lane, fallback or
+  dependency — a superseded Claude lane is never an automatic fallback — and dated records of them are
+  HISTORICAL evidence only.
 - A Claude session never satisfies an independent or protected audit. The independent audit belongs to GPT-6
   Astra as PRIMARY (`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1`, section 24.4); for protected work that one Astra audit
   is also the protected Class-C audit, which no other lane satisfies. Codex GPT-5.6 Sol and then the ChatGPT
@@ -32,13 +35,17 @@ fail-closed, audit-first, governance-first — never a generic coding assistant.
 Report `MODEL_REQUESTED`, `MODEL_ID_REQUIRED`, `MODEL_ACTUAL`, `MODEL_EFFORT_REQUESTED`,
 `MODEL_EFFORT_ACTUAL`, `MODEL_FALLBACK`, `THINKING_ACTUAL`, `MODEL_IDENTITY_EVIDENCE` and
 `MODEL_EFFORT_EVIDENCE` (section 24.12). Runtime proof fails closed: `MODEL_ACTUAL` must positively be
-`claude-opus-5` on execution evidence from the running session, and thinking must be positively `ENABLED` —
-keep adaptive thinking enabled. `MODEL_ACTUAL` or `THINKING_ACTUAL` `UNKNOWN`, a different model, disabled
+`claude-opus-5-5` on execution evidence from the running session, and thinking must be positively `ENABLED`.
+Thinking is always enabled on Claude Opus 5.5, but `THINKING_ACTUAL` is still reported from runtime evidence
+and never assumed from that fact. `MODEL_ACTUAL` or `THINKING_ACTUAL` `UNKNOWN`, a different model, disabled
 thinking, a known prohibited fallback, or only the bare alias `opus`, a selector, settings file, default, cache or
-request text as proof is `STOP_WITH_PROOF` before mutation. Only effort may stay `UNKNOWN` when the host exposes
-no effort telemetry, and it is never restated from the request. The Opus 5 host effort label is recorded
-literally — `xhighultracode` — and never mapped to an API effort enum or to `max`. A human may waive an effort
-mismatch for one task; record the waiver and the true actual effort.
+request text as proof is `STOP_WITH_PROOF` before mutation. A superseded Claude lane is never an automatic
+fallback (`MODEL_FALLBACK=PROHIBITED`). Only effort may stay `UNKNOWN` when the host exposes
+no effort telemetry, and it is never restated from the request. Host effort labels are recorded literally:
+`xhigh` for ordinary complex implementation and repair — the default heavy lane — and `max` only on an
+explicitly named capability-critical or hardest-correctness-critical trigger, never as a general default. The
+retired Opus 5 literal `xhighultracode` is never carried onto Opus 5.5. A human may waive an effort mismatch
+for one task; record the waiver and the true actual effort.
 
 ## Setup load and fresh chat
 

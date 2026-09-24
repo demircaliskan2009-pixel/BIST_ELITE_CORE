@@ -31,7 +31,7 @@ wins.
 | Council member | Responsibility |
 |---|---|
 | **ChatGPT controller** | Controller and router, architecture adjudication, prompt compiler, evidence judge, live GitHub verification, contradiction detection, merge-readiness judgement, exactly one next action; severity adjudication under section 24.4; an independent audit only as the last-resort non-protected fallback of section 24.4. |
-| **Claude Opus 5** (`claude-opus-5`) | Primary deep semantic implementation and repair. |
+| **Claude Opus 5.5** (`claude-opus-5-5`) | Primary deep semantic implementation and repair. |
 | **Codex GPT-5.6 Sol** | Primary repo-native engineering accelerator; the bounded first non-protected audit fallback of section 24.4; never a protected audit. |
 | **GPT-6 Astra** | PRIMARY independent auditor (`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1`): READ_ONLY exhaustive audit and whole-contract re-audit, and for protected work the sole protected T4 audit in the same execution. |
 | **ChatGPT Work** | Substantial multi-step execution when a cloud browser/computer, many files, apps or evidence collection materially help; never governance authority. |
@@ -667,7 +667,8 @@ conditions, and report fields. The durable per-model authoring guide is
 `CRYPTO_CORE_AGENT_OS_V1` is this section's identifier; its active content is
 `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` (2026-09-14), which replaces the earlier v1 lane set, taxonomy,
 routing function and prompt policy, as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1` (24.3, 24.4, 24.5,
-24.8 and the transition rule of 24.14). It is the single canonical active authority for how crypto_core
+24.8 and the transition rule of 24.14) and by `CLAUDE_OPUS_5_5_CONTROL_PLANE_UPGRADE_V1` (the Claude lane
+identity of 24.3, its effort policy in 24.12 and the transition rule of 24.14). It is the single canonical active authority for how crypto_core
 development work is routed, sized, audited, repaired, stopped and resumed. Sections 1-19 bind where they agree
 with it; on any conflict this section wins, and between safety rules the stricter rule wins. Sections 20-23 are
 HISTORICAL/SUPERSEDED. The kernel governs only the operational workflow needed to develop crypto_core safely
@@ -713,7 +714,7 @@ restates it as authority. The council is closed: a model or tool not listed here
 | Council member | Active role | Never |
 |---|---|---|
 | **ChatGPT controller** | Controller and router; architecture adjudication; prompt compiler (24.6); evidence judge; severity adjudication under `AUDIT_MATERIALITY_BOUNDARY_V1` (24.4); live GitHub verification through the connector/`gh`; contradiction detection; merge-readiness judgement; exactly one next action; an independent audit only as the last resort of `NON_PROTECTED_AUDIT_FALLBACK` (24.4) | Product implementation; any independent audit outside that fallback; auditing a candidate it implemented or repaired; any protected audit; a substitute for local tests or unverified repository state; GitHub mutation without an exact human action authorization; merge authority |
-| **Claude Opus 5** (`claude-opus-5`) | Primary deep semantic IMPLEMENTATION and REPAIR, including the single consolidated repair of a candidate (24.8) | Any independent audit of its own work; any protected audit |
+| **Claude Opus 5.5** (`claude-opus-5-5`) | Primary deep semantic IMPLEMENTATION and REPAIR, including the single consolidated repair of a candidate (24.8) and the `ROOT_CAUSE_ESCAPE` implementation (24.8), together with the repo-native navigation, mechanical, static-inspection, test-generation, local validation and CI-diagnosis work that belongs to that same task | Any independent audit of its own work; any protected audit; controller, governance or merge authority |
 | **Codex GPT-5.6 Sol** | Primary repo-native engineering accelerator — repo navigation, code search, dependency tracing, static inspection, clear-spec implementation where specifically routed, mechanical refactor, test generation, debugging, CI analysis, large-codebase inspection — and the bounded first `NON_PROTECTED_AUDIT_FALLBACK` for candidates with no protected trigger (24.4) | The default independent audit; any protected audit; auditing a candidate it implemented or repaired |
 | **GPT-6 Astra** | PRIMARY independent auditor (`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1`, 24.4): the READ_ONLY exhaustive audit and the one whole-contract re-audit of serious candidates, and for protected work the sole protected T4 `CLASS_C_CROSS_CONTRACT` audit in the same execution. Default requested effort `Ultra` | Mutation; implementation or repair; auditing a candidate it implemented or repaired; any reassignment of protected T4 to another lane |
 | **ChatGPT Work** | Substantial multi-step execution when a cloud browser/computer, many files, apps or evidence collection materially help, under the same prompt shape (24.6) and gates | Governance authority; accepted state; merge authority |
@@ -721,19 +722,22 @@ restates it as authority. The council is closed: a model or tool not listed here
 
 `ASTRA_T4_EXCLUSIVE` — protected T4 belongs to GPT-6 Astra alone. When Astra is unavailable, quota-blocked or
 stopped by runtime proof, the protected gate waits (`CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE`); nothing reassigns
-T4 to Codex GPT-5.6 Sol, Claude Opus 5, the ChatGPT controller, ChatGPT Work or any other lane. Non-protected
+T4 to Codex GPT-5.6 Sol, Claude Opus 5.5, the ChatGPT controller, ChatGPT Work or any other lane. Non-protected
 work continues under 24.4.
 
 `HOST_UI_LABELS_ARE_LITERAL` — a host's effort or mode label is recorded verbatim and never mapped across model
-families, to an API effort enum, or to `max`. Current literal labels: Claude Opus 5 `xhighultracode`; Codex
-GPT-5.6 Sol `Ultra`; GPT-6 Astra `Light`, `Medium`, `High`, `Extra High`, `Ultra`.
+families, to an API effort enum, or to `max`. Current literal labels: Claude Opus 5.5 `xhigh` and `max`; Codex
+GPT-5.6 Sol `Ultra`; GPT-6 Astra `Light`, `Medium`, `High`, `Extra High`, `Ultra`. The retired Opus 5 literal
+`xhighultracode` belongs to that superseded lane and is never carried onto Claude Opus 5.5.
 
 Outside the council — none is routable, a fallback or a dependency: **Copilot `INACTIVE_UNAVAILABLE`** (24.13);
-**Claude Fable 5 `INACTIVE_EXPIRED_RETIRED`**; **Claude Opus 4.8 `SUPERSEDED_BY_OPUS_5`**; **Claude Sonnet 5,
-Codex GPT-5.6 Terra and Codex GPT-5.6 Luna `NOT_IN_ACTIVE_COUNCIL`**. Their former roles moved: status, polling
+**Claude Fable 5 `INACTIVE_EXPIRED_RETIRED`**; **Claude Opus 5 `SUPERSEDED_BY_OPUS_5_5`**; **Claude Opus 4.8
+`SUPERSEDED_BY_OPUS_5`**; **Claude Sonnet 5, Codex GPT-5.6 Terra and Codex GPT-5.6 Luna
+`NOT_IN_ACTIVE_COUNCIL`**. A superseded Claude lane is never an automatic fallback: `MODEL_FALLBACK=PROHIBITED`
+holds for every serious routed crypto_core task (24.12). Their former roles moved: status, polling
 and mechanics to the ChatGPT controller's live verification or the routed session's own terminal proof;
 bounded and clear-spec implementation to Codex GPT-5.6 Sol; independent review to GPT-6 Astra (24.4); deep
-semantic implementation to Claude Opus 5. Earlier definitions survive only in the HISTORICAL sections and the dated changelog. Activating
+semantic implementation to Claude Opus 5.5. Earlier definitions survive only in the HISTORICAL sections and the dated changelog. Activating
 any of them is a `MATERIAL_CAPABILITY_CHANGE` (24.13).
 
 ### 24.4 Independent audit (ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1), protected Class C and complete blocker collection
@@ -758,7 +762,7 @@ any of them is a `MATERIAL_CAPABILITY_CHANGE` (24.13).
   whole-contract Astra re-audit does the same for a repaired head. The same exact head is never audited twice
   merely because ordinary and protected review were once separate lanes. Protected work is audited by GPT-6
   Astra alone: when Astra is unavailable, quota-blocked or stops on runtime proof, the protected gate WAITS
-  (`CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE`); Codex GPT-5.6 Sol, Claude Opus 5, the ChatGPT controller, ChatGPT Work
+  (`CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE`); Codex GPT-5.6 Sol, Claude Opus 5.5, the ChatGPT controller, ChatGPT Work
   and any self-review never satisfy a protected audit.
 - `NON_PROTECTED_AUDIT_FALLBACK` — for a candidate with NO protected trigger only. When GPT-6 Astra cannot legally
   perform the audit for a reason recorded in the task handoff (never as durable model state) —
@@ -1016,6 +1020,12 @@ or the execution stops before any mutation or audit. Effort telemetry is not loa
   to an API effort enum. A human may waive an effort mismatch for one task; the waiver and the true actual effort
   are recorded. Identity and required thinking have no waiver: a different model is a different routed task.
 - Effort is chosen from the work itself; de-escalate as soon as the remaining work is simpler.
+- `CLAUDE_EFFORT_POLICY` — the Claude lane requests `xhigh` for ordinary complex semantic implementation and
+  repair: that is the default heavy coding lane. It requests `max` only for capability-critical implementation
+  or the hardest correctness-critical consolidated repair, on an explicitly named trigger; `max` is never the
+  general default and never a reward for a project mattering. Thinking is always enabled on Claude Opus 5.5, and
+  `THINKING_ACTUAL` is still reported from runtime evidence rather than assumed from this rule. Routine status
+  and read-only evidence work stays controller-owned instead of spending the Claude lane.
 - Subagents default to 0 (at most 2 read-only, for genuinely independent substantial tracks); only one agent
   mutates a branch.
 
@@ -1061,6 +1071,14 @@ generic architecture improvement. A reopening change follows the same lifecycle 
 product PRs never redesign the workflow. Product PRs use `LARGEST_SAFE_SEMANTIC_CLOSURE`, the fewest-prompt
 budget (target 2 clean / 4 repaired, hard maximum 5, no prompt 6), one complete GPT-6 Astra-primary audit, at most
 one consolidated repair and one whole-contract re-audit (24.4, 24.8).
+
+`CLAUDE_LANE_UPGRADE_TRANSITION` — `CLAUDE_OPUS_5_5_CONTROL_PLANE_UPGRADE_V1` (the Claude lane identity of 24.3,
+its effort policy in 24.12 and the adapters that apply them) is a reopening under `MATERIAL_CAPABILITY_CHANGE`
+alone: it replaces the model identity of the existing Claude lane and changes no role, authority, budget,
+lifecycle or gate. The change that introduces it grants itself no exemption. Its own acceptance is governed by
+the control plane accepted before it, so the superseded Claude lane implements it and GPT-6 Astra audits it, and
+Claude Opus 5.5 becomes the routable Claude lane only once that change is independently accepted, merged,
+post-merge verified and fresh-chat accepted. A model may never accept its own successor.
 
 `ASTRA_UNIFIED_AUDIT_TRANSITION` — `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1` (the audit, fixed-point and lifecycle
 rules of 24.3, 24.4, 24.5 and 24.8) is a reopening under `MATERIAL_CAPABILITY_CHANGE` (GPT-6 Astra as the preferred
@@ -1274,3 +1292,25 @@ and one whole-contract re-audit are unchanged; P3 never triggers `FIXED_POINT_ST
 merge authority, CI gates and `ROOT_CAUSE_ESCAPE` are unchanged. Sections 2, 3, 4, 8, 10 and 19 were aligned. The
 transition rule (24.14) keeps the introducing change governed by the previously accepted plane. Docs/setup only: no
 product code, tests, scripts, workflows or dependencies touched.*
+
+*v6.2 (2026-09-24): `CLAUDE_OPUS_5_5_CONTROL_PLANE_UPGRADE_V1` — a bounded `MATERIAL_CAPABILITY_CHANGE` that
+replaces the ACTIVE Claude lane **Claude Opus 5** (`claude-opus-5`) with **Claude Opus 5.5**
+(`claude-opus-5-5`, released 2026-09-22, supported in Claude Code) across every active surface: the section 2
+role table, the 24.3 routing matrix, `ASTRA_T4_EXCLUSIVE`, `HOST_UI_LABELS_ARE_LITERAL`, the outside-council
+list, 24.4, `AGENTS.md`, `CLAUDE.md`, the token-efficient-loop skill, the model prompting guide, the Opus
+prompting playbook, both token-efficiency companions and the advisory setup audit script. Claude Opus 5 becomes
+`SUPERSEDED_BY_OPUS_5_5` and is NOT an automatic fallback. The Claude role is unchanged — primary deep semantic
+implementation and repair, the single consolidated repair, `ROOT_CAUSE_ESCAPE` implementation and the
+repo-native work of that same task, with self-audit only — and it never becomes an independent or protected
+auditor, controller, governance or merge authority. The effort policy is restated in current literal labels
+(24.12 `CLAUDE_EFFORT_POLICY`): `xhigh` as the default heavy coding lane, `max` only on an explicitly named
+capability-critical or hardest-correctness-critical trigger, and the retired Opus 5 literal `xhighultracode` is
+never carried onto Opus 5.5; thinking is always enabled on Opus 5.5 and `THINKING_ACTUAL` is still proven from
+runtime evidence. Unchanged: the domain operating profile, `CONTROLLER_READONLY_FIRST_POLICY`,
+`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1` and sole protected Astra Class-C authority, `AUDIT_MATERIALITY_BOUNDARY_V1`,
+`FINITE_AUDIT_RULE`, `COMPLETE_BLOCKER_COLLECTION`, PR sizing, the specialist prompt budget, one consolidated
+repair, `FIXED_POINT_STOP`, `ROOT_CAUSE_ESCAPE`, human exact-head merge authorization, one open PR and one
+writer, standard merge only, subagent limits, Deep Research triggers and every product, paper, live, capital and
+security gate. The transition rule (24.14 `CLAUDE_LANE_UPGRADE_TRANSITION`) keeps this change governed by the
+plane accepted before it: the superseded lane implements it, GPT-6 Astra audits it, and no model accepts its own
+successor. Docs/setup only: no product code, tests, workflows or dependencies touched.*

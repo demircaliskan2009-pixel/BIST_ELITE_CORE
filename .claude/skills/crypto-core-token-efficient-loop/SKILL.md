@@ -19,9 +19,11 @@ saving is subordinate to correctness; no gate may be skipped to save tokens. Ope
 2. Runtime proof before mutation (§24.12): `MODEL_REQUESTED`, `MODEL_ID_REQUIRED`, `MODEL_ACTUAL`,
    `MODEL_EFFORT_REQUESTED`, `MODEL_EFFORT_ACTUAL`, `MODEL_FALLBACK`, `THINKING_ACTUAL`,
    `MODEL_IDENTITY_EVIDENCE`, `MODEL_EFFORT_EVIDENCE`. Fail closed: `MODEL_ACTUAL` must be positively
-   `claude-opus-5` and thinking positively `ENABLED` on execution evidence; `UNKNOWN`, a mismatch, disabled
+   `claude-opus-5-5` and thinking positively `ENABLED` on execution evidence; `UNKNOWN`, a mismatch, disabled
    thinking, a known prohibited fallback, or selector/config/default/cache/request text alone →
-   `STOP_WITH_PROOF`. Only effort may stay `UNKNOWN`. Host labels stay literal (`xhighultracode`).
+   `STOP_WITH_PROOF`. Only effort may stay `UNKNOWN`. Host labels stay literal: `xhigh` for ordinary complex
+   implementation and repair, `max` only on a named capability-critical or hardest-correctness-critical
+   trigger.
 3. Prove LOCAL state once with `git`/`gh`: HEAD, clean tree, branch, open PRs — local proof stays Claude's
    own responsibility even with a controller packet.
 4. Read the named set; use symbol search before full files; build one source surface map.
@@ -38,13 +40,15 @@ saving is subordinate to correctness; no gate may be skipped to save tokens. Ope
 
 ## Boundaries
 
-- Council (§24.3): ChatGPT controller (`CONTROLLER_READONLY_FIRST_POLICY`); Claude Opus 5 (`claude-opus-5`) for
-  deep semantic implementation and repair; GPT-6 Astra as PRIMARY independent auditor
+- Council (§24.3): ChatGPT controller (`CONTROLLER_READONLY_FIRST_POLICY`); Claude Opus 5.5
+  (`claude-opus-5-5`) for deep semantic implementation and repair, including the repo-native work of that same
+  task; GPT-6 Astra as PRIMARY independent auditor
   (`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1`), which for protected work is also the protected T4 audit, never
   reassigned; Codex GPT-5.6 Sol for repo-native engineering and as the first recorded non-protected audit
   fallback, with the ChatGPT controller as the last (§24.4); ChatGPT Work; Deep Research. Claude Sonnet 5, Codex Terra and
-  Codex Luna are `NOT_IN_ACTIVE_COUNCIL`; Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED`; Claude Opus 4.8 is
-  `SUPERSEDED_BY_OPUS_5`; Copilot is `INACTIVE_UNAVAILABLE`.
+  Codex Luna are `NOT_IN_ACTIVE_COUNCIL`; Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED`; Claude Opus 5 is
+  `SUPERSEDED_BY_OPUS_5_5` and Claude Opus 4.8 is `SUPERSEDED_BY_OPUS_5`, neither an automatic fallback;
+  Copilot is `INACTIVE_UNAVAILABLE`.
 - Budget (§24.8): the fewest specialist prompts — target 2 clean, 4 repaired, hard maximum 5, no specialist
   sixth; controller governance closeout consumes none. One exhaustive audit, at most one consolidated repair,
   one whole-contract re-audit. Any genuine material P1/P2 after that → `FIXED_POINT_STOP`; P3 never blocks; no
