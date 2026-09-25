@@ -38,7 +38,10 @@ genuinely cannot reconstruct material operational state.
   exactly one next action; read-only first (`CONTROLLER_READONLY_FIRST_POLICY`, section 24.10). Never product
   implementation, never merge authority, never a protected audit, and never an independent audit except as the
   last-resort non-protected fallback of section 24.4 on a candidate it neither implemented nor repaired.
-- **Claude Opus 5** (`claude-opus-5`) — primary deep semantic IMPLEMENTATION and REPAIR.
+- **Claude Opus 5.5** (`claude-opus-5-5`) — primary deep semantic IMPLEMENTATION and REPAIR, including the one
+  consolidated repair, the `ROOT_CAUSE_ESCAPE` implementation and the repo-native engineering, test and
+  validation work of that same task. Never an independent or protected auditor, controller, governance or
+  merge authority.
 - **Codex GPT-5.6 Sol** — primary repo-native engineering accelerator (repo navigation, code search,
   dependency tracing, static inspection, clear-spec implementation when specifically routed, mechanical
   refactor, test generation, debugging, CI analysis, large-codebase inspection) and the bounded first audit
@@ -56,10 +59,13 @@ genuinely cannot reconstruct material operational state.
 state. Any future Copilot activation, and any new host auto-discovery integration, is a
 `MATERIAL_CAPABILITY_CHANGE` that requires a separate audited control-plane change before use. Not in the
 council and not routable, as a lane, fallback or dependency: Claude Fable 5 (`INACTIVE_EXPIRED_RETIRED`),
-Claude Opus 4.8 (`SUPERSEDED_BY_OPUS_5`), and Claude Sonnet 5, Codex GPT-5.6 Terra and Codex GPT-5.6 Luna
-(`NOT_IN_ACTIVE_COUNCIL`). Host effort labels are literal and never normalized across models or to an API
-effort enum (`HOST_UI_LABELS_ARE_LITERAL`): Claude Opus 5 `xhighultracode`; Codex GPT-5.6 Sol `Ultra`;
-GPT-6 Astra `Light` / `Medium` / `High` / `Extra High` / `Ultra`.
+Claude Opus 5 (`SUPERSEDED_BY_OPUS_5_5`), Claude Opus 4.8 (`SUPERSEDED_BY_OPUS_5`), and Claude Sonnet 5, Codex
+GPT-5.6 Terra and Codex GPT-5.6 Luna (`NOT_IN_ACTIVE_COUNCIL`). A superseded Claude lane is never an automatic
+fallback. Host effort labels are literal and never normalized across models or to an API
+effort enum (`HOST_UI_LABELS_ARE_LITERAL`): Claude Opus 5.5 `xhigh` and `max`; Codex GPT-5.6 Sol `Ultra`;
+GPT-6 Astra `Light` / `Medium` / `High` / `Extra High` / `Ultra`. The Claude lane requests `xhigh` for ordinary
+complex implementation and repair and `max` only on an explicitly named capability-critical or
+hardest-correctness-critical trigger (section 24.12).
 
 Every serious routed task reports `MODEL_REQUESTED`, `MODEL_ID_REQUIRED`, `MODEL_ACTUAL`,
 `MODEL_EFFORT_REQUESTED`, `MODEL_EFFORT_ACTUAL`, `MODEL_FALLBACK`, `THINKING_ACTUAL`,

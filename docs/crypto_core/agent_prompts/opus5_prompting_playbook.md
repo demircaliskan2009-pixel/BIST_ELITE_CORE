@@ -1,15 +1,19 @@
-# Claude Opus 5 Prompting Playbook (crypto_core, v3 — Astra unified audit edition)
+# Claude Opus 5.5 Prompting Playbook (crypto_core, v4 — Opus 5.5 lane edition)
 
 How to prompt the one active Claude lane under `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by
-`ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`. Authority:
+`ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1` and `CLAUDE_OPUS_5_5_CONTROL_PLANE_UPGRADE_V1`. The file name is kept
+for path stability; the active lane is the one named below. Authority:
 `docs/crypto_core/agent_workflow.md` section 24 — council 24.3, audit 24.4, prompt shape 24.6, lifecycle and
 budget 24.8, runtime proof 24.12. This playbook never overrides it; on any conflict, section 24 and the
 stricter safety rule win.
 
-**Claude Opus 5** (`claude-opus-5`) is the primary deep semantic IMPLEMENTATION and REPAIR lane. Claude Sonnet
+**Claude Opus 5.5** (`claude-opus-5-5`) is the primary deep semantic IMPLEMENTATION and REPAIR lane, and it
+carries the repo-native navigation, mechanical, static-inspection, test-generation, local validation and
+CI-diagnosis work of that same task. Claude Opus 5 is `SUPERSEDED_BY_OPUS_5_5`, Claude Sonnet
 5 is `NOT_IN_ACTIVE_COUNCIL`, Claude Opus 4.8 is `SUPERSEDED_BY_OPUS_5`, and Claude Fable 5 is
 `INACTIVE_EXPIRED_RETIRED`; none is a lane, fallback or dependency. Nothing here proves repository state,
-grants merge authority, or satisfies an independent or protected audit.
+grants merge authority, or satisfies an independent or protected audit — and this lane never becomes the
+controller, a governance authority, or an independent or protected auditor.
 
 ---
 
@@ -19,13 +23,17 @@ grants merge authority, or satisfies an independent or protected audit.
   `MODEL_EFFORT_REQUESTED`, `MODEL_EFFORT_ACTUAL`, `MODEL_FALLBACK`, `THINKING_ACTUAL`,
   `MODEL_IDENTITY_EVIDENCE` and `MODEL_EFFORT_EVIDENCE` from session evidence (runtime metadata, `/model`,
   `/status`, or an equivalent diagnostic). A selector, settings file, default, cache, request text or the bare
-  alias `opus` is not execution proof. `MODEL_ACTUAL` must positively be `claude-opus-5` and `THINKING_ACTUAL`
-  positively `ENABLED`; either one `UNKNOWN` stops. Only `MODEL_EFFORT_ACTUAL` may be `UNKNOWN` when the host
-  exposes no effort telemetry, and it is never restated from the request.
-- **Literal host label.** The Opus 5 host effort label is `xhighultracode`. It is recorded verbatim, never
-  decomposed, never mapped to an API effort enum, and never equated with `max` or with another model's label.
-- **Thinking.** Adaptive thinking stays enabled for implementation and repair. Control cost through scope and
-  context, never by suppressing reasoning.
+  alias `opus` is not execution proof. `MODEL_ACTUAL` must positively be `claude-opus-5-5` and
+  `THINKING_ACTUAL` positively `ENABLED`; either one `UNKNOWN` stops. Only `MODEL_EFFORT_ACTUAL` may be
+  `UNKNOWN` when the host exposes no effort telemetry, and it is never restated from the request.
+- **Literal host labels and effort choice.** Labels are recorded verbatim, never decomposed and never mapped to
+  an API effort enum. Request `xhigh` for ordinary complex semantic implementation and repair — that is the
+  default heavy coding lane — and `max` only for capability-critical implementation or the hardest
+  correctness-critical consolidated repair, on an explicitly named trigger. `max` is never the general default.
+  The retired Opus 5 literal `xhighultracode` belongs to that superseded lane and is never carried onto Opus
+  5.5.
+- **Thinking.** Thinking is always enabled on Opus 5.5, and `THINKING_ACTUAL` is still reported from runtime
+  evidence rather than assumed. Control cost through scope and context, never by suppressing reasoning.
 - **Stops.** A wrong or `UNKNOWN` model, `UNKNOWN` or disabled required thinking, or a known prohibited fallback
   is `STOP_WITH_PROOF` before mutation. A human may waive an effort mismatch for one task; the waiver and the
   true actual effort are both recorded.
@@ -34,9 +42,9 @@ grants merge authority, or satisfies an independent or protected audit.
 
 ---
 
-## 2. How to prompt Opus 5 for maximum value
+## 2. How to prompt Opus 5.5 for maximum value
 
-A strong Opus 5 prompt gives the complete semantic boundary up front and lets the model finish the loop. It
+A strong Opus 5.5 prompt gives the complete semantic boundary up front and lets the model finish the loop. It
 follows the section 24.6 serious prompt shape:
 
 1. **TASK_INTENT** — `IMPLEMENTATION` or `REPAIR`.
@@ -97,7 +105,7 @@ TASK_INTENT: IMPLEMENTATION
 SEMANTIC_BOUNDARY: <one coherent contract, closed as the largest safe semantic closure: dependency closure,
   negative cases, tests, docs/provenance genuinely required, validation>
 STATE_PIN: main @ <sha>; clean worktree; <n> open PRs; branch <name> absent
-MODEL_RUNTIME_PROOF: MODEL_REQUESTED Claude Opus 5 | MODEL_ID_REQUIRED claude-opus-5 |
+MODEL_RUNTIME_PROOF: MODEL_REQUESTED Claude Opus 5.5 | MODEL_ID_REQUIRED claude-opus-5-5 |
   MODEL_EFFORT_REQUESTED <literal host label> | MODEL_FALLBACK NONE | THINKING ENABLED |
   report MODEL_ACTUAL, MODEL_EFFORT_ACTUAL, THINKING_ACTUAL, MODEL_IDENTITY_EVIDENCE, MODEL_EFFORT_EVIDENCE
   before mutation; MODEL_ACTUAL or THINKING_ACTUAL UNKNOWN -> STOP_WITH_PROOF; MODEL_EFFORT_ACTUAL may be UNKNOWN

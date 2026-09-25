@@ -61,13 +61,13 @@ fallback, and the `SETUP_*` block.
 
 Selection follows `MODEL_EXPECTED_VALUE_PER_TOKEN_POLICY` (workflow §24.10) — lowest capable lane by
 expected value per token: Luna or Sonnet 5 `low` for mechanics → runtime-proven Sonnet 5 `medium` or Terra
-for bounded T2 work → Opus 5 (default) for broad/complex local T3 work → Sol only for qualifying protected
+for bounded T2 work → Opus 5.5 (default) for broad/complex local T3 work → Sol only for qualifying protected
 T4 on a narrow packet; non-Class-C read-only mapping/audit defaults to the ChatGPT read-only-first
 controller (`CONTROLLER_READONLY_FIRST_POLICY`). Effort is chosen per workflow §24.12: `xhigh` is the normal
-Opus 5 coding default, `max` only on an explicit T3B trigger, review at `medium`/`high`/`xhigh` by breadth.
-Sonnet 5 requires runtime proof of availability/identity before any routing (fallback = Terra bounded /
-Opus 5 broad, no equivalent-quality claim); use measured session/harness cost, never hard-coded price
-rankings. Claude mutation lanes require the exact model id (`claude-opus-5` / `claude-sonnet-5`) — an
+Opus 5.5 coding default, `max` only on an explicit T3B trigger, review at `medium`/`high`/`xhigh` by breadth.
+Claude Sonnet 5 is `NOT_IN_ACTIVE_COUNCIL` (§24.3) and is neither a lane nor a fallback, and no superseded
+Claude lane is one either; use measured session/harness cost, never hard-coded price
+rankings. The Claude mutation lane requires the exact model id (`claude-opus-5-5`) — an
 unresolved alias is not proof — plus session-level proof of the actual effort; if
 `EXACT_MODEL_REQUIRED=true`, requested/actual mismatch stops before mutation, and a human effort waiver is
 recorded with the TRUE actual value. Never claim unavailable-model quality. Model selection does not prove
@@ -110,7 +110,7 @@ UNKNOWN findings, and its refresh trigger. Research savings never outrank factua
 
 - Full-file reads where a symbol search answers the question; duplicate discovery already in the packet.
 - Sol/Opus status polling, implementer self-review, unavailable-model claims, unproven Sonnet 5 routing.
-- Routing everything to Opus 5, or every Opus task to `max`; `max` without a named T3B trigger.
+- Routing everything to Opus 5.5, or every Opus task to `max`; `max` without a named T3B trigger.
 - Generic re-verification loops ("double-check everything") in place of the deterministic gate ladder;
   rerunning a passed gate on an unchanged head; subagents for polling, routine commands or small patches.
 - Spending Codex on questions the connector already answered; broad Codex repo reads without justification.

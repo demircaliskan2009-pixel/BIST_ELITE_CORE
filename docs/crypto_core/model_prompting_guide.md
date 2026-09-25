@@ -8,8 +8,9 @@ Research protocol: `docs/crypto_core/deep_research_protocol.md`. On any conflict
 safety rule win. Nothing in this guide proves repository state or authorizes a merge.
 
 Active council (section 24.3): ChatGPT controller (read-only first, `CONTROLLER_READONLY_FIRST_POLICY`),
-Claude Opus 5 (`claude-opus-5`), Codex GPT-5.6 Sol, GPT-6 Astra, ChatGPT Work, Deep Research. Not routable:
-Claude Sonnet 5, Codex GPT-5.6 Terra and Codex GPT-5.6 Luna (`NOT_IN_ACTIVE_COUNCIL`); Claude Opus 4.8
+Claude Opus 5.5 (`claude-opus-5-5`), Codex GPT-5.6 Sol, GPT-6 Astra, ChatGPT Work, Deep Research. Not
+routable, and never an automatic fallback: Claude Sonnet 5, Codex GPT-5.6 Terra and Codex GPT-5.6 Luna
+(`NOT_IN_ACTIVE_COUNCIL`); Claude Opus 5 (`SUPERSEDED_BY_OPUS_5_5`); Claude Opus 4.8
 (`SUPERSEDED_BY_OPUS_5`); Claude Fable 5 (`INACTIVE_EXPIRED_RETIRED`); Copilot (`INACTIVE_UNAVAILABLE`).
 Copilot-era repository files are inactive compatibility material and never enter prompt construction.
 
@@ -76,11 +77,15 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 - **Rules:** controller-orchestrated, read-only, advisory, primary sources first with dates;
   REPO_EVIDENCE / EXTERNAL_EVIDENCE / INFERENCE / UNKNOWN kept separate; never a gate waiver.
 
-### 2.4 Claude Opus 5 — deep semantic implementation and repair
+### 2.4 Claude Opus 5.5 — deep semantic implementation and repair
 
 - **Best tasks:** complex semantic implementation, fail-closed artifact design, cross-module integration,
-  forensic debugging with long validation loops, and the single consolidated repair of a candidate.
-- **Rules:** host effort label recorded literally (`xhighultracode`); adaptive thinking enabled; runtime
+  forensic debugging with long validation loops, the `ROOT_CAUSE_ESCAPE` implementation and the single
+  consolidated repair of a candidate, together with the repo-native navigation, mechanical, static-inspection,
+  test-generation, local validation and CI-diagnosis work of that same task.
+- **Rules:** host effort label recorded literally — `xhigh` for ordinary complex implementation and repair,
+  `max` only on an explicitly named capability-critical or hardest-correctness-critical trigger and never as a
+  general default; thinking enabled and still proven from runtime evidence; runtime
   proof before mutation; one PR per semantic boundary; its self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`.
 - **Templates:** `opus5_prompting_playbook.md` section 3.
 
@@ -127,7 +132,7 @@ OUTPUT: the COMPLETE current material P1/P2 set in one pass, each with invariant
 ```
 
 ```text
-TASK_INTENT: REPAIR (the ONE consolidated repair) — Claude Opus 5
+TASK_INTENT: REPAIR (the ONE consolidated repair) — Claude Opus 5.5
 BLOCKER_INVENTORY: <the complete audited P1/P2 set, verbatim, with identities>
 SEMANTIC_BOUNDARY: repair the complete set by root cause in one change on the same branch; no new scope
 STOP_CONDITIONS: a blocker cannot be reproduced; the repair needs files or authority outside the prompt
