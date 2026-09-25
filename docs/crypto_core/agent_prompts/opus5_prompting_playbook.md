@@ -1,7 +1,8 @@
 # Claude Opus 5.5 Prompting Playbook (crypto_core, v4 — Opus 5.5 lane edition)
 
 How to prompt the one active Claude lane under `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by
-`ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1` and `CLAUDE_OPUS_5_5_CONTROL_PLANE_UPGRADE_V1`. The file name is kept
+`ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`, `CLAUDE_OPUS_5_5_CONTROL_PLANE_UPGRADE_V1` and
+`CODEX_QUOTA_RESILIENCE_V1`. The file name is kept
 for path stability; the active lane is the one named below. Authority:
 `docs/crypto_core/agent_workflow.md` section 24 — council 24.3, audit 24.4, prompt shape 24.6, lifecycle and
 budget 24.8, runtime proof 24.12. This playbook never overrides it; on any conflict, section 24 and the
@@ -9,7 +10,9 @@ stricter safety rule win.
 
 **Claude Opus 5.5** (`claude-opus-5-5`) is the primary deep semantic IMPLEMENTATION and REPAIR lane, and it
 carries the repo-native navigation, mechanical, static-inspection, test-generation, local validation and
-CI-diagnosis work of that same task. Claude Opus 5 is `SUPERSEDED_BY_OPUS_5_5`, Claude Sonnet
+CI-diagnosis work of that same task — work Codex GPT-5.6 Sol, now `SOL_RESERVE_ONLY`, no longer takes by
+default. It also runs the optional fresh READ_ONLY `OPUS55_FRESH_READONLY_CHALLENGE` (template 3.3), which is
+challenge evidence only. Claude Opus 5 is `SUPERSEDED_BY_OPUS_5_5`, Claude Sonnet
 5 is `NOT_IN_ACTIVE_COUNCIL`, Claude Opus 4.8 is `SUPERSEDED_BY_OPUS_5`, and Claude Fable 5 is
 `INACTIVE_EXPIRED_RETIRED`; none is a lane, fallback or dependency. Nothing here proves repository state,
 grants merge authority, or satisfies an independent or protected audit — and this lane never becomes the
@@ -86,9 +89,12 @@ follows the section 24.6 serious prompt shape:
 - **Subagents:** default 0; at most 2 read-only subagents for genuinely independent, substantial,
   parallelizable investigation; only one agent mutates a branch, and the primary agent validates every
   subagent conclusion.
-- **Independence:** a same-model self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`; the independent audit is
-  GPT-6 Astra as PRIMARY, which for protected work is also the protected audit (section 24.4); Codex GPT-5.6 Sol
-  and then the ChatGPT controller are recorded fallbacks for non-protected work only.
+- **Independence:** a same-model self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`, and an Opus 5.5 challenge of
+  Opus 5.5 work is `SELF_AUDIT_OR_SAME_MODEL_CHALLENGE_NOT_INDEPENDENT`; neither accepts. Acceptance is the ChatGPT
+  controller's for non-protected candidates (`CONTROLLER_INDEPENDENT_AUDIT_NONPROTECTED`) and GPT-6 Astra's alone
+  for protected ones (section 24.4); Codex GPT-5.6 Sol is a recorded reserve only.
+- **Manual work:** never ask the human to run a command or fetch a fact the session can obtain itself
+  (`USER_MANUAL_WORK_MINIMIZATION`, section 24.10).
 
 ---
 
@@ -144,7 +150,30 @@ GITHUB_AUTHORIZATION: one normal same-branch commit and push AUTHORIZED; new PR 
 STOP_CONDITIONS: a blocker cannot be reproduced; the repair needs files or authority outside the prompt; the
   finding disputes accepted design; head moved
 HANDOFF: AGENT_OS_HANDOFF_V1 with before/after evidence per blocker; MEANINGFUL_PROMPT_COUNT_THIS_PR: 3;
-  next = the ONE whole-contract re-audit
+  next = the ONE whole-contract re-audit (for protected work after the controller preflight again)
+```
+
+### 3.3 `OPUS55_FRESH_READONLY_CHALLENGE`
+
+Use only when the controller routes it (section 24.4): for a broad or high-risk non-protected candidate, before a
+GPT-6 Astra dispatch when it lowers the risk of wasting that audit, or after the consolidated repair before the
+re-audit. At most two per lifecycle (`CHALLENGE_BUDGET`, section 24.8); it fills no specialist slot and never
+accepts.
+
+```text
+TASK_INTENT: CHALLENGE (OPUS55_FRESH_READONLY_CHALLENGE; fresh context; READ_ONLY)
+SEMANTIC_BOUNDARY: the declared contract of PR #<n>; judge it, do not expand it (FINITE_AUDIT_RULE)
+STATE_PIN: PR #<n> head <sha>, base <sha>; protected classification <trigger letters | NONE>;
+  CHALLENGE_COUNT_THIS_PR: <1|2>
+MODEL_RUNTIME_PROOF: <as 3.1>
+FOCUS: <deep semantic bugs | adversarial cases | accounting/numeric | dependency tracing | test gaps |
+  protected-boundary preflight>
+READ_SET: <pinned diff, changed files, load-bearing dependencies>; no broad rediscovery the controller proved
+OUTPUT: every material P1/P2 found, each with invariant, file:line evidence, supported entry/consumer path, effect,
+  materiality and minimum regression proof; P3 separately; CHALLENGE_EVIDENCE_ONLY — no acceptance verdict;
+  SELF_AUDIT_OR_SAME_MODEL_CHALLENGE_NOT_INDEPENDENT when Opus 5.5 implemented or repaired the candidate
+FORBIDDEN: any file, git or GitHub mutation; running the one consolidated repair; resolving threads; merge
+HANDOFF: AGENT_OS_HANDOFF_V1 with the challenge count and one next safe action (controller adjudication)
 ```
 
 ---
@@ -177,12 +206,14 @@ evidence invalidated it.
 This playbook changes prompt construction only. It does not weaken any gate: one repository writer and one
 open PR at a time; no direct `main` push; standard merge only; no self-approval and no auto-merge; explicit
 per-PR, exact-head human merge authorization; pending CI is `NOT_READY`; current valid material P1/P2 threads
-block; protected work always gets the GPT-6 Astra audit, which no Claude lane, Sol review, controller review or
-self-review satisfies; post-merge verification precedes the next action; crypto_core scope only — no BIST, live or private
-API, credentials, orders, scheduler/auto-loop, shadow/live execution, or capital mutation.
+block; protected work always gets the GPT-6 Astra audit, which no Claude lane, Opus challenge, Sol review,
+controller review or self-review satisfies; post-merge verification precedes the next action; crypto_core scope
+only — no BIST, live or private API, credentials, orders, scheduler/auto-loop, shadow/live execution, or capital
+mutation.
 
 **Temporary availability is never durable routing.** Model quota, rate limits or short-term unavailability are
-transient operational facts: record them in the controller handoff for that one task, where a GPT-6 Astra
-outage may justify the section 24.4 non-protected audit fallback for that task only. Never write a temporary
+transient operational facts: record them in the controller handoff for that one task. Never write a temporary
 availability state into this playbook or into `agent_workflow.md`, and never infer from a quota event that a
-lane has been retired. When GPT-6 Astra is unavailable, the protected gate waits.
+lane has been retired. Non-protected acceptance never depends on GPT-6 Astra; when Astra is unavailable or
+quota-blocked, the stabilized protected head freezes, the protected gate waits, and only permitted read-only
+preparation continues (`ASTRA_QUOTA_BLOCKED_FREEZE`, section 24.4).

@@ -20,7 +20,7 @@ The build is broad and mature; the dominant risks are **artifact proliferation v
 **PRD/roadmap drift**, and **stale external assumptions**. Deep Research is the high-leverage tool for
 current / external / high-stakes facts that are not provable from the repo, and — paired with the GitHub
 connector — for combined repo+external architecture review that keeps PR sequencing honest against a top-1
-external standard. It is never a substitute for local proof, Class-C Codex audit, the connector
+external standard. It is never a substitute for local proof, the section 24.4 acceptance audit, the connector
 source-of-truth gate, or explicit human merge authorization.
 
 ## 2. Controller orchestration (who runs research, and how)
@@ -52,7 +52,7 @@ research on backtest risk, safe execution, agentic trading.
 **Do NOT use Deep Research for (repo-native or controller-owned):** local repo state (git/`gh`/connector);
 PR state; CI polling; review threads; branch hygiene; Ruff/pytest failures; ordinary local implementation
 or repair; already-documented internal doctrine; internal deterministic module contracts with no external
-fact; replacing Class-C Codex audit, the connector final gate, tests/CI, or post-merge verification.
+fact; replacing the section 24.4 acceptance audit, the connector final gate, tests/CI, or post-merge verification.
 
 ## 4. XR submodes
 
@@ -199,7 +199,7 @@ authorization through the normal Agent OS chain.
 
 Deep Research must never: mutate repo or GitHub state (no branch/file/commit/push/PR-open/PR-close/comment/
 review/thread-resolve/workflow-rerun/merge/auto-merge — even when the underlying work is authorized);
-justify skipping tests/CI/audit; replace the connector final gate, Class-C Codex audit, tests/CI, or local
+justify skipping tests/CI/audit; replace the connector final gate, the section 24.4 acceptance audit, tests/CI, or local
 post-merge verification; authorize live/private API/order routing or any forbidden surface; weaken a
 fail-closed gate; replace explicit per-PR merge authorization; produce broad PRD rewrites unless the
 controller explicitly asks; or claim readiness/live/order/capital authority. It may recommend a mutation

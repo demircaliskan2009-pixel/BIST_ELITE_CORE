@@ -15,8 +15,8 @@
 
 This file is the entrypoint and holds the durable rails. The single canonical active workflow authority is
 `docs/crypto_core/agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`), whose active content is
-`MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`. The host
-adapters (`CLAUDE.md`,
+`MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1` and
+`CODEX_QUOTA_RESILIENCE_V1`. The host adapters (`CLAUDE.md`,
 `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`, `.codex/skills/crypto-core-max-safe/SKILL.md`)
 and the prompting guides (`docs/crypto_core/model_prompting_guide.md`,
 `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`) apply section 24 and never restate it as
@@ -34,23 +34,31 @@ genuinely cannot reconstruct material operational state.
 ### Active model/tool council (section 24.3)
 
 - **ChatGPT controller** — controller and router, architecture adjudication, prompt compiler, evidence
-  judge, live GitHub verification (connector/`gh`), contradiction detection, merge-readiness judgement, and
-  exactly one next action; read-only first (`CONTROLLER_READONLY_FIRST_POLICY`, section 24.10). Never product
-  implementation, never merge authority, never a protected audit, and never an independent audit except as the
-  last-resort non-protected fallback of section 24.4 on a candidate it neither implemented nor repaired.
+  judge, live GitHub verification (connector/`gh`), contradiction detection, protected classification,
+  merge-readiness judgement, and exactly one next action; read-only first, doing the maximum useful read-only
+  work before any specialist quota is spent (`CONTROLLER_READONLY_FIRST_POLICY`, section 24.10). The DEFAULT
+  independent acceptance auditor of NON-PROTECTED candidates (`CONTROLLER_INDEPENDENT_AUDIT_NONPROTECTED`,
+  section 24.4) on a candidate it neither implemented nor repaired, and the compiler of the
+  `PROTECTED_AUDIT_PACKET_V1` for protected ones. Never product implementation, never merge authority, and never
+  a protected audit or protected acceptance.
 - **Claude Opus 5.5** (`claude-opus-5-5`) — primary deep semantic IMPLEMENTATION and REPAIR, including the one
   consolidated repair, the `ROOT_CAUSE_ESCAPE` implementation and the repo-native engineering, test and
-  validation work of that same task. Never an independent or protected auditor, controller, governance or
-  merge authority.
-- **Codex GPT-5.6 Sol** — primary repo-native engineering accelerator (repo navigation, code search,
-  dependency tracing, static inspection, clear-spec implementation when specifically routed, mechanical
-  refactor, test generation, debugging, CI analysis, large-codebase inspection) and the bounded first audit
-  fallback for NON-PROTECTED candidates only (section 24.4). Sol never satisfies a protected audit.
-- **GPT-6 Astra** — the PRIMARY independent auditor (`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1`, default effort
-  `Ultra`): fresh-context, exact-head, READ_ONLY, runtime-proven, exhaustive and materiality-aware; for protected
-  work the same audit is the sole protected T4 `CLASS_C_CROSS_CONTRACT` audit. Astra never implements or repairs
-  and never audits work it implemented or repaired. Astra unavailability never reassigns protected T4; that gate
-  waits.
+  validation work of that same task; also the optional fresh READ_ONLY `OPUS55_FRESH_READONLY_CHALLENGE`, which
+  is challenge evidence only (section 24.4). Never accepts a candidate; never an independent or protected
+  auditor, controller, governance or merge authority.
+- **Codex GPT-5.6 Sol** — `SOL_RESERVE_ONLY` (section 24.3): not the default auditor, navigator, status or
+  review lane, never dispatched when the controller's connector or read-only capabilities can do the work or
+  Claude Opus 5.5 can absorb it into the same implementation or repair task, and dispatched only when the
+  controller records a specific remaining capability gap that doctrine permits. Sol never satisfies a protected
+  audit.
+- **GPT-6 Astra** — the SOLE protected auditor (`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1`; `gpt-6-astra`, effort
+  `Ultra`, fallback prohibited, thinking enabled): fresh-context, exact-head, READ_ONLY, runtime-proven,
+  exhaustive over the protected cross-contract boundary and materiality-aware, and the protected T4
+  `CLASS_C_CROSS_CONTRACT` audit and terminal decision. Dispatched ONLY for a candidate with at least one trigger
+  of the finite `ASTRA_PROTECTED_TRIGGER_MATRIX_V1` (section 24.4), never merely because a PR is serious, and only
+  on a stabilized head with a controller-compiled packet. Astra never implements or repairs and never audits
+  work it implemented or repaired. When Astra is unavailable or quota-blocked the protected head freezes and that
+  gate waits; nothing reassigns it.
 - **ChatGPT Work** — substantial multi-step execution when a cloud browser/computer, many files, apps or
   evidence collection materially help. Never governance authority.
 - **Deep Research** — current load-bearing external facts only; read-only and advisory.
@@ -85,28 +93,36 @@ post-merge verification.
   authorization, a protected boundary that cannot be audited together, inability to validate the whole
   result, or a real context/correctness risk.
 - Prompt budget per PR lifecycle (section 24.8): the fewest specialist prompts needed — target **2** for a
-  clean candidate (implementation → independent audit) and **4** for a repaired one (implementation → audit →
+  clean candidate (implementation → acceptance audit) and **4** for a repaired one (implementation → audit →
   one consolidated repair → one whole-contract re-audit); **5** is the hard emergency ceiling and there is no
-  specialist sixth. A specialist prompt is an implementation, independent audit, repair or whole-contract
-  re-audit. Controller governance — state proof, CI/status reads, evidence adjudication,
-  merge-readiness judgement, the human authorization request, an authorized mechanical merge, post-merge
-  verification and fresh-chat acceptance — consumes none, and specialist work never hides inside it.
-- Every candidate gets one exhaustive independent audit that returns the COMPLETE current material P1/P2 set in
-  one pass (`COMPLETE_BLOCKER_COLLECTION`, section 24.4), by GPT-6 Astra as PRIMARY, with independence eligibility
-  decided before availability. For protected work and control-plane changes that one Astra audit is also the
-  protected Class-C and terminal audit, and protected work waits for Astra. For non-protected work only, a recorded
-  Astra unavailability, quota block or runtime-proof stop, or an explicit controller selection, routes the audit to
-  Codex GPT-5.6 Sol, and when Sol cannot legally audit, to the ChatGPT controller as the last resort — each only
-  when it neither implemented nor repaired the candidate (ChatGPT Work's work counts as the controller's own). With
-  no independent eligible reviewer, stop with proof. No model audits its own work.
+  specialist sixth. A specialist prompt is an implementation, acceptance audit, repair or whole-contract
+  re-audit; the controller's non-protected audit fills an audit slot. A clean non-protected candidate targets one
+  Opus 5.5 implementation plus the controller audit, with zero Codex or Astra executions. At most two Opus 5.5
+  read-only challenges per lifecycle (`CHALLENGE_BUDGET`) deliver no verdict and leave the five-slot budget
+  unchanged. Controller governance — state proof, CI/status reads, evidence adjudication, protected
+  classification, the preflight review and protected packet, merge-readiness judgement, the human authorization
+  request, an authorized mechanical merge, post-merge verification and fresh-chat acceptance — consumes none, and
+  specialist work never hides inside it.
+- Every candidate gets one exhaustive acceptance audit that returns the COMPLETE current material P1/P2 set in
+  one pass (`COMPLETE_BLOCKER_COLLECTION`, section 24.4), with independence eligibility decided before
+  availability. The lane follows the finite `ASTRA_PROTECTED_TRIGGER_MATRIX_V1` (A-G; ambiguity classified
+  upward). NON-PROTECTED: the ChatGPT controller audits (`CONTROLLER_INDEPENDENT_AUDIT_NONPROTECTED`); when it is
+  ineligible because it or ChatGPT Work implemented or repaired the candidate, Codex GPT-5.6 Sol audits as a
+  recorded `SOL_RESERVE_ONLY` gap; no Astra. PROTECTED, including control-plane changes: the controller
+  preflights and compiles `PROTECTED_AUDIT_PACKET_V1`, an Opus 5.5 challenge runs when it lowers the risk of
+  wasting Astra, and then ONE GPT-6 Astra `Ultra` audit on the stabilized head is the protected Class-C and
+  terminal audit; protected work waits for Astra. With no independent eligible reviewer, stop with proof. No
+  model audits or accepts its own work, and an Opus challenge never accepts.
 - `AUDIT_MATERIALITY_BOUNDARY_V1` and `FINITE_AUDIT_RULE` (section 24.4): a P1/P2 blocks only with demonstrated
   material relevance on a supported path inside the declared contract; theoretical hardening reachable only
   through bypassed construction, private-helper misuse or impossible states is P3; materiality never downgrades a
   supported-path defect; P3 never blocks merge.
 - At most ONE consolidated repair per candidate lifecycle — the complete blocker set, by root cause — then
-  exactly ONE whole-contract re-audit (GPT-6 Astra for protected work). `FIXED_POINT_STOP`: any genuine material
-  P1/P2 that remains after it rejects and freezes the candidate, after controller severity adjudication; no
-  further mutation on it. P3 never triggers it.
+  exactly ONE whole-contract re-audit by the same acceptance lane (GPT-6 Astra for protected work). For protected
+  work, a material P1/P2 the controller confirms before any Astra dispatch opens that one repair, and Astra's one
+  audit of the repaired head is then the whole-contract re-audit. `FIXED_POINT_STOP`: any genuine material P1/P2
+  that remains after it rejects and freezes the candidate, after controller severity adjudication; no further
+  mutation on it. P3 never triggers it.
 - `ROOT_CAUSE_ESCAPE`: a later attempt needs a new explicit ChatGPT controller `TASK_INTENT=ARCHITECTURE`
   decision that inherits blocker identity, changes the architecture or boundary, and starts from accepted
   main. There is no automatic replacement chain. A blocker keeps its identity across rewording, renames,
@@ -114,10 +130,11 @@ post-merge verification.
 - `CONTROL_PLANE_CLAIM_MINIMIZATION` (section 24.13): the setup enforces only what the crypto_core
   development workflow materially needs, and adds no validator, registry, filesystem or host-discovery layer,
   schema, dependency or process merely because it could be modelled.
-- `SETUP_FREEZE` (section 24.14): once the kernel and its `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1` amendment are
-  each independently accepted under the plane that governed them, merged, post-merge verified and fresh-chat
-  accepted, `SETUP_STATUS=CLOSED_FROZEN`; the amendment grants its own introducing change no exemption, and while that change is under acceptance
-  audit its auditors apply section 24 and the adapters of its base, not its own text. The setup then reopens only for a real safety defect,
+- `SETUP_FREEZE` (section 24.14): once the kernel and its amendments (`ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`,
+  `CODEX_QUOTA_RESILIENCE_V1`) are each independently accepted under the plane that governed them, merged,
+  post-merge verified and fresh-chat accepted, `SETUP_STATUS=CLOSED_FROZEN`; an amendment grants its own
+  introducing change no exemption, and while that change is under acceptance audit its auditors apply section 24
+  and the adapters of its base, not its own text. The setup then reopens only for a real safety defect,
   broken continuity, a material capability change, or measured repeated-work reduction, and the default next
   action is product work.
 
@@ -126,7 +143,8 @@ post-merge verification.
 Controller-mediated and sequential: no autonomous scheduler, no auto-loop, no direct model-to-model runtime
 messaging, one repository writer at a time, one open PR, no concurrent patching. Chain: state proof → serious
 prompt (`SERIOUS_PROMPT_COMPILER`, section 24.6) → one implementer → handoff → controller verification →
-exhaustive independent audit (GPT-6 Astra; for protected work also the protected audit) → at most one
+optional Opus 5.5 read-only challenge → exhaustive acceptance audit (the controller for non-protected work; for
+protected work the controller preflight and packet, then GPT-6 Astra as the protected audit) → at most one
 consolidated repair and one whole-contract re-audit → exact-head CI terminal green → controller live-state proof → explicit human
 exact-head merge authorization → standard merge → post-merge verify → next action. All reports move as
 `AGENT_OS_HANDOFF_V1` packets (section 24.6); reports are claims until controller-verified
@@ -195,8 +213,13 @@ a rule. Unresolved load-bearing disputes stay `UNKNOWN` and block merge.
 - Token saving never outranks correctness, proof, or safety gates; research economy never outranks factual
   accuracy. `docs/crypto_core/token_efficiency_playbook.md` is a companion procedure doc without authority.
 - Controller preprocessing first: the ChatGPT controller prepares pinned evidence and the exact serious
-  prompt so executors do not repeat broad discovery. Use the council lane the controller routes and report
-  the actual model and effort.
+  prompt so executors do not repeat broad discovery, and a GPT-6 Astra packet never carries chat-history
+  recovery or re-requests discovery already proven. Use the council lane the controller routes and report the
+  actual model and effort.
+- `USER_MANUAL_WORK_MINIMIZATION` (section 24.10): the human is never asked to run a terminal command for
+  convenience when the controller's connector or the routed agent can do it; human manual work is reserved for
+  explicit protected approvals, merge authorization, production/capital/security authority, and facts or
+  actions genuinely unavailable to the connected tools and agents.
 - Avoid broad scans, full log dumps, repeated doctrine, and status polling with expensive model tokens.
 - Stable procedure text lives in workflow docs/skills; prompts carry task deltas, exact scope, validation,
   stops, and report fields.
