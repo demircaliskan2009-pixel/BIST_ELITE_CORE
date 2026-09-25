@@ -89,7 +89,8 @@ cause, same branch; never a second repair, never on a frozen candidate. Template
 
 `LANE:OPUS55_READONLY_CHALLENGE` - `OPUS55_FRESH_READONLY_CHALLENGE`: fresh context, READ_ONLY, focused semantic
 bug finding / adversarial cases / numeric review / dependency tracing / test gaps / protected-boundary preflight;
-`CHALLENGE_EVIDENCE_ONLY`, never acceptance; at most two per lifecycle. Template: playbook 3.3.
+`CHALLENGE_EVIDENCE_ONLY`, never acceptance; a meaningful prompt inside the same hard 5, at most two per
+lifecycle, only when the budget has room, default none. Template: playbook 3.3.
 
 `LANE:ASTRA_PROTECTED_AUDIT` - GPT-6 Astra (`gpt-6-astra`, `Ultra`, fallback prohibited, thinking enabled) on a
 `PROTECTED_AUDIT_PACKET_V1` only: the complete protected cross-contract boundary, every fact protected acceptance

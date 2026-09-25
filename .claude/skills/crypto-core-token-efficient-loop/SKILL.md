@@ -30,7 +30,8 @@ saving is subordinate to correctness; no gate may be skipped to save tokens. Ope
 4. Read the named set; use symbol search before full files; build one source surface map.
 5. Close the whole semantic boundary as the largest safe semantic closure (§24.8) inside the allowed files,
    preserving paper-only, fail-closed and digest-boundary rules. A repair is the single consolidated repair:
-   the complete audited P1/P2 set, by root cause, in one change.
+   the complete controller-confirmed P1/P2 set of its `REPAIR_ENTRY_MODE` (acceptance audit, or a protected
+   preflight before any Astra dispatch — §24.8), by root cause, in one change.
 6. Validate one command at a time: scoped Ruff/format, targeted tests, logged full suite when code changed,
    `git diff --check`, exact changed-file proof.
 7. Publish with scoped `git add`, one commit, one PR, and natural CI to a terminal state. Pending is
@@ -51,8 +52,9 @@ saving is subordinate to correctness; no gate may be skipped to save tokens. Ope
   `SUPERSEDED_BY_OPUS_5_5` and Claude Opus 4.8 is `SUPERSEDED_BY_OPUS_5`, neither an automatic fallback;
   Copilot is `INACTIVE_UNAVAILABLE`.
 - Budget (§24.8): the fewest specialist prompts — target 2 clean, 4 repaired, hard maximum 5, no specialist
-  sixth; controller governance closeout consumes none; at most two read-only challenges per lifecycle
-  (`CHALLENGE_BUDGET`), outside the five slots. One exhaustive acceptance audit, at most one consolidated repair,
+  sixth; controller governance closeout consumes none; a read-only challenge is a meaningful prompt inside the
+  same hard 5 (at most two, only when the budget has room — `CHALLENGE_BUDGET`); report the actual count, never a
+  fixed number. One exhaustive acceptance audit, at most one consolidated repair,
   one whole-contract re-audit. Any genuine material P1/P2 after that → `FIXED_POINT_STOP`; P3 never blocks; no
   mutation of a rejected or frozen candidate, including a protected head frozen while GPT-6 Astra is unavailable.
 - No Claude session accepts a candidate or satisfies an acceptance or protected audit. A challenge run is

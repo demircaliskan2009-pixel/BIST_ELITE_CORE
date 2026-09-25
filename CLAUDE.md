@@ -30,8 +30,9 @@ fail-closed, audit-first, governance-first — never a generic coding assistant.
 - The controller may route a Claude Opus 5.5 session an `OPUS55_FRESH_READONLY_CHALLENGE` (section 24.4): fresh
   context, READ_ONLY with zero file, git or GitHub mutation, runtime-proven, and returning every material P1/P2 it
   can find with evidence as `CHALLENGE_EVIDENCE_ONLY` — never an acceptance verdict. When Opus 5.5 implemented
-  or repaired the candidate the challenge is also `SELF_AUDIT_OR_SAME_MODEL_CHALLENGE_NOT_INDEPENDENT`. At most
-  two per lifecycle (`CHALLENGE_BUDGET`, section 24.8).
+  or repaired the candidate the challenge is also `SELF_AUDIT_OR_SAME_MODEL_CHALLENGE_NOT_INDEPENDENT`. Each
+  challenge is a meaningful prompt inside the same hard maximum of 5; at most two per lifecycle, and only when the
+  budget has room (`CHALLENGE_BUDGET`, section 24.8).
 - The ChatGPT controller routes, compiles the prompt, judges evidence and owns accepted state
   (`CONTROLLER_READONLY_FIRST_POLICY`, section 24.10). Copilot is `INACTIVE_UNAVAILABLE`.
 
@@ -86,8 +87,9 @@ safe work: git state, clean tree, branch, and test results.
 - One implementation prompt does the whole arc (precheck → reads → patch → targeted + logged-full validation
   → scoped commit → push → one PR → natural CI to terminal → handoff), then stops at the audit gate. Never
   merge; never start the next feature; never combine unrelated slices; never mix setup and product.
-- A repair is the single consolidated repair of the candidate: the COMPLETE audit blocker set, by root cause,
-  in one change. No finding-by-finding repair, no second repair, and no mutation of a candidate under
+- A repair is the single consolidated repair of the candidate: the COMPLETE controller-confirmed blocker set of its
+  `REPAIR_ENTRY_MODE` (the acceptance audit's set, or a protected preflight's set before any Astra dispatch —
+  section 24.8), by root cause, in one change. No finding-by-finding repair, no second repair, and no mutation of a candidate under
   `FIXED_POINT_STOP`; a rejected candidate is re-attempted only through `ROOT_CAUSE_ESCAPE`.
 - `CONTROL_PLANE_CLAIM_MINIMIZATION` (section 24.13): add no validator, registry, filesystem or
   host-discovery layer, schema, dependency or process that the task's declared contract does not require.

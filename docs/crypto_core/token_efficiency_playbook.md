@@ -77,8 +77,9 @@ head and waits; it never reroutes protected acceptance.
 
 ## 7. Prompt-count budgets
 
-Section 24.8 alone: target 2 specialist prompts clean and 4 repaired, hard maximum 5, no sixth; at most two
-read-only Opus challenges per lifecycle outside the five slots. Never split coherent work into micro-prompts
+Section 24.8 alone: target 2 specialist prompts clean and 4 repaired, hard maximum 5, no sixth; an optional
+read-only Opus challenge counts inside the same hard 5 (at most two, only when the budget has room, default none).
+Never split coherent work into micro-prompts
 unless a stop condition fires; never combine implementation with its own audit, merge with next feature,
 research with mutation, or two PRs/implementers.
 

@@ -95,8 +95,10 @@ The lifecycle, prompt budget and fixed-point stop are section 24.8. The sequence
    GPT-6 Astra (`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1`), on a controller-compiled `PROTECTED_AUDIT_PACKET_V1` after
    the controller preflight and an optional Claude Opus 5.5 read-only challenge, for a protected or control-plane
    candidate.
-4. If it found material P1/P2: at most ONE consolidated repair (§6) on the same branch, then exactly ONE
-   whole-contract re-audit to the same standard. Any genuine material P1/P2 left → `FIXED_POINT_STOP`: the
+4. If it found material P1/P2 — or, for protected work, the controller preflight confirmed a complete material
+   P1/P2 set before any Astra dispatch (section 24.8 entry modes) — at most ONE consolidated repair (§6) on the
+   same branch, then exactly ONE whole-contract re-audit to the same standard (on the preflight path, the one
+   Astra audit). Any genuine material P1/P2 left → `FIXED_POINT_STOP`: the
    candidate is rejected and frozen. P3 never blocks merge.
 5. Controller governance closeout, outside the specialist prompt budget (section 24.8): the controller verifies
    live state; the human gives exact-head merge authorization; the **Closeout/Merge Loop** (§7) runs only from
@@ -136,8 +138,9 @@ commit (on the topic branch) → push (the topic branch) → `gh pr create --bas
 ## 6. Consolidated Repair Loop
 
 - This is the single consolidated repair of the candidate lifecycle (section 24.8): it repairs the COMPLETE
-  audit blocker set by root cause in one change — never finding-by-finding, never a second repair, never on a
-  rejected or frozen candidate.
+  controller-confirmed blocker set of its entry mode (`ACCEPTANCE_AUDIT_CONFIRMED_BLOCKER_SET` or
+  `PROTECTED_CONTROLLER_PREFLIGHT_CONFIRMED_BLOCKER_SET`) by root cause in one change — never finding-by-finding,
+  never a second repair, never on a rejected or frozen candidate.
 - Precheck first (branch + `HEAD == expected SHA` + clean tree + exactly one open PR + changed files ⊆ scope).
 - Pin PR number and expected head; repair **only the named blockers**, **same branch only**, bounded to named files.
 - **Test-only by default**; touch production only if a **new failing test proves a real defect**, and only inside the named module. If test-only, prove `git diff <prev> HEAD -- src/` is **empty**.
@@ -809,8 +812,9 @@ any of them is a `MATERIAL_CAPABILITY_CHANGE` (24.13).
   It returns every material P1/P2 it can find with evidence (`COMPLETE_BLOCKER_COLLECTION`) as
   `CHALLENGE_EVIDENCE_ONLY`: the controller adjudicates its findings; it never accepts a candidate, never
   satisfies an acceptance or protected audit, never mutates, and never opens a repair by itself. When Claude Opus
-  5.5 implemented or repaired the candidate it is also `SELF_AUDIT_OR_SAME_MODEL_CHALLENGE_NOT_INDEPENDENT`. Its
-  count is bounded by `CHALLENGE_BUDGET` (24.8).
+  5.5 implemented or repaired the candidate it is also `SELF_AUDIT_OR_SAME_MODEL_CHALLENGE_NOT_INDEPENDENT`. Each
+  substantive challenge is a meaningful prompt inside the same hard maximum of 5, dispatched only when that budget
+  has room for it (`CHALLENGE_BUDGET`, 24.8).
 - `CONTROLLER_PREFLIGHT_REVIEW` — before any GPT-6 Astra dispatch, the controller reviews the protected candidate
   read-only to the coverage of `CONTROLLER_INDEPENDENT_AUDIT_NONPROTECTED`, so that Astra is never spent on
   discovery the controller can do. It delivers no acceptance verdict. When it, together with any Opus challenge,
@@ -949,8 +953,9 @@ for small PRs. Split only for: unrelated contracts; different authorization; a p
 be audited together; inability to validate the whole result; or a real context/correctness risk.
 
 `MEANINGFUL_PROMPT` — a SPECIALIST execution that materially implements, delivers an acceptance audit verdict,
-repairs, or re-audits the whole contract (24.4). Only specialist executions consume the
-prompt budget. An execution that stops on runtime proof (24.12) before any substantive work consumed no slot; an
+repairs, re-audits the whole contract, or runs a substantive `OPUS55_FRESH_READONLY_CHALLENGE` (24.4). Only
+specialist executions consume the prompt budget, and all of them consume the SAME budget: there is no separate
+execution pool. An execution that stops on runtime proof (24.12) before any substantive work consumed no slot; an
 execution that did substantive work consumed its slot whatever its verdict. No relabelling, splitting or
 re-routing resets the count.
 
@@ -959,7 +964,7 @@ status and check reads; adjudication of executor and auditor evidence; contradic
 classification, the `CONTROLLER_PREFLIGHT_REVIEW` and compilation of `PROTECTED_AUDIT_PACKET_V1` (24.4), none of
 which delivers an acceptance verdict; merge-readiness judgement; asking the human for exact-head merge
 authorization; an authorized mechanical merge; post-merge verification; and fresh-chat acceptance. A governance
-operation never contains or dispatches an implementation, repair or audit execution, and specialist work
+operation never contains or dispatches an implementation, repair, audit or challenge execution, and specialist work
 relabelled as "controller closeout" is still specialist work that counts. An acceptance audit or re-audit by the
 controller (`CONTROLLER_INDEPENDENT_AUDIT_NONPROTECTED`) or by a `SOL_RESERVE_ONLY` substitute (24.4) is
 specialist work: it fills, and consumes, an audit slot.
@@ -968,41 +973,57 @@ specialist work: it fills, and consumes, an audit slot.
 per PR lifecycle, an emergency ceiling only, and there is no specialist prompt 6. No meaningless prompt is ever
 created to reach a count.
 
+Slots are numbered in the order the executions actually run; the controller governance operations in between
+(including the controller preflight of a protected candidate) consume none.
+
 - Clean non-protected: 1 `IMPLEMENTATION` (Claude Opus 5.5) → 2 `CONTROLLER_INDEPENDENT_AUDIT_NONPROTECTED` →
-  controller governance closeout. Target: **2** specialist prompts and zero Codex or Astra executions; for a
-  higher semantic risk, one Opus challenge before the audit.
-- Clean protected: 1 `IMPLEMENTATION` → an Opus challenge when useful → controller preflight and packet → 2 the
-  one compact GPT-6 Astra `Ultra` protected audit → controller governance closeout. Target: **2** specialist
-  prompts.
-- Repaired: 1 `IMPLEMENTATION` → 2 acceptance audit (the complete material P1/P2 set; 24.4 chooses the lane) → 3
-  `ONE_CONSOLIDATED_REPAIR` → for protected work, the controller preflight again with an Opus challenge when
-  useful → 4 `ONE_WHOLE_CONTRACT_REAUDIT` (the same acceptance lane) → controller governance closeout. Target:
-  **4** specialist prompts.
-- Protected, stabilized before Astra: 1 `IMPLEMENTATION` → the controller preflight (with any Opus challenge)
-  confirms a material P1/P2 set → 2 `ONE_CONSOLIDATED_REPAIR` → preflight again → 3 the one GPT-6 Astra audit,
-  which is the candidate's whole-contract re-audit and terminal decision (`FIXED_POINT_STOP`) → controller
-  governance closeout. Target: **3** specialist prompts.
-- The fifth slot exists only for one replacement audit or re-audit execution when the ChatGPT controller rejects
-  an executed one as procedurally invalid (wrong head, not fresh context, repository or GitHub mutation, or
-  incomplete blocker collection), with the reason recorded — never because of its findings or verdict. It never
-  authorizes a second repair, a second valid re-audit of the same repaired head, or a sixth prompt.
+  controller governance closeout. Target: **2**, with zero Codex or Astra executions and no challenge unless one
+  is materially justified; with one: 1 implementation → 2 challenge → 3 controller audit = **3**.
+- Clean protected: 1 `IMPLEMENTATION` → controller preflight and packet → 2 the one compact GPT-6 Astra `Ultra`
+  protected audit → controller governance closeout. Target: **2**; with a materially useful challenge:
+  1 implementation → 2 challenge → preflight → 3 Astra audit = **3**.
+- Repaired, `ACCEPTANCE_AUDIT_CONFIRMED_BLOCKER_SET`: 1 `IMPLEMENTATION` → 2 acceptance audit (the complete
+  material P1/P2 set; 24.4 chooses the lane; for protected work after the preflight) → 3 `ONE_CONSOLIDATED_REPAIR`
+  → for protected work, the preflight again → 4 `ONE_WHOLE_CONTRACT_REAUDIT` by the same acceptance lane →
+  controller governance closeout. Target: **4**; one challenge admitted by `CHALLENGE_BUDGET` makes **5**.
+- Repaired, `PROTECTED_CONTROLLER_PREFLIGHT_CONFIRMED_BLOCKER_SET`: 1 `IMPLEMENTATION` → [a challenge, if used,
+  takes the next slot] → the preflight confirms the complete material P1/P2 set → `ONE_CONSOLIDATED_REPAIR` (next
+  slot) → [a challenge, if used, takes the next slot] → the preflight again → the one GPT-6 Astra audit (next
+  slot), which is the candidate's whole-contract re-audit and terminal decision (`FIXED_POINT_STOP`) → controller
+  governance closeout. Target: **3**; at most **5** with both challenges.
+- The fifth slot is reserved for no single use. It may carry a challenge admitted by `CHALLENGE_BUDGET` or one
+  replacement audit or re-audit execution when the ChatGPT controller rejects an executed one as procedurally
+  invalid (wrong head, not fresh context, repository or GitHub mutation, or incomplete blocker collection), with
+  the reason recorded — never because of its findings or verdict. A replacement exists only while a slot
+  remains; with none left the lifecycle stops at the ceiling with proof (`STOP_WITH_PROOF`), never with a sixth
+  prompt. A slot never authorizes a second repair or a second valid re-audit of the same repaired head.
 - After the final specialist prompt, controller governance closeout (24.5) completes the lifecycle outside the
   count. There is no specialist prompt 6.
-- `CHALLENGE_BUDGET` — at most TWO `OPUS55_FRESH_READONLY_CHALLENGE` executions per lifecycle: at most one before
-  the first acceptance audit or Astra dispatch, and at most one after the consolidated repair, before the
-  re-audit. The controller routes one only when it is worth its cost, and the handoff reports the challenge count.
-  A challenge delivers no verdict and never mutates, so it fills no slot of the five-slot budget above, which it
-  leaves unchanged: it never takes, replaces or extends a slot, never takes the fifth slot, never authorizes a
-  second repair or a second re-audit, and never resets any count.
+- `CHALLENGE_BUDGET` — every substantive `OPUS55_FRESH_READONLY_CHALLENGE` is a meaningful prompt and consumes one
+  slot of the SAME hard maximum of 5. At most two per lifecycle, and only at two points: at most one before the
+  first acceptance audit or Astra dispatch, and at most one after the consolidated repair, before the re-audit
+  (or, on the preflight-entry path, before the one Astra audit). The controller dispatches a challenge only when,
+  counting it, the slots already used plus the slots the lifecycle may still require stay within 5 — before any
+  acceptance audit or repair: the acceptance audit, the one repair and the one re-audit (three); after the repair:
+  the one re-audit or Astra audit (one) — and otherwise does not dispatch it. The default is NO challenge: one
+  runs only when its expected semantic value justifies one of the five scarce slots, and spending the fifth slot
+  on it forgoes the room for a procedurally invalid replacement. A challenge delivers no verdict, never mutates,
+  never replaces acceptance authority, never opens or adds a repair, never resets any count and never creates a
+  sixth prompt. The handoff reports the challenge count inside the meaningful-prompt count.
 - Waiting consumes nothing: CI still pending after the final audit, a delayed human authorization, post-merge
   verification and fresh-chat acceptance are governance. `VERDICTS_BIND_EXACT_HEAD` — every audit verdict and CI
   result binds the exact head it judged. After the implementation, only the one consolidated repair may move the
   head, and the section-3 authorized empty re-trigger commit keeps the verdicts only when its tree is identical; any
   other head movement voids the verdicts bound to the old head and stops the candidate (`REJECT/FREEZE`).
 
-`ONE_CONSOLIDATED_REPAIR` — at most one repair per candidate lifecycle. It repairs the COMPLETE confirmed blocker
-set that opened it (`FIXED_POINT_STOP`) by root cause in one change. No micro-patching, no finding-by-finding repair, no repair → audit → repair
-chains.
+`ONE_CONSOLIDATED_REPAIR` — at most one repair per candidate lifecycle. It opens through exactly one of two
+entry modes, and there is no other and no second: `ACCEPTANCE_AUDIT_CONFIRMED_BLOCKER_SET` (the acceptance audit's
+complete material P1/P2 set) or, for a protected candidate before any Astra dispatch,
+`PROTECTED_CONTROLLER_PREFLIGHT_CONFIRMED_BLOCKER_SET` (the complete set the controller confirms in
+`CONTROLLER_PREFLIGHT_REVIEW`, with any Opus challenge). In both modes the set is COMPLETE
+(`COMPLETE_BLOCKER_COLLECTION`) and controller-adjudicated before the repair opens, and the repair prompt names
+its entry mode. It repairs that whole set by root cause in one change. No micro-patching, no finding-by-finding
+repair, no repair → audit → repair chains.
 
 `ONE_WHOLE_CONTRACT_REAUDIT` — after that repair, exactly one fresh re-audit of the repaired exact head to the
 same 24.4 standard and by the same acceptance lane (GPT-6 Astra for protected work, after the controller preflight
@@ -1010,8 +1031,9 @@ again; the controller for non-protected work): READ_ONLY and covering the whole 
 repaired lines.
 
 `FIXED_POINT_STOP` — the first complete material P1/P2 set confirmed at the acceptance gate opens the one
-consolidated repair: the acceptance audit's set or, for a protected candidate, the set the controller confirms in
-`CONTROLLER_PREFLIGHT_REVIEW` (with any Opus challenge) before any Astra dispatch. In that second case no Astra
+consolidated repair: the acceptance audit's set (`ACCEPTANCE_AUDIT_CONFIRMED_BLOCKER_SET`) or, for a protected
+candidate, the set the controller confirms in `CONTROLLER_PREFLIGHT_REVIEW` (with any Opus challenge) before any
+Astra dispatch (`PROTECTED_CONTROLLER_PREFLIGHT_CONFIRMED_BLOCKER_SET`). In that second case no Astra
 audit runs on the unrepaired head, and the one GPT-6 Astra audit of the repaired head is the candidate's
 whole-contract re-audit and terminal decision. After that repair and its one whole-contract re-audit: material
 P1/P2 = NONE → the candidate proceeds to controller
@@ -1448,14 +1470,15 @@ completion, edge/profitability claims and fail-closed trust transitions → F wh
 governance thresholds → A or G; machine-time provenance → C. Non-authorizing Decimal/Fraction arithmetic,
 mutable-state handling and record-set integrity inside paper-only analytics or historical metrics are
 non-protected unless one of A-G applies. Added `OPUS55_FRESH_READONLY_CHALLENGE` (challenge evidence only,
-same-model when Opus implemented, bounded by `CHALLENGE_BUDGET` to two per lifecycle outside the unchanged
-five-slot budget), `CONTROLLER_PREFLIGHT_REVIEW`, `PROTECTED_AUDIT_PACKET_V1` and `ASTRA_QUOTA_GATE` (Astra only on a
+same-model when Opus implemented, at most two per lifecycle, each a meaningful prompt inside the same hard maximum
+of 5 under `CHALLENGE_BUDGET`), `CONTROLLER_PREFLIGHT_REVIEW`, `PROTECTED_AUDIT_PACKET_V1` and `ASTRA_QUOTA_GATE` (Astra only on a
 stabilized head with a bounded packet and never for discovery already proven), `ASTRA_QUOTA_BLOCKED_FREEZE`
 (protected head frozen, protected gate waits, no protected merge, read-only preparation continues),
 `ASTRA_RUNTIME_PROOF`, and `USER_MANUAL_WORK_MINIMIZATION`; strengthened `CONTROLLER_READONLY_FIRST_POLICY`. Codex
 GPT-5.6 Sol becomes `SOL_RESERVE_ONLY` — never a default auditor, navigator, status or review lane, dispatched only
 on a recorded capability gap, never protected acceptance — and `NON_PROTECTED_AUDIT_FALLBACK` is retired.
-`FIXED_POINT_STOP` now names the pre-Astra confirmed blocker set as a legal opener of the one consolidated repair.
+`FIXED_POINT_STOP` now names the pre-Astra confirmed blocker set as a legal opener of the one consolidated repair
+(entry modes `ACCEPTANCE_AUDIT_CONFIRMED_BLOCKER_SET` and `PROTECTED_CONTROLLER_PREFLIGHT_CONFIRMED_BLOCKER_SET`).
 Unchanged: Claude Opus 5.5 as primary implementer and repairer; Astra as sole protected acceptance authority;
 `ACCEPTANCE_AUDIT_STANDARD` (the former Astra standard, now shared by every acceptance lane);
 `COMPLETE_BLOCKER_COLLECTION`; `AUDIT_MATERIALITY_BOUNDARY_V1`; `FINITE_AUDIT_RULE`; `NO_SELF_AUDIT`; PR sizing;
@@ -1466,3 +1489,15 @@ companion token-efficiency docs drop their stale lane and routing matrices in fa
 section. The transition rule (24.14 `CODEX_QUOTA_RESILIENCE_TRANSITION`) sends this change itself to one GPT-6
 Astra `Ultra` protected audit under the prior plane. Docs/setup only: no product code, tests, scripts, workflows or
 dependencies touched.*
+
+*v6.3 same-PR consolidated repair (2026-09-26): the one consolidated repair of this PR closed one root cause —
+the lifecycle accounting and repair-entry surfaces had not absorbed the amendment's own new paths. (1) The Opus
+5.5 read-only challenge had been placed outside the five-slot budget, which allowed a sixth or seventh specialist
+execution; every substantive challenge now counts inside the same hard maximum of 5, is dispatched only when the
+budget still has room for every execution the lifecycle may require (`CHALLENGE_BUDGET`), defaults to NOT
+running, and the fifth slot is no longer reserved for a single use. (2) The repair templates and repair-entry text
+still assumed a repair opens only after an acceptance audit, required an "audited" set and hard-coded prompt 3;
+`ONE_CONSOLIDATED_REPAIR` now defines its two legal entry modes, the complete controller-adjudicated set for each,
+and path-correct counts derived from the executions that actually ran. The lifecycle examples of 24.8 are renumbered
+accordingly. No second repair path, repair allowance or execution pool was added; the controller preflight stays
+zero-slot governance with no verdict; Astra stays the sole protected acceptance authority. Docs only.*

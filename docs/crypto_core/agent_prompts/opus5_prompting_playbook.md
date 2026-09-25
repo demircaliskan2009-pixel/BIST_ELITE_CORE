@@ -57,7 +57,8 @@ follows the section 24.6 serious prompt shape:
 4. **MODEL_RUNTIME_PROOF** — the section 24.12 fields.
 5. **ALLOWED_FILES** — the exact files; prohibited surfaces named.
 6. **INVARIANTS** — the properties that must remain true.
-7. **BLOCKER_INVENTORY** — inherited blocker identities; for a repair, the complete audited P1/P2 set.
+7. **BLOCKER_INVENTORY** — inherited blocker identities; for a repair, the complete controller-confirmed P1/P2
+   set and its `REPAIR_ENTRY_MODE` (section 24.8).
 8. **VALIDATION_MATRIX** — targeted, full, wrapper and CI requirements.
 9. **GITHUB_AUTHORIZATION** — commit, push, PR and merge stated separately.
 10. **FORBIDDEN** and **STOP_CONDITIONS** — every state that must halt mutation.
@@ -132,12 +133,20 @@ HANDOFF: AGENT_OS_HANDOFF_V1; MEANINGFUL_PROMPT_COUNT_THIS_PR: 1; one next safe 
 
 ### 3.2 `OPUS5_ONE_CONSOLIDATED_REPAIR`
 
-Use only for the single consolidated repair after an exhaustive independent audit (meaningful prompt 3).
-Never for a candidate under `FIXED_POINT_STOP`, never for a second repair, never for one finding at a time.
+Use only for the single consolidated repair of a candidate, opened through exactly one of the two legal entry
+modes of section 24.8: `ACCEPTANCE_AUDIT_CONFIRMED_BLOCKER_SET` (the acceptance audit's complete set) or, for a
+protected candidate before any GPT-6 Astra dispatch, `PROTECTED_CONTROLLER_PREFLIGHT_CONFIRMED_BLOCKER_SET` (the
+complete set the controller confirms in its preflight, with any Opus challenge). Either way the set is complete and
+controller-adjudicated before the repair opens. Never for a candidate under `FIXED_POINT_STOP`, never for a second
+repair, never for one finding at a time. The prompt count is the actual count of the lifecycle — for example 3
+after implementation → acceptance audit, 2 after implementation → preflight, one more for each challenge that ran —
+never a fixed number.
 
 ```text
 TASK_INTENT: REPAIR (the ONE consolidated repair of this candidate)
-BLOCKER_INVENTORY: <the COMPLETE audited P1/P2 set, verbatim, with blocker identities and evidence>
+REPAIR_ENTRY_MODE: <ACCEPTANCE_AUDIT_CONFIRMED_BLOCKER_SET | PROTECTED_CONTROLLER_PREFLIGHT_CONFIRMED_BLOCKER_SET>
+BLOCKER_INVENTORY: <the COMPLETE controller-confirmed P1/P2 set of that entry mode, verbatim, with blocker
+  identities and evidence>
 SEMANTIC_BOUNDARY: repair the complete set by root cause in one change on branch <branch> at head <sha>;
   the original contract is unchanged except for the defects; no opportunistic cleanup
 STATE_PIN: PR <n> OPEN; head <sha> == local == origin; base <sha>
@@ -149,22 +158,26 @@ GITHUB_AUTHORIZATION: one normal same-branch commit and push AUTHORIZED; new PR 
   FORBIDDEN; merge NOT AUTHORIZED; resolving review threads FORBIDDEN
 STOP_CONDITIONS: a blocker cannot be reproduced; the repair needs files or authority outside the prompt; the
   finding disputes accepted design; head moved
-HANDOFF: AGENT_OS_HANDOFF_V1 with before/after evidence per blocker; MEANINGFUL_PROMPT_COUNT_THIS_PR: 3;
-  next = the ONE whole-contract re-audit (for protected work after the controller preflight again)
+HANDOFF: AGENT_OS_HANDOFF_V1 with before/after evidence per blocker; MEANINGFUL_PROMPT_COUNT_THIS_PR: <actual
+  count of executions that ran, including this repair>; CHALLENGE_COUNT_THIS_PR: <actual>; next = for
+  ACCEPTANCE_AUDIT_CONFIRMED_BLOCKER_SET the ONE whole-contract re-audit by the same acceptance lane (for protected
+  work after the controller preflight again); for PROTECTED_CONTROLLER_PREFLIGHT_CONFIRMED_BLOCKER_SET the
+  controller preflight again, then the one GPT-6 Astra audit as the whole-contract re-audit and terminal decision
 ```
 
 ### 3.3 `OPUS55_FRESH_READONLY_CHALLENGE`
 
 Use only when the controller routes it (section 24.4): for a broad or high-risk non-protected candidate, before a
 GPT-6 Astra dispatch when it lowers the risk of wasting that audit, or after the consolidated repair before the
-re-audit. At most two per lifecycle (`CHALLENGE_BUDGET`, section 24.8); it fills no specialist slot and never
-accepts.
+re-audit. Each run is a meaningful prompt inside the same hard maximum of 5; at most two per lifecycle, and only
+when the budget still has room for every execution the lifecycle may require (`CHALLENGE_BUDGET`, section 24.8).
+The default is not to run one. It never accepts.
 
 ```text
 TASK_INTENT: CHALLENGE (OPUS55_FRESH_READONLY_CHALLENGE; fresh context; READ_ONLY)
 SEMANTIC_BOUNDARY: the declared contract of PR #<n>; judge it, do not expand it (FINITE_AUDIT_RULE)
 STATE_PIN: PR #<n> head <sha>, base <sha>; protected classification <trigger letters | NONE>;
-  CHALLENGE_COUNT_THIS_PR: <1|2>
+  MEANINGFUL_PROMPT_COUNT_THIS_PR: <actual count including this challenge, <= 5>; CHALLENGE_COUNT_THIS_PR: <1|2>
 MODEL_RUNTIME_PROOF: <as 3.1>
 FOCUS: <deep semantic bugs | adversarial cases | accounting/numeric | dependency tracing | test gaps |
   protected-boundary preflight>

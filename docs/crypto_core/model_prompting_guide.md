@@ -28,7 +28,7 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   thinking), with the host label written literally; identity and required thinking fail closed on `UNKNOWN`, and
   only effort may stay `UNKNOWN`.
 - `BLOCKER_INVENTORY` names inherited blockers by semantic defect (identity survives renames) and, for a repair
-  or re-audit, the complete audited P1/P2 set.
+  or re-audit, the complete controller-confirmed P1/P2 set with its `REPAIR_ENTRY_MODE` (section 24.8).
 - `VALIDATION_MATRIX` is exact; the full crypto_core suite runs only via `run_full_tests_logged.ps1`.
 - `GITHUB_AUTHORIZATION` lists authorized and not-authorized actions separately; merge is never implied.
 - `HANDOFF` requires `AGENT_OS_HANDOFF_V1` with the meaningful-prompt count and exactly one next safe action.
@@ -51,8 +51,10 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   per PR lifecycle (governance operations — state proof, CI/status
   reads, adjudication, protected classification, the preflight review and protected packet, merge-readiness, the
   authorization request, merge, post-merge verification, fresh-chat acceptance — do not count); your own
-  non-protected acceptance audit fills the audit slot; count Opus challenges separately (at most two,
-  `CHALLENGE_BUDGET`); never issue a specialist sixth; never hide specialist work inside governance; adjudicate a
+  non-protected acceptance audit fills the audit slot; every Opus challenge that runs also fills a slot of the
+  same hard 5 — default to none, and dispatch one (at most two) only when its value justifies a scarce slot and
+  the budget still has room for every execution the lifecycle may require (`CHALLENGE_BUDGET`); never issue a
+  specialist sixth; never hide specialist work inside governance; adjudicate a
   disputed severity under `AUDIT_MATERIALITY_BOUNDARY_V1` before applying `FIXED_POINT_STOP`; open a new attempt only through a `TASK_INTENT=ARCHITECTURE` `ROOT_CAUSE_ESCAPE` decision.
 - **Audit routing (section 24.4):** classify every candidate against the finite `ASTRA_PROTECTED_TRIGGER_MATRIX_V1`
   (A control plane/governance; B digest/signature/provenance/custody/attestation/anti-replay/trust-root; C
@@ -161,7 +163,8 @@ OUTPUT: the COMPLETE current material P1/P2 set in one pass with evidence; P3 se
 
 ```text
 TASK_INTENT: CHALLENGE (OPUS55_FRESH_READONLY_CHALLENGE) — Claude Opus 5.5, fresh context, READ_ONLY
-STATE_PIN: PR #<n> head <sha>, base <sha>; protected classification <letters|NONE>
+STATE_PIN: PR #<n> head <sha>, base <sha>; protected classification <letters|NONE>;
+  MEANINGFUL_PROMPT_COUNT_THIS_PR: <actual count including this challenge, <= 5> (CHALLENGE_BUDGET room proven)
 FOCUS: <semantic bug finding | adversarial cases | accounting/numeric | dependency tracing | test gaps |
   protected-boundary preflight>
 OUTPUT: every material P1/P2 found, with evidence, as CHALLENGE_EVIDENCE_ONLY; never an acceptance verdict;
@@ -186,10 +189,13 @@ OUTPUT: the COMPLETE current material P1/P2 set in one pass, each with invariant
 
 ```text
 TASK_INTENT: REPAIR (the ONE consolidated repair) — Claude Opus 5.5
-BLOCKER_INVENTORY: <the complete audited P1/P2 set, verbatim, with identities>
+REPAIR_ENTRY_MODE: <ACCEPTANCE_AUDIT_CONFIRMED_BLOCKER_SET | PROTECTED_CONTROLLER_PREFLIGHT_CONFIRMED_BLOCKER_SET>
+BLOCKER_INVENTORY: <the complete controller-confirmed P1/P2 set of that entry mode, verbatim, with identities>
 SEMANTIC_BOUNDARY: repair the complete set by root cause in one change on the same branch; no new scope
 STOP_CONDITIONS: a blocker cannot be reproduced; the repair needs files or authority outside the prompt
-HANDOFF: AGENT_OS_HANDOFF_V1; this is the candidate's only repair
+HANDOFF: AGENT_OS_HANDOFF_V1; this is the candidate's only repair; MEANINGFUL_PROMPT_COUNT_THIS_PR: <actual count
+  of executions that ran, including this repair>; next = the one whole-contract re-audit (on the preflight-entry
+  path: preflight again, then the one GPT-6 Astra audit)
 ```
 
 ```text

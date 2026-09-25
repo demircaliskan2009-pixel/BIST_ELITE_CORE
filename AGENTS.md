@@ -94,12 +94,13 @@ post-merge verification.
   result, or a real context/correctness risk.
 - Prompt budget per PR lifecycle (section 24.8): the fewest specialist prompts needed — target **2** for a
   clean candidate (implementation → acceptance audit) and **4** for a repaired one (implementation → audit →
-  one consolidated repair → one whole-contract re-audit); **5** is the hard emergency ceiling and there is no
-  specialist sixth. A specialist prompt is an implementation, acceptance audit, repair or whole-contract
-  re-audit; the controller's non-protected audit fills an audit slot. A clean non-protected candidate targets one
-  Opus 5.5 implementation plus the controller audit, with zero Codex or Astra executions. At most two Opus 5.5
-  read-only challenges per lifecycle (`CHALLENGE_BUDGET`) deliver no verdict and leave the five-slot budget
-  unchanged. Controller governance — state proof, CI/status reads, evidence adjudication, protected
+  one consolidated repair → one whole-contract re-audit; **3** when a protected controller preflight opens the
+  repair before the one Astra audit); **5** is the hard emergency ceiling and there is no specialist sixth. A
+  specialist prompt is an implementation, acceptance audit, repair, whole-contract re-audit or Opus 5.5 read-only
+  challenge, all in the SAME budget; the controller's non-protected audit fills an audit slot. A clean
+  non-protected candidate targets one Opus 5.5 implementation plus the controller audit, with zero Codex or Astra
+  executions. A challenge is optional and defaults to not running; at most two per lifecycle, each only when the
+  hard 5 still has room for every execution the lifecycle may require (`CHALLENGE_BUDGET`). Controller governance — state proof, CI/status reads, evidence adjudication, protected
   classification, the preflight review and protected packet, merge-readiness judgement, the human authorization
   request, an authorized mechanical merge, post-merge verification and fresh-chat acceptance — consumes none, and
   specialist work never hides inside it.
