@@ -2,7 +2,8 @@
 
 > Canonical, executable operating protocol for `crypto_core` inside `demircaliskan2009-pixel/BIST_ELITE_CORE`.
 > The single canonical active authority is **section 24** (`CRYPTO_CORE_AGENT_OS_V1`, active content
-> `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`); sections 1-19 bind where they agree with it and section 24
+> `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended, most recently by `CODEX_QUOTA_RESILIENCE_V2`); sections
+> 1-19 bind where they agree with it and section 24
 > wins on any conflict; sections 20-23 are HISTORICAL. **Doctrine precedence:** `AGENTS.md` (entrypoint and
 > durable rails) → section 24 → host adapters (`CLAUDE.md` / `CLAUDE.local.md`,
 > `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`, `.codex/skills/crypto-core-max-safe/SKILL.md`)
@@ -30,10 +31,10 @@ wins.
 
 | Council member | Responsibility |
 |---|---|
-| **ChatGPT controller** | Controller and router, architecture adjudication, prompt compiler, evidence judge, live GitHub verification, contradiction detection, merge-readiness judgement, exactly one next action; severity adjudication under section 24.4; an independent audit only as the last-resort non-protected fallback of section 24.4. |
-| **Claude Opus 5.5** (`claude-opus-5-5`) | Primary deep semantic implementation and repair. |
-| **Codex GPT-5.6 Sol** | Primary repo-native engineering accelerator; the bounded first non-protected audit fallback of section 24.4; never a protected audit. |
-| **GPT-6 Astra** | PRIMARY independent auditor (`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1`): READ_ONLY exhaustive audit and whole-contract re-audit, and for protected work the sole protected T4 audit in the same execution. |
+| **ChatGPT controller** | Controller and router, architecture adjudication, prompt compiler, evidence judge, live GitHub verification, contradiction detection, merge-readiness judgement, exactly one next action; severity adjudication and protected classification under section 24.4; the DEFAULT independent acceptance auditor of non-protected candidates; the protected preflight and protected audit packet; never protected acceptance. |
+| **Claude Opus 5.5** (`claude-opus-5-5`) | Primary deep semantic implementation and repair with its exhaustive self-audit; an optional fresh read-only semantic challenge that is evidence only, never acceptance. |
+| **Codex GPT-5.6 Sol** | Reserve only (`SOL_RESERVE_ONLY`, section 24.3): used on a controller-recorded capability or eligibility gap; never a protected audit. |
+| **GPT-6 Astra** | SOLE protected acceptance auditor (`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1`), dispatched only for a candidate with a protected trigger (section 24.4); the last semantic specialist gate; never the default auditor of a non-protected candidate. |
 | **ChatGPT Work** | Substantial multi-step execution when a cloud browser/computer, many files, apps or evidence collection materially help; never governance authority. |
 | **Deep Research** | Current load-bearing external facts only; advisory. |
 
@@ -89,12 +90,14 @@ The lifecycle, prompt budget and fixed-point stop are section 24.8. The sequence
    expected `main` HEAD, "open PRs: none").
 2. The routed implementer runs the **Implementation Loop** (§5) → opens one PR → natural CI to terminal →
    handoff. No merge.
-3. One exhaustive fresh-context independent audit — GPT-6 Astra (`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1`), which for
-   protected or control-plane work is also the protected audit; for non-protected work only, the recorded section
-   24.4 fallback — returns the complete material P1/P2 set (§8).
-4. If it found material P1/P2: at most ONE consolidated repair (§6) on the same branch, then exactly ONE
-   whole-contract re-audit to the same standard. Any genuine material P1/P2 left → `FIXED_POINT_STOP`: the
-   candidate is rejected and frozen. P3 never blocks merge.
+3. One exhaustive fresh-context acceptance audit returns the complete material P1/P2 set (§8). The lane follows
+   the protected classification of section 24.4: the ChatGPT controller for a non-protected candidate; GPT-6
+   Astra, after the controller's zero-slot protected preflight and a bounded protected audit packet, for a
+   protected or control-plane candidate.
+4. When a complete material P1/P2 set is confirmed — by the acceptance audit, or for a protected candidate by the
+   controller preflight before any Astra dispatch (section 24.8 `REPAIR_ENTRY_MODE`) — at most ONE consolidated
+   repair (§6) on the same branch, then exactly ONE whole-contract re-audit by the acceptance lane. Any genuine
+   material P1/P2 left → `FIXED_POINT_STOP`: the candidate is rejected and frozen. P3 never blocks merge.
 5. Controller governance closeout, outside the specialist prompt budget (section 24.8): the controller verifies
    live state; the human gives exact-head merge authorization; the **Closeout/Merge Loop** (§7) runs only from
    that authorization.
@@ -132,9 +135,9 @@ commit (on the topic branch) → push (the topic branch) → `gh pr create --bas
 
 ## 6. Consolidated Repair Loop
 
-- This is the single consolidated repair of the candidate lifecycle (section 24.8): it repairs the COMPLETE
-  audit blocker set by root cause in one change — never finding-by-finding, never a second repair, never on a
-  rejected or frozen candidate.
+- This is the single consolidated repair of the candidate lifecycle (section 24.8): it repairs, by root cause in
+  one change, the COMPLETE controller-adjudicated blocker set of its `REPAIR_ENTRY_MODE` — never
+  finding-by-finding, never a second repair, never on a rejected or frozen candidate.
 - Precheck first (branch + `HEAD == expected SHA` + clean tree + exactly one open PR + changed files ⊆ scope).
 - Pin PR number and expected head; repair **only the named blockers**, **same branch only**, bounded to named files.
 - **Test-only by default**; touch production only if a **new failing test proves a real defect**, and only inside the named module. If test-only, prove `git diff <prev> HEAD -- src/` is **empty**.
@@ -157,7 +160,8 @@ Run **only** from an explicit closeout prompt that names the PR and the exact au
 
 ## 8. Codex Review Protocol
 
-- The independent audit (GPT-6 Astra by default, section 24.4) is exhaustive and materiality-aware
+- The acceptance audit (section 24.4: the ChatGPT controller for a non-protected candidate, GPT-6 Astra for a
+  protected one) is exhaustive and materiality-aware
   (`COMPLETE_BLOCKER_COLLECTION`, `AUDIT_MATERIALITY_BOUNDARY_V1`): it returns the complete current material P1/P2
   set of the declared contract in one pass, never one finding at a time.
 - Automated Codex PR review comments run **asynchronously** after a push and are review threads for controller adjudication, not the routed independent audit; findings may not exist when Claude's turn ends. Claude inspects threads that exist at terminal CI and reports `0 threads (review may post later)` if none.
@@ -312,8 +316,8 @@ Deep Research is the **external / current-fact + architecture-benchmark** tool; 
   recommendations, not vague strategy.
 - **Routing:** ChatGPT decides whether Deep Research is needed; Claude does not call it but may
   **recommend** it (`DEEP_RESEARCH_REQUIRED` + the exact question) when blocked by a current/external
-  fact; GPT-6 Astra stays the primary independent audit and the sole protected audit
-  (section 24.4); the GitHub connector stays the source-of-truth state gate; Deep Research is research/advisory, **never an
+  fact; the section 24.4 acceptance audit stays separate (GPT-6 Astra is the sole protected acceptance
+  auditor); the GitHub connector stays the source-of-truth state gate; Deep Research is research/advisory, **never an
   executor lane and not merge authority** — any authorized mutation is routed by the controller to
   Claude/`gh`, the GitHub connector, or Codex, never executed by Deep Research.
 - **Triggers:** `DEEP_RESEARCH_REQUIRED` for exchange/API/funding/fees/limits/microstructure/
@@ -667,8 +671,10 @@ conditions, and report fields. The durable per-model authoring guide is
 `CRYPTO_CORE_AGENT_OS_V1` is this section's identifier; its active content is
 `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` (2026-09-14), which replaces the earlier v1 lane set, taxonomy,
 routing function and prompt policy, as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1` (24.3, 24.4, 24.5,
-24.8 and the transition rule of 24.14) and by `CLAUDE_OPUS_5_5_CONTROL_PLANE_UPGRADE_V1` (the Claude lane
-identity of 24.3, its effort policy in 24.12 and the transition rule of 24.14). It is the single canonical active authority for how crypto_core
+24.8 and the transition rule of 24.14), by `CLAUDE_OPUS_5_5_CONTROL_PLANE_UPGRADE_V1` (the Claude lane
+identity of 24.3, its effort policy in 24.12 and the transition rule of 24.14) and by `CODEX_QUOTA_RESILIENCE_V2`
+(audit routing and execution accounting in 24.3, 24.4, 24.5, 24.6, 24.8, 24.10 and 24.12, and its transition rule
+in 24.14). It is the single canonical active authority for how crypto_core
 development work is routed, sized, audited, repaired, stopped and resumed. Sections 1-19 bind where they agree
 with it; on any conflict this section wins, and between safety rules the stricter rule wins. Sections 20-23 are
 HISTORICAL/SUPERSEDED. The kernel governs only the operational workflow needed to develop crypto_core safely
@@ -713,17 +719,18 @@ restates it as authority. The council is closed: a model or tool not listed here
 
 | Council member | Active role | Never |
 |---|---|---|
-| **ChatGPT controller** | Controller and router; architecture adjudication; prompt compiler (24.6); evidence judge; severity adjudication under `AUDIT_MATERIALITY_BOUNDARY_V1` (24.4); live GitHub verification through the connector/`gh`; contradiction detection; merge-readiness judgement; exactly one next action; an independent audit only as the last resort of `NON_PROTECTED_AUDIT_FALLBACK` (24.4) | Product implementation; any independent audit outside that fallback; auditing a candidate it implemented or repaired; any protected audit; a substitute for local tests or unverified repository state; GitHub mutation without an exact human action authorization; merge authority |
-| **Claude Opus 5.5** (`claude-opus-5-5`) | Primary deep semantic IMPLEMENTATION and REPAIR, including the single consolidated repair of a candidate (24.8) and the `ROOT_CAUSE_ESCAPE` implementation (24.8), together with the repo-native navigation, mechanical, static-inspection, test-generation, local validation and CI-diagnosis work that belongs to that same task | Any independent audit of its own work; any protected audit; controller, governance or merge authority |
-| **Codex GPT-5.6 Sol** | Primary repo-native engineering accelerator — repo navigation, code search, dependency tracing, static inspection, clear-spec implementation where specifically routed, mechanical refactor, test generation, debugging, CI analysis, large-codebase inspection — and the bounded first `NON_PROTECTED_AUDIT_FALLBACK` for candidates with no protected trigger (24.4) | The default independent audit; any protected audit; auditing a candidate it implemented or repaired |
-| **GPT-6 Astra** | PRIMARY independent auditor (`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1`, 24.4): the READ_ONLY exhaustive audit and the one whole-contract re-audit of serious candidates, and for protected work the sole protected T4 `CLASS_C_CROSS_CONTRACT` audit in the same execution. Default requested effort `Ultra` | Mutation; implementation or repair; auditing a candidate it implemented or repaired; any reassignment of protected T4 to another lane |
+| **ChatGPT controller** | Controller and router; architecture adjudication; prompt compiler (24.6); evidence judge; severity adjudication under `AUDIT_MATERIALITY_BOUNDARY_V1` and protected classification under `PROTECTED_TRIGGER_MATRIX_V2` (24.4); live GitHub verification through the connector/`gh`; contradiction detection; merge-readiness judgement; exactly one next action; maximum read-only preprocessing (`CONTROLLER_READONLY_FIRST_POLICY`, 24.10); the DEFAULT independent acceptance audit and re-audit of a non-protected candidate (`CONTROLLER_NONPROTECTED_ACCEPTANCE_AUDIT`, 24.4); the zero-slot `CONTROLLER_PROTECTED_PREFLIGHT` and `PROTECTED_AUDIT_PACKET_V2` of a protected candidate (24.4) | Product implementation; auditing or accepting a candidate it (or ChatGPT Work) implemented or repaired; any protected audit or protected acceptance; a substitute for local tests or unverified repository state; GitHub mutation without an exact human action authorization; merge authority |
+| **Claude Opus 5.5** (`claude-opus-5-5`) | Primary deep semantic IMPLEMENTATION and REPAIR, including the single consolidated repair of a candidate (24.8) and the `ROOT_CAUSE_ESCAPE` implementation (24.8), together with the repo-native navigation, mechanical, static-inspection, test-generation, local validation, CI-diagnosis and exhaustive self-audit work that belongs to that same task; the optional fresh READ_ONLY `OPUS55_READONLY_CHALLENGE` (24.4), which is evidence only | Accepting any candidate; any independent, acceptance or protected audit; controller, governance or merge authority |
+| **Codex GPT-5.6 Sol** | `SOL_RESERVE_ONLY`: used only when the ChatGPT controller records a specific capability or eligibility gap that neither the controller nor the routed Claude Opus 5.5 task can legally or safely cover — for example the non-protected acceptance audit when `NO_SELF_AUDIT` makes the controller ineligible (24.4) | The default auditor, navigator, status checker, reviewer or implementation accelerator; dispatch merely for model diversity; any protected audit or protected acceptance; auditing a candidate it implemented or repaired |
+| **GPT-6 Astra** | SOLE protected acceptance auditor (`ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1`, 24.4): the READ_ONLY protected whole-contract audit and the one protected re-audit of a candidate with at least one trigger of `PROTECTED_TRIGGER_MATRIX_V2`, on a `PROTECTED_AUDIT_PACKET_V2`; in the same execution the protected T4 `CLASS_C_CROSS_CONTRACT` audit and terminal decision; the last semantic specialist gate. Model id `gpt-6-astra`, effort `Ultra` (24.12) | The default auditor of a non-protected candidate; repository discovery labor the controller can do; mutation; implementation or repair; auditing a candidate it implemented or repaired; any reassignment of protected acceptance to another lane |
 | **ChatGPT Work** | Substantial multi-step execution when a cloud browser/computer, many files, apps or evidence collection materially help, under the same prompt shape (24.6) and gates | Governance authority; accepted state; merge authority |
 | **Deep Research** | Current load-bearing external facts only (24.9) | Repository/PR/CI state; implementation; mutation; gate waivers |
 
-`ASTRA_T4_EXCLUSIVE` — protected T4 belongs to GPT-6 Astra alone. When Astra is unavailable, quota-blocked or
-stopped by runtime proof, the protected gate waits (`CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE`); nothing reassigns
-T4 to Codex GPT-5.6 Sol, Claude Opus 5.5, the ChatGPT controller, ChatGPT Work or any other lane. Non-protected
-work continues under 24.4.
+`ASTRA_T4_EXCLUSIVE` — protected T4 and protected acceptance belong to GPT-6 Astra alone. When Astra is
+unavailable, quota-blocked or stopped by runtime proof, the protected gate waits
+(`CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE`, `ASTRA_QUOTA_BLOCK_FREEZE` in 24.4); nothing reassigns it to Codex GPT-5.6
+Sol, Claude Opus 5.5, the ChatGPT controller, ChatGPT Work or any other lane. Non-protected acceptance never
+depends on Astra.
 
 `HOST_UI_LABELS_ARE_LITERAL` — a host's effort or mode label is recorded verbatim and never mapped across model
 families, to an API effort enum, or to `max`. Current literal labels: Claude Opus 5.5 `xhigh` and `max`; Codex
@@ -736,53 +743,90 @@ Outside the council — none is routable, a fallback or a dependency: **Copilot 
 `NOT_IN_ACTIVE_COUNCIL`**. A superseded Claude lane is never an automatic fallback: `MODEL_FALLBACK=PROHIBITED`
 holds for every serious routed crypto_core task (24.12). Their former roles moved: status, polling
 and mechanics to the ChatGPT controller's live verification or the routed session's own terminal proof;
-bounded and clear-spec implementation to Codex GPT-5.6 Sol; independent review to GPT-6 Astra (24.4); deep
-semantic implementation to Claude Opus 5.5. Earlier definitions survive only in the HISTORICAL sections and the dated changelog. Activating
+bounded, clear-spec and deep semantic implementation to Claude Opus 5.5; non-protected independent review to the
+ChatGPT controller and protected review to GPT-6 Astra (24.4). Earlier definitions survive only in the HISTORICAL sections and the dated changelog. Activating
 any of them is a `MATERIAL_CAPABILITY_CHANGE` (24.13).
 
-### 24.4 Independent audit (ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1), protected Class C and complete blocker collection
+### 24.4 Audit routing (CODEX_QUOTA_RESILIENCE_V2), protected Class C and complete blocker collection
 
-- `ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1` — GPT-6 Astra is the PRIMARY independent auditor of every serious
-  crypto_core PR candidate; default requested effort `Ultra` (recorded literally, 24.3). An audit under this rule
-  is: fresh context; pinned to the exact head; READ_ONLY with zero repository or GitHub mutation; runtime-proven
-  (24.12) before any substantive audit work; performed by a lane that neither implemented nor repaired any part
-  of this candidate lifecycle; exhaustive over the declared semantic boundary (`COMPLETE_BLOCKER_COLLECTION`);
-  materiality-aware (`AUDIT_MATERIALITY_BOUNDARY_V1`); and evidence-backed. The one whole-contract re-audit after
-  the one consolidated repair meets the same standard.
-- `PROTECTED_UNIFIED_AUDIT` — a candidate is protected when it touches any protected trigger: digest
-  recomputation/consumption, expected-digest anchors, canonical serialization, reseal/provenance,
-  mutable/stateful/TOCTOU behavior, denominator or record-set integrity, duplicate/replay defense, Decimal/Fraction
-  financial arithmetic, governance thresholds, fail-closed trust transitions, READY/ADMITTED/ACCEPTED transitions,
-  SM-5/SM-6, Stage-4 completion, machine-time provenance, readiness/Deribit, connector-ready transitions,
-  live/private API, orders/order routing, scheduler/auto-loop, shadow/live, capital mutation, edge/profitability
-  claims, complex CodeQL/security, or a change to this control plane and its adapters. Uncertainty whether a
-  trigger applies counts as protected. For a protected candidate ONE GPT-6 Astra audit execution satisfies
-  together the independent audit, complete blocker collection, the protected Class-C cross-contract audit and the
-  terminal audit decision, provided every requirement of `ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1` holds; the one
-  whole-contract Astra re-audit does the same for a repaired head. The same exact head is never audited twice
-  merely because ordinary and protected review were once separate lanes. Protected work is audited by GPT-6
-  Astra alone: when Astra is unavailable, quota-blocked or stops on runtime proof, the protected gate WAITS
-  (`CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE`); Codex GPT-5.6 Sol, Claude Opus 5.5, the ChatGPT controller, ChatGPT Work
-  and any self-review never satisfy a protected audit.
-- `NON_PROTECTED_AUDIT_FALLBACK` — for a candidate with NO protected trigger only. When GPT-6 Astra cannot legally
-  perform the audit for a reason recorded in the task handoff (never as durable model state) —
-  `ASTRA_UNAVAILABLE`, `ASTRA_QUOTA_BLOCKED` or `ASTRA_RUNTIME_PROOF_STOPPED_BEFORE_SUBSTANTIVE_AUDIT` — or the
-  ChatGPT controller explicitly selects Sol with a recorded reason, Codex GPT-5.6 Sol performs the audit, provided
-  it neither implemented nor repaired this candidate lifecycle and passes runtime proof. When Sol cannot legally
-  perform it either, the ChatGPT controller may, as the last resilience mechanism and never as default routing,
-  provided it (including through ChatGPT Work) neither implemented nor repaired the candidate. A fallback audit
-  meets every requirement of `ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1` except the lane, records its fallback reason, and
-  never satisfies a protected audit. No independent eligible reviewer → `STOP_WITH_PROOF`; no other reviewer lane
-  is added.
+Every candidate receives exactly one ACCEPTANCE LANE, fixed by its protected classification and nothing else —
+not by size, difficulty or seriousness. Every acceptance audit and whole-contract re-audit, whatever its lane, is:
+fresh context; pinned to the exact head; READ_ONLY with zero repository or GitHub mutation; performed by a lane
+that neither implemented nor repaired any part of this candidate lifecycle; exhaustive over the declared semantic
+boundary (`COMPLETE_BLOCKER_COLLECTION`); materiality-aware (`AUDIT_MATERIALITY_BOUNDARY_V1`); evidence-backed; and,
+for a specialist model lane, runtime-proven (24.12) before any substantive work.
+
+- `PROTECTED_TRIGGER_MATRIX_V2` — a candidate is PROTECTED when, and only when, it changes, grants or relies on at
+  least one of these authorities:
+  - A. control-plane, governance, audit, acceptance, merge or human-authorization authority (including this
+    section and the adapters and guides that apply it);
+  - B. cryptographic digest, signature, provenance, custody, attestation, anti-replay or trust-root authority;
+  - C. Machine-Time or trusted-time qualification, or native-worker admission;
+  - D. a connector, readiness or external-trust transition that grants operational authority;
+  - E. live/private API, credential, order-routing, scheduler/auto-loop, shadow/live, capital or security
+    authority;
+  - F. a cross-contract transition that itself grants or changes READY / ADMITTED / ACCEPTED, Stage advancement
+    or paper-to-live authority;
+  - G. a risk or capital threshold whose output may authorize capital-bearing behavior.
+
+  Nothing outside A-G makes a candidate protected. Historical analytics, deterministic validators, tests,
+  refactors, non-authorizing paper-only metrics and ordinary bug fixes are NON-PROTECTED unless an A-G authority
+  actually applies. The ChatGPT controller records the trigger letters, or `NONE`, before any audit dispatch, and
+  classifies UPWARD to protected whenever ambiguity remains.
+- `CONTROLLER_NONPROTECTED_ACCEPTANCE_AUDIT` — the acceptance lane of a NON-PROTECTED candidate is the ChatGPT
+  controller, provided neither it nor ChatGPT Work implemented or repaired the candidate. The audit covers fresh
+  exact-head proof, every changed file, the load-bearing dependencies, CI and review threads, supported-path
+  adversarial reasoning, P1/P2/P3 materiality, scope and non-claims, determinism and fail-closed behavior, and the
+  complete material blocker set. Implementation tests and CI inform it and never constitute acceptance by
+  themselves. GPT-6 Astra is never dispatched for a non-protected candidate, and Codex GPT-5.6 Sol is never added
+  for model diversity. When `NO_SELF_AUDIT` makes the controller ineligible, the audit goes to Codex GPT-5.6 Sol
+  as a recorded eligibility gap (`SOL_RESERVE_ONLY`, 24.3), if Sol is itself eligible and runtime-proven; with no
+  independent eligible reviewer → `STOP_WITH_PROOF`.
+- `ASTRA_UNIFIED_INDEPENDENT_AUDIT_V1` — the acceptance lane of a PROTECTED candidate is GPT-6 Astra alone
+  (`gpt-6-astra`, `Ultra`, `MODEL_FALLBACK=PROHIBITED`, thinking `ENABLED`, 24.12). One Astra execution is at once
+  the protected acceptance audit, complete blocker collection over the protected cross-contract boundary, the
+  protected Class-C cross-contract audit and the terminal decision; the one Astra re-audit does the same for a
+  repaired head. Astra is the last semantic specialist gate: it receives only a stabilized head with a
+  `PROTECTED_AUDIT_PACKET_V2`, independently verifies every load-bearing fact its protected verdict rests on, is
+  never used as repository-discovery labor the controller can do, and reports any material P1/P2 it finds. Codex
+  GPT-5.6 Sol, Claude Opus 5.5, the ChatGPT controller, ChatGPT Work, any self-review and any challenge never
+  satisfy protected acceptance.
+- `CONTROLLER_PROTECTED_PREFLIGHT` — before every Astra dispatch the controller performs, read-only and at zero
+  specialist slots (24.8), all safely controller-owned work: SHA, tree and state proof; diff and patch
+  inspection; CI and check proof; review-thread adjudication; changed-file enumeration; load-bearing dependency
+  mapping; scope and non-claim review; materiality triage; and deterministic and fail-closed consistency review.
+  It delivers no acceptance verdict. When it — optionally informed by an Opus challenge — confirms a COMPLETE
+  material P1/P2 set, Astra is not dispatched on that head and the set opens the candidate's one repair
+  (`PROTECTED_CONTROLLER_PREFLIGHT_CONFIRMED_BLOCKER_SET`, 24.8). Rejecting a known-defective candidate is
+  controller authority; accepting a protected one never is.
+- `OPUS55_READONLY_CHALLENGE` — an OPTIONAL fresh-context READ_ONLY Claude Opus 5.5 execution for deep semantic
+  bug finding, adversarial cases, accounting and numeric review, dependency tracing, test-gap review and
+  protected-boundary preflight. The default is NOT to run one: the controller routes one only when its expected
+  defect-finding value exceeds the cost of one of the five execution slots, and only when the budget admits it
+  (`HARD_FIVE_EXECUTION_BUDGET`, 24.8). It returns every material P1/P2 it finds with evidence, for the controller
+  to adjudicate; it is evidence only — it never accepts, never mutates, and never opens a repair by itself. Run on
+  Opus 5.5 work it is also `SELF_AUDIT_OR_SAME_MODEL_CHALLENGE_NOT_INDEPENDENT`.
+- `PROTECTED_AUDIT_PACKET_V2` — every Astra dispatch carries one controller-compiled packet with exactly:
+  `BASE_SHA`, `HEAD_SHA`, `HEAD_TREE`, `CHANGED_FILES`, `PROTECTED_TRIGGER_LETTERS`, `CRITICAL_PROTECTED_CLAIMS`,
+  `LOAD_BEARING_PROTECTED_DEPENDENCIES`, `CONTROLLER_PREFLIGHT_RESULT`, `OPUS_CHALLENGE_RESULT_IF_ANY`, `CI_STATE`,
+  `REVIEW_THREADS`, `UNRESOLVED_MATERIAL_P1_P2` and `EXACT_PROTECTED_ACCEPTANCE_QUESTIONS`. Stable doctrine is
+  referenced in the repository by path, never recovered from chat history. The packet pins evidence and never
+  substitutes a summary for a fact Astra must verify itself; a missing fact stays `UNKNOWN`. Astra does not redo
+  unrelated discovery merely to duplicate the packet, but its protected verdict rests only on what it verified.
+- `ASTRA_QUOTA_BLOCK_FREEZE` — when a stabilized protected candidate needs GPT-6 Astra and Astra is quota-blocked,
+  unavailable or stopped by runtime proof: the exact head is frozen and not mutated; the protected gate WAITS
+  (`CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE`); no protected merge happens; only permitted highest-value read-only
+  work continues; and no other model substitutes for protected acceptance. The block is recorded in the task
+  handoff, never as durable model state.
 - `NO_SELF_AUDIT` — independence eligibility is decided BEFORE operational availability, for the audit and the
   re-audit alike: a lane that implemented or repaired any part of this candidate lifecycle is ineligible, and
   implementation or repair by ChatGPT Work counts as the ChatGPT controller's own. GPT-6 Astra is READ_ONLY and
   never implements or repairs; were it ever to, it would be ineligible for that candidate. No model audits its own
   implementation or repair; a Claude implementer's self-review, like any same-model review of its own work, is
   `SELF_AUDIT_ONLY_NOT_INDEPENDENT` and satisfies no audit.
-- `RUNTIME_PROOF_BEFORE_AUDIT` — an auditor proves identity and required thinking (24.12) before any substantive
-  audit work. A failed proof stops before auditing, delivers no verdict and consumes no specialist slot (24.8); a
-  substantive audit is never followed by a retroactive no-credit label.
+- `RUNTIME_PROOF_BEFORE_AUDIT` — an auditor or challenger proves identity and required thinking (24.12) before any
+  substantive work. A failed proof stops before it, delivers no verdict or finding and consumes no execution slot
+  (24.8); a substantive execution is never followed by a retroactive no-credit label.
 - `COMPLETE_BLOCKER_COLLECTION` — an audit never stops at the first defect. It returns the COMPLETE current
   material P1/P2 set of the declared semantic contract in one exhaustive pass, to the practical limit of that
   bounded contract, each finding with exact evidence. One-finding-at-a-time auditing, and the loop finding →
@@ -828,9 +872,9 @@ one next safe action. Reports are claims until the controller verifies them, and
 `CONTROLLER_ACCEPTED_STATE`. Never vote or average model answers: resolve a disputed claim with controlling
 evidence (`LIVE_STATE_PRECEDENCE`, 24.7); an unresolved load-bearing dispute stays `UNKNOWN` and blocks merge.
 
-A merge requires, each freshly proven on the exact head: the independent audit clean under 24.4 — the GPT-6
-Astra audit, which for protected work is also the protected audit, or for non-protected work only a recorded
-`NON_PROTECTED_AUDIT_FALLBACK` audit — after the one whole-contract re-audit when a repair ran; no current valid
+A merge requires, each freshly proven on the exact head: the acceptance audit clean under 24.4 — for a protected
+candidate the GPT-6 Astra audit, and for a non-protected candidate `CONTROLLER_NONPROTECTED_ACCEPTANCE_AUDIT` or
+its recorded `SOL_RESERVE_ONLY` substitute — after the one whole-contract re-audit when a repair ran; no current valid
 material P1/P2; exact-head CI terminal green, including the required tests and CodeQL; controller live-state
 proof; and the human's explicit authorization naming the PR, the exact head and the merge command. Then standard merge, post-merge verification (section 12) and the next action. These closeout
 steps are controller governance and consume no specialist prompt (24.8).
@@ -852,10 +896,10 @@ polling need no serious prompt.
 
 `AGENT_OS_HANDOFF_V1` — every serious task ends with one handoff: result; the runtime-proof block (24.12);
 setup fields (24.7); state proof (base, branch, head, PR, open PRs); files changed; validation and CI with exact
-results; review threads; P1/P2/P3 findings or the self-audit label; for an audit, the auditing lane, the
-protected-trigger classification, and whether it ran as PRIMARY (GPT-6 Astra) or as the recorded
-`NON_PROTECTED_AUDIT_FALLBACK` with its reason (24.4); the specialist prompt count of the PR lifecycle
-(24.8); and exactly one next safe action. Missing facts are `UNKNOWN`, never invented; failure tails
+results; review threads; P1/P2/P3 findings or the self-audit label; for an audit or challenge, its lane, the
+protected classification (trigger letters or `NONE`, 24.4) and, for a Sol execution, the recorded gap; for a
+repair, its `REPAIR_ENTRY_MODE` (24.8); the actual meaningful-execution count and challenge count of the PR
+lifecycle (24.8); and exactly one next safe action. Missing facts are `UNKNOWN`, never invented; failure tails
 only; a handoff never authorizes mutation.
 
 ### 24.7 SETUP_LOAD_CONTRACT_V1, FRESH_CHAT_BOOTSTRAP and LIVE_STATE_PRECEDENCE
@@ -888,53 +932,101 @@ genuinely required, and its validation. There is no file-count, LOC or module-co
 for small PRs. Split only for: unrelated contracts; different authorization; a protected boundary that cannot
 be audited together; inability to validate the whole result; or a real context/correctness risk.
 
-`MEANINGFUL_PROMPT` — a SPECIALIST model execution that materially implements, independently audits, repairs,
-or re-audits the whole contract (24.4). Only specialist executions consume the
-prompt budget. An execution that stops on runtime proof (24.12) before any substantive work consumed no slot; an
-execution that did substantive work consumed its slot whatever its verdict. No relabelling, splitting or
+`MEANINGFUL_PROMPT` — a SPECIALIST execution that does substantive work of one of five kinds: implementation,
+acceptance audit, consolidated repair, whole-contract re-audit, or `OPUS55_READONLY_CHALLENGE` (24.4). A PR lifecycle
+has exactly ONE specialist execution budget and every meaningful prompt draws on it: no kind, lane or quota concern
+has a separate pool. An execution that stops on runtime proof (24.12) before any substantive work consumed
+nothing; one that did substantive work consumed its place whatever its verdict. No relabelling, splitting or
 re-routing resets the count.
 
-`CONTROLLER_GOVERNANCE_OPERATIONS` never consume the specialist budget: live repository/GitHub state proof; CI,
-status and check reads; adjudication of executor and auditor evidence; contradiction synthesis; merge-readiness
-judgement; asking the human for exact-head merge authorization; an authorized mechanical merge; post-merge
-verification; and fresh-chat acceptance. A governance operation never contains or dispatches an implementation,
-repair or audit execution, and specialist work relabelled as "controller closeout" is still specialist work that
-counts. A `NON_PROTECTED_AUDIT_FALLBACK` audit by Sol or the controller (24.4) is specialist work: it fills, and
-consumes, an audit slot.
+`CONTROLLER_GOVERNANCE_OPERATIONS` consume nothing: live repository/GitHub state proof; CI, status and check reads;
+adjudication of executor and auditor evidence; contradiction synthesis; the protected classification,
+`CONTROLLER_PROTECTED_PREFLIGHT` and compilation of `PROTECTED_AUDIT_PACKET_V2` (24.4); merge-readiness judgement;
+asking the human for exact-head merge authorization; an authorized mechanical merge; post-merge verification; and
+fresh-chat acceptance. None of them delivers an acceptance verdict, and none contains or dispatches an
+implementation, repair, audit or challenge; specialist work relabelled as governance is still specialist work
+that counts. `CONTROLLER_NONPROTECTED_ACCEPTANCE_AUDIT` and a `SOL_RESERVE_ONLY` substitute audit deliver an
+acceptance verdict and are meaningful prompts.
 
-`PROMPT_BUDGET` — the target is the FEWEST specialist executions the lifecycle needs; the hard maximum is **5**
-per PR lifecycle, an emergency ceiling only, and there is no specialist prompt 6. No meaningless prompt is ever
-created to reach a count.
+`HARD_FIVE_EXECUTION_BUDGET` — at most **5** meaningful prompts per PR lifecycle and no sixth, by any route. The
+target is the FEWEST the lifecycle needs; no meaningless execution is created to reach a count, and no execution is
+created merely to use available model quota. The budget is a count, not a set of positions: no place in it is
+reserved for any kind of execution. It is spent by two rules:
 
-- Clean (protected or not): 1 `IMPLEMENTATION` → 2 `INDEPENDENT_AUDIT` (24.4; for protected work the one GPT-6
-  Astra unified audit) → controller governance closeout. Target: **2** specialist prompts.
-- Repaired: 1 `IMPLEMENTATION` → 2 `INDEPENDENT_AUDIT` (the complete material P1/P2 set) → 3
-  `ONE_CONSOLIDATED_REPAIR` → 4 `ONE_WHOLE_CONTRACT_REAUDIT` (GPT-6 Astra for protected work) → controller
-  governance closeout. Target: **4** specialist prompts.
-- The fifth slot exists only for one replacement audit or re-audit execution when the ChatGPT controller rejects
-  an executed one as procedurally invalid (wrong head, not fresh context, repository or GitHub mutation, or
-  incomplete blocker collection), with the reason recorded — never because of its findings or verdict. It never
-  authorizes a second repair, a second valid re-audit of the same repaired head, or a sixth prompt.
-- After the final specialist prompt, controller governance closeout (24.5) completes the lifecycle outside the
-  count. There is no specialist prompt 6.
+- `STILL_REQUIRED` — the executions the lifecycle may still need, by state: after implementation, before any
+  acceptance audit or repair — **3** (acceptance audit, repair, re-audit); once a confirmed blocker set has opened
+  the repair — **2** (repair, re-audit); after the repair — **1** (the re-audit); after a clean acceptance audit or
+  after the re-audit — **0**.
+- `BUDGET_ADMISSION_RULE` — an OPTIONAL execution (an `OPUS55_READONLY_CHALLENGE`) is dispatched only when
+  `USED + 1 + STILL_REQUIRED <= 5`, where `USED` counts the meaningful prompts already run; otherwise it is skipped.
+  Required executions — implementation, acceptance audit, repair, re-audit — need no admission and run while
+  `USED < 5`. An admitted optional execution therefore can never displace a required one.
+
+Challenge positions: at most one before the first acceptance audit or Astra dispatch, and at most one after the
+repair, before the re-audit (on the preflight-entry path, before the one Astra audit) — at most two per lifecycle,
+each under the admission rule, and zero by default. A challenge that takes the fifth place leaves no room for a
+`PROCEDURAL_REPLACEMENT`; the controller weighs that before admitting it.
+
+`PROCEDURAL_REPLACEMENT` — when the ChatGPT controller rejects an executed audit or re-audit as procedurally invalid
+(wrong head, not fresh context, repository or GitHub mutation, or incomplete blocker collection), with the reason
+recorded and never because of its findings or verdict, one replacement of that execution may run — at most one per
+lifecycle — and it is a meaningful prompt like any other. When the next required execution would be the sixth, the
+lifecycle stops at the ceiling with proof (`STOP_WITH_PROOF`) and closes without merge; there is no execution 6. A
+replacement never authorizes a second repair or a second valid re-audit of the same repaired head.
+
+Canonical paths, derived from these rules. The count is the number of meaningful prompts actually run; bracketed
+steps are zero-count governance.
+
+| Path | Actual execution order | Count |
+|---|---|---|
+| Non-protected, clean | implementation → controller acceptance audit | 2 |
+| Non-protected, clean, one challenge | implementation → challenge → controller acceptance audit | 3 |
+| Non-protected, repaired | implementation → controller acceptance audit → repair → controller re-audit | 4 |
+| Non-protected, repaired, one challenge | implementation → challenge → controller acceptance audit → repair → controller re-audit, or implementation → controller acceptance audit → repair → challenge → controller re-audit | 5 |
+| Protected, clean | implementation → [preflight, packet] → Astra audit | 2 |
+| Protected, clean, one challenge | implementation → challenge → [preflight, packet] → Astra audit | 3 |
+| Protected, repair opened by the Astra audit | implementation → [preflight, packet] → Astra audit → repair → [preflight, packet] → Astra re-audit | 4, or 5 with one admitted challenge |
+| Protected, repair opened by the preflight | implementation → [preflight confirms the complete set] → repair → [preflight, packet] → Astra audit, which is the whole-contract re-audit and terminal decision | 3, or 4-5 with one or two admitted challenges |
+
+After the final meaningful prompt, controller governance closeout (24.5) completes the lifecycle at zero count.
+
 - Waiting consumes nothing: CI still pending after the final audit, a delayed human authorization, post-merge
   verification and fresh-chat acceptance are governance. `VERDICTS_BIND_EXACT_HEAD` — every audit verdict and CI
   result binds the exact head it judged. After the implementation, only the one consolidated repair may move the
   head, and the section-3 authorized empty re-trigger commit keeps the verdicts only when its tree is identical; any
   other head movement voids the verdicts bound to the old head and stops the candidate (`REJECT/FREEZE`).
 
-`ONE_CONSOLIDATED_REPAIR` — at most one repair per candidate lifecycle. It repairs the COMPLETE audit blocker
-set by root cause in one change. No micro-patching, no finding-by-finding repair, no repair → audit → repair
-chains.
+`REPAIR_ENTRY_MODE` — the one repair opens through exactly one of two modes, and through no other:
+
+1. `ACCEPTANCE_AUDIT_CONFIRMED_BLOCKER_SET` — the complete material P1/P2 set returned by the candidate's acceptance
+   audit (24.4);
+2. `PROTECTED_CONTROLLER_PREFLIGHT_CONFIRMED_BLOCKER_SET` — for a PROTECTED candidate only and only BEFORE its Astra
+   dispatch, the complete material P1/P2 set the controller confirms in `CONTROLLER_PROTECTED_PREFLIGHT`,
+   optionally informed by an Opus challenge.
+
+Both modes require complete blocker collection, controller materiality adjudication, exact blocker identities,
+one root-cause consolidated repair and no second repair. A challenge or automated-review finding reaches a repair
+only through the controller's adjudication inside one of these modes. Every repair prompt carries
+`REPAIR_ENTRY_MODE`, `BLOCKER_INVENTORY`, `ACTUAL_MEANINGFUL_EXECUTION_COUNT` (including the repair itself) and
+`CHALLENGE_COUNT`; no template fixes a count.
+
+`ONE_CONSOLIDATED_REPAIR` — at most one repair per candidate lifecycle, opened only through `REPAIR_ENTRY_MODE`. It
+repairs that complete set by root cause in one change. No micro-patching, no finding-by-finding repair, no repair
+→ audit → repair chains.
 
 `ONE_WHOLE_CONTRACT_REAUDIT` — after that repair, exactly one fresh re-audit of the repaired exact head to the
-same 24.4 standard (GPT-6 Astra for protected work): READ_ONLY and covering the whole semantic contract, never only
-the repaired lines.
+same 24.4 standard by the acceptance lane: the controller for a non-protected candidate; GPT-6 Astra for a
+protected one, after the controller preflight runs again. When the preflight opened the repair, the one Astra audit
+of the repaired head IS this re-audit. It is READ_ONLY and covers the whole semantic contract, never only the
+repaired lines.
 
-`FIXED_POINT_STOP` — the first independent audit's complete material P1/P2 set opens the one consolidated repair.
-After that repair and its one whole-contract re-audit: material P1/P2 = NONE → the candidate proceeds to controller
-governance closeout (24.5); any genuine material P1/P2 remaining → the candidate is `REJECT/FREEZE`, receives no
-further mutation, and closes without merge. P3 / `OUT_OF_SCOPE` / theoretical-hardening observations NEVER trigger
+`FIXED_POINT_STOP` — the first complete material P1/P2 set confirmed through `REPAIR_ENTRY_MODE` opens the one
+consolidated repair. After that repair and its one whole-contract re-audit: material P1/P2 = NONE → the candidate
+proceeds to controller governance closeout (24.5); any genuine material P1/P2 remaining → the candidate is
+`REJECT/FREEZE`, receives no further mutation, and closes without merge — never a second repair. When the preflight
+of a repaired protected head confirms that a genuine material P1/P2 remains, the controller rejects and freezes the
+candidate without dispatching Astra: rejecting a known-defective candidate is controller authority and is not
+protected acceptance. P3 / `OUT_OF_SCOPE` / theoretical-hardening observations NEVER trigger
 `FIXED_POINT_STOP` and never block merge. Before freezing a candidate on a disputed finding, the ChatGPT controller
 adjudicates its severity against the declared semantic boundary and `AUDIT_MATERIALITY_BOUNDARY_V1` with evidence;
 a candidate is never frozen merely because an auditor can imagine additional robustness, and adjudication never
@@ -965,12 +1057,26 @@ subordinate to this section.
 
 ### 24.10 CONTROLLER_READONLY_FIRST_POLICY
 
-The ChatGPT controller works read-only first: it proves live state, verifies every executor and auditor claim
-against evidence, detects contradictions and stale state, compiles the next serious prompt, and judges merge
-readiness. It never replaces local tests, never treats memory as repository state, never implements product
-code, never satisfies the protected Class-C audit, performs an independent audit only as the last resort of
-`NON_PROTECTED_AUDIT_FALLBACK` (24.4), never mutates GitHub without an exact human action
-authorization, and never grants merge, readiness, live or capital authority.
+The ChatGPT controller works read-only first: whenever its connector and read-only capabilities can establish a
+fact, inspect source, verify GitHub or CI state, or perform read-only adjudication, it does so BEFORE any specialist
+execution is spent. It proves live state, verifies every executor and auditor claim against evidence, detects
+contradictions and stale state, classifies protection (24.4), compiles the next serious prompt, performs the
+non-protected acceptance audit and the protected preflight (24.4), and judges merge readiness. It never replaces
+local tests, never treats memory as repository state, never implements product code, never audits or accepts a
+candidate it or ChatGPT Work implemented or repaired, never audits or accepts a protected candidate, never mutates
+GitHub without an exact human action authorization, and never grants merge, readiness, live or capital authority.
+
+`USER_MANUAL_WORK_MINIMIZATION` — the human is never asked to run a terminal command or fetch a fact that the
+controller or the routed agent can obtain itself. Human manual work is reserved for explicit per-PR merge
+authorization, the protected approvals this doctrine reserves to the human, production/live/capital/security
+authority, and facts or actions genuinely inaccessible to the tools and agents.
+
+`QUOTA_ROUTING_IS_ADAPTIVE` / `QUALITY_BAR_IS_CONSTANT` — work goes to the lane that can safely own it, so abundant
+controller and Claude Opus 5.5 capacity carries all work those lanes may legally do and GPT-6 Astra is reserved
+for protected authority. Account or session quota readings are transient controller state: no percentage, limit
+or availability assumption is ever written into durable doctrine, no quota telemetry, registry or scheduler exists,
+and no work is manufactured to consume quota. The objective is maximum safe product progress; quota never changes
+a gate, a standard or a verdict.
 Claude Fable 5 stays `INACTIVE_EXPIRED_RETIRED`: no active surface routes to it.
 
 ### 24.11 LIVE_STATE_POLICY and non-regression
@@ -985,8 +1091,8 @@ BIST/live/private-API/order/scheduler/readiness/shadow/capital surface without s
 
 ### 24.12 RUNTIME_PROOF and effort
 
-Every serious routed execution — implementation, repair, audit, re-audit (including the unified protected audit
-of 24.4) — reports, before mutation or audit:
+Every serious routed execution — implementation, repair, audit, re-audit (including the protected GPT-6 Astra
+audit of 24.4) and challenge — reports, before mutation, audit or challenge:
 
 ```text
 MODEL_REQUESTED / MODEL_ID_REQUIRED / MODEL_ACTUAL / MODEL_EFFORT_REQUESTED / MODEL_EFFORT_ACTUAL /
@@ -1010,8 +1116,12 @@ or the execution stops before any mutation or audit. Effort telemetry is not loa
 - Execution evidence is produced by the running session itself: runtime metadata naming the exact model,
   `/model`, `/status` or an equivalent diagnostic. A selector, configuration file, default, cache, alias or
   request text states intent, never the executing model, thinking mode or effort.
-- Implementation, repair and audit executions require thinking (`THINKING_REQUIRED=ENABLED`, stated in the
-  serious prompt's `MODEL_RUNTIME_PROOF`).
+- Implementation, repair, audit and challenge executions require thinking (`THINKING_REQUIRED=ENABLED`, stated in
+  the serious prompt's `MODEL_RUNTIME_PROOF`).
+- A protected GPT-6 Astra audit or re-audit requests `MODEL_REQUESTED=GPT-6 Astra`, `MODEL_ID_REQUIRED=gpt-6-astra`,
+  `MODEL_EFFORT_REQUESTED=Ultra`, `MODEL_FALLBACK=PROHIBITED` and `THINKING_REQUIRED=ENABLED`, proven on
+  current-session execution evidence. No substitute model satisfies protected acceptance; a failed proof leaves the
+  protected gate waiting (`ASTRA_QUOTA_BLOCK_FREEZE`, 24.4).
 - When the exact required `MODEL_ACTUAL` is independently proven on execution evidence, the absence of a separate
   fallback telemetry field is not a second proof requirement; a known prohibited fallback still stops.
 - `MODEL_EFFORT_ACTUAL` may be `UNKNOWN` when exact execution-effort telemetry is unavailable. That is
@@ -1069,8 +1179,9 @@ generic architecture improvement. A reopening change follows the same lifecycle 
 
 `PRODUCT_DEFAULT` — after `SETUP_STATUS=CLOSED_FROZEN` the default next action is PRODUCT work, and ordinary
 product PRs never redesign the workflow. Product PRs use `LARGEST_SAFE_SEMANTIC_CLOSURE`, the fewest-prompt
-budget (target 2 clean / 4 repaired, hard maximum 5, no prompt 6), one complete GPT-6 Astra-primary audit, at most
-one consolidated repair and one whole-contract re-audit (24.4, 24.8).
+budget (target 2 clean / 4 repaired, hard maximum 5 counting every challenge, no execution 6), one complete
+acceptance audit by the lane of 24.4 — the ChatGPT controller for a non-protected candidate, GPT-6 Astra for a
+protected one — at most one consolidated repair and one whole-contract re-audit (24.4, 24.8).
 
 `CLAUDE_LANE_UPGRADE_TRANSITION` — `CLAUDE_OPUS_5_5_CONTROL_PLANE_UPGRADE_V1` (the Claude lane identity of 24.3,
 its effort policy in 24.12 and the adapters that apply them) is a reopening under `MATERIAL_CAPABILITY_CHANGE`
@@ -1093,6 +1204,27 @@ Astra terminal audit remain performable. The amendment's own rules, including th
 bind only candidate lifecycles that start after it is merged and post-merge verified. From then on
 `SETUP_STATUS=CLOSED_FROZEN` holds again under the reopen rules above — proven from live evidence, never written
 into a durable file — and the default next action is product work.
+
+`CODEX_QUOTA_RESILIENCE_V2_TRANSITION` — `CODEX_QUOTA_RESILIENCE_V2` (the audit routing and execution accounting of
+24.3, 24.4, 24.5, 24.6, 24.8, 24.10 and 24.12 and the surfaces that apply them) is a reopening under
+`MATERIAL_CAPABILITY_CHANGE`: routing a GPT-6 Astra `Ultra` audit to every serious candidate draws on the shared
+Codex quota faster than protected acceptance needs, while controller and Claude capacity sit idle. It is a
+`ROOT_CAUSE_ESCAPE` from accepted main: the closed, unmerged V1 candidate is negative evidence only, and its
+blocker identities — `PRE_ASTRA_REPAIR_TEMPLATE_INCONSISTENCY`, `HARD5_CHALLENGE_BUDGET_ESCAPE`,
+`FIFTH_SLOT_RESERVATION_CONTRADICTION` and `LIFECYCLE_EXAMPLE_MISNUMBERING` — are closed here by the architecture of
+24.8 (one budget with no reserved place, the admission rule, count-derived paths, and `REPAIR_ENTRY_MODE` with
+mandatory repair-prompt fields). The change that introduces V2 is NOT governed by V2: it is a trigger-A candidate
+governed exclusively by the plane accepted before it, so its own lifecycle is its implementation → ONE GPT-6 Astra
+`Ultra` independent and protected whole-contract audit → only if that audit returns a complete material P1/P2 set,
+ONE consolidated Claude Opus 5.5 repair → exactly ONE Astra whole-contract re-audit → any remaining genuine
+P1/P2 → `REJECT/FREEZE`. For that change, controller preflight and an Opus challenge cannot open its repair, the
+pre-Astra entry mode of 24.8 does not apply to it, and it is not mutated between implementation and its first Astra
+audit on controller, automated-review or same-model findings — those are evidence for Astra and for adjudication
+under the base lifecycle. Every auditor and the controller apply this section and the host adapters as they stand
+on its base (accepted main), never the candidate's own text. V2's rules bind only candidate lifecycles that start
+after it is merged, post-merge verified and fresh-chat accepted; a lifecycle already open finishes under the plane
+it started under. From then on `SETUP_STATUS=CLOSED_FROZEN` holds again under the reopen rules above — proven from
+live evidence, never written into a durable file — and the default next action is product work.
 
 ---
 
@@ -1314,3 +1446,29 @@ writer, standard merge only, subagent limits, Deep Research triggers and every p
 security gate. The transition rule (24.14 `CLAUDE_LANE_UPGRADE_TRANSITION`) keeps this change governed by the
 plane accepted before it: the superseded lane implements it, GPT-6 Astra audits it, and no model accepts its own
 successor. Docs/setup only: no product code, tests, workflows or dependencies touched.*
+
+*v6.3 (2026-09-26): `CODEX_QUOTA_RESILIENCE_V2` — a `MATERIAL_CAPABILITY_CHANGE` and controller-authorized
+`ROOT_CAUSE_ESCAPE` built from accepted main. It is not a repair of the closed, unmerged PR #394
+(`CODEX_QUOTA_RESILIENCE_V1`): that candidate's commits and text were not adopted; its four blocker identities were
+inherited and closed by architecture. Audit ROUTING changes; the acceptance standard does not. The acceptance lane
+of every candidate is fixed by the finite `PROTECTED_TRIGGER_MATRIX_V2` (A-G, ambiguity classified upward): the
+ChatGPT controller is the default independent acceptance auditor of non-protected candidates
+(`CONTROLLER_NONPROTECTED_ACCEPTANCE_AUDIT`), and GPT-6 Astra (`gpt-6-astra`, `Ultra`, fallback prohibited, thinking
+enabled) is the sole protected acceptance auditor, dispatched only on a stabilized head with a
+`PROTECTED_AUDIT_PACKET_V2` after the zero-count `CONTROLLER_PROTECTED_PREFLIGHT`. Claude Opus 5.5 adds an optional,
+default-off `OPUS55_READONLY_CHALLENGE` that is evidence only. Codex GPT-5.6 Sol becomes `SOL_RESERVE_ONLY`;
+`NON_PROTECTED_AUDIT_FALLBACK` is retired. Section 24.8 now has one specialist execution budget of at most five in
+which every kind — including the challenge — counts, with no reserved place, a `STILL_REQUIRED` /
+`BUDGET_ADMISSION_RULE` pair that keeps optional executions from displacing required ones, a
+`PROCEDURAL_REPLACEMENT` that consumes the same budget, canonical paths whose counts are the executions actually
+run, and `REPAIR_ENTRY_MODE` (acceptance-audit or, for future protected candidates before Astra, controller
+preflight) with mandatory repair-prompt fields. Added `ASTRA_QUOTA_BLOCK_FREEZE`, `USER_MANUAL_WORK_MINIMIZATION`
+and `QUOTA_ROUTING_IS_ADAPTIVE` / `QUALITY_BAR_IS_CONSTANT`; strengthened `CONTROLLER_READONLY_FIRST_POLICY`. The
+companion token-efficiency docs replace their stale lane and routing matrices with references to this section.
+Unchanged: PR sizing, `COMPLETE_BLOCKER_COLLECTION`, `AUDIT_MATERIALITY_BOUNDARY_V1`, `FINITE_AUDIT_RULE`,
+`NO_SELF_AUDIT`, one consolidated repair, one whole-contract re-audit, `FIXED_POINT_STOP`, `ROOT_CAUSE_ESCAPE`, one
+open PR and one writer, human exact-head merge authorization, standard merge only, Astra as sole protected
+acceptance, and every paper-first, fail-closed, deterministic, live, capital and security gate.
+`CODEX_QUOTA_RESILIENCE_V2_TRANSITION` (24.14) governs this change itself under the prior plane: one Astra `Ultra`
+audit, and a repair only from that audit's complete set. Docs/setup only: no product code, tests, scripts,
+workflows or dependencies touched.*

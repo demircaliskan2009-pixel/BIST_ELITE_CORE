@@ -29,8 +29,8 @@ validation, logged full suite when required, `git diff --check`, exact changed-f
 PR, bounded CI/thread snapshots, no merge.
 
 `LANE:HANDOFF-STD` - end with an `AGENT_OS_HANDOFF_V1` packet: result, actual model, setup fields, state
-proof, files, validation, PR/check/thread state, audit class, blockers, exactly one next safe action;
-failure tails only.
+proof, files, validation, PR/check/thread state, protected classification, blockers, the actual
+meaningful-execution and challenge counts (section 24.8), exactly one next safe action; failure tails only.
 
 ## 2. Controller lanes (ChatGPT GPT-5.6 Thinking + GitHub connector)
 
@@ -45,33 +45,31 @@ stops; emit one bounded PR contract; decide whether Deep Research is required. N
 map, exact allowed files, invariants, forbidden surfaces, protected-risk class, exact tests, validation
 ladder, branch/commit/PR contract, stop conditions.
 
-`LANE:CONTROLLER_PRE_CODEX_TRIAGE` - verify PR/base/head/files/patches/dependencies/CI/threads; run the
-protected-trigger matrix; strip questions already proven; emit the narrow Codex packet (pinned head, exact
-changes, direct dependencies, unresolved semantic questions, adversarial cases, report contract).
+`LANE:CONTROLLER_PROTECTED_PREFLIGHT` - `CONTROLLER_PROTECTED_PREFLIGHT` and `PROTECTED_AUDIT_PACKET_V2`
+(section 24.4): classify against `PROTECTED_TRIGGER_MATRIX_V2`, do every safely controller-owned check at zero
+count, and either open the one repair on a confirmed complete P1/P2 set or emit the packet for one GPT-6 Astra
+audit on a stabilized head. Delivers no acceptance verdict.
 
 `LANE:CONTROLLER_REPORT_VERIFY` - check every executor claim against live PR metadata, pinned head/base,
 exact files, commits, runs/jobs, tests, CodeQL, reviews, threads, open-PR count, merge state, pinned file
 contents. No report is self-authenticating; unverified claims stay UNKNOWN/UNPROVEN. Output
 HANDOFF_ACCEPTED / HANDOFF_REPAIR_REQUIRED / HANDOFF_REJECTED / HANDOFF_UNKNOWN.
 
-`LANE:CONTROLLER_LOW_RISK_AUDIT` - Class-A independent audit (docs/setup/prompt/skill/workflow/low-risk CI
-config/helper scripts): fresh pinned-head reread, complete patch, exact files, terminal CI, thread state,
-P1/P2/P3 classification, explicit statement why Class A applies. Final gate and merge stay separate.
+`LANE:CONTROLLER_NONPROTECTED_ACCEPTANCE_AUDIT` - `CONTROLLER_NONPROTECTED_ACCEPTANCE_AUDIT` (section 24.4) for a
+candidate classified `NONE` that the controller (including through ChatGPT Work) neither implemented nor
+repaired: the acceptance-audit standard and coverage of section 24.4, the complete material blocker set, zero
+Astra executions; a meaningful prompt of the hard-five budget.
 
 `LANE:CONTROLLER_REPO_READONLY_AUDIT` - connector-backed read-only repository/setup/workflow/architecture
 consistency audit (`CONTROLLER_READONLY_FIRST_POLICY`): tracked-file + dependency surface map,
 model-routing/lane consistency, stale-state/drift detection, evidence vs inference, severity P1/P2/P3. No
-edits/commits/PRs/merge/product implementation; never treats memory as repo state; never replaces Class-C
-Sol; output read-only audit handoff + one next safe action.
-
-`LANE:CONTROLLER_CLASS_B_AUDIT` - controller-first read-only audit of ordinary bounded product code:
-source/test + dependency map, negative-test check, fail-closed first pass, CI/CodeQL, full protected-trigger
-checklist; controller-only closeout only when every no-Codex criterion is proven, else Terra ordinary audit /
-escalate to Class C on any uncertainty. `CODEX_REQUIRED: NO` carries the exact reason + trigger checklist.
+edits/commits/PRs/merge/product implementation; never treats memory as repo state; never replaces protected
+acceptance by GPT-6 Astra; output read-only audit handoff + one next safe action.
 
 `LANE:CONTROLLER_FINAL_GATE` - read-only merge-readiness verification: PR open/non-draft, base main, pinned
 head unchanged, exact files, required checks terminal success (accepted skips only), CodeQL clean, no
-current valid unresolved P1/P2, exactly one open PR, no forbidden scope, correct audit class completed.
+current valid unresolved P1/P2, exactly one open PR, no forbidden scope, the acceptance audit of the lane
+section 24.4 fixes completed.
 Output READY_FOR_MERGE_AUTHORIZATION | NOT_READY | UNKNOWN. Never merges.
 
 `LANE:CONTROLLER_AUTHORIZED_ACTION` - execute ONLY an explicitly human-named GitHub action (standard merge,
@@ -81,29 +79,23 @@ push, force push, squash/rebase, self-approval, blind retry, or opportunistic ad
 
 ## 3. Executor lanes
 
-`LANE:LUNA_MECHANICS` - T0 only: git/gh state, bounded CI polling, PR metadata (only when explicitly
-authorized), thread status, authorized standard merge + postverify command running. Reasoning none/low; no
-design, code, audit judgment, or thread resolution.
+Lane roles are section 24.3 and 24.4; the lanes below only name them for compact prompts.
 
-`LANE:SONNET_BOUNDED_IMPLEMENTATION` - runtime-proven Claude Sonnet 5 only (print MODEL_ACTUAL first; stop
-if unproven): T1/T2 bounded reads, small/medium deterministic implementation, docs/tests, mechanical code,
-simple same-branch repair. Never protected/digest/SM/Stage-4/readiness/capital work, never T4, never
-Class-C audit. Fallback Terra (bounded) / Opus (broad).
+`LANE:OPUS55_IMPLEMENTATION` - Claude Opus 5.5 implementation of one semantic boundary with its repo-native
+work and exhaustive self-audit; local state proven independently; no merge. Template: playbook 3.1.
 
-`LANE:TERRA_BOUNDED_IMPLEMENTATION` - T2 exact-file bounded implementation or docs/tests from the controller
-packet; deterministic, fail-closed, paper-only invariants preserved; no merge.
+`LANE:OPUS55_CONSOLIDATED_REPAIR` - the ONE repair, opened through a `REPAIR_ENTRY_MODE` (section 24.8), carrying
+the mode, the complete blocker inventory and the actual counts. Template: playbook 3.2.
 
-`LANE:TERRA_INDEPENDENT_AUDIT` - fresh-context, pinned-head ordinary independent audit (Class B when
-required); never the implementation context; changed files + direct dependencies only; no
-edits/comments/merge; AUDITOR handoff with P1/P2/P3 + exact evidence.
+`LANE:OPUS55_READONLY_CHALLENGE` - optional, default-off, READ_ONLY evidence-only challenge; a meaningful prompt
+of the hard-five budget, admitted only by `BUDGET_ADMISSION_RULE`. Template: playbook 3.3.
 
-`LANE:OPUS_HEAVY_IMPLEMENTATION` - T3 broad-but-bounded local implementation/refactor/forensic debug/long
-validation loops on named files; local state proven independently; separate independent audit still required
-for protected work; no merge.
+`LANE:ASTRA_PROTECTED_AUDIT` - GPT-6 Astra (`gpt-6-astra`, `Ultra`, fallback prohibited, thinking enabled) on a
+`PROTECTED_AUDIT_PACKET_V2` only: sole protected acceptance audit or re-audit of a stabilized head; no discovery,
+polling, mechanics or mutation; quota-blocked → `ASTRA_QUOTA_BLOCK_FREEZE`.
 
-`LANE:SOL_PROTECTED_DESIGN_AUDIT` - scarce T4 protected design/audit on a controller-prepared narrow packet
-only (digest/provenance/trust boundaries, SM-5/SM-6, Stage-4, readiness/Deribit, complex security). xhigh
-default; max only controller-gated. No discovery, polling, mechanics, or implementation in audit mode.
+`LANE:SOL_RESERVE` - Codex GPT-5.6 Sol only on a controller-recorded capability or eligibility gap
+(`SOL_RESERVE_ONLY`); never protected acceptance, never model diversity.
 
 `LANE:IMPLEMENTER_HANDOFF` - close any implementation turn: actual files/head/commits, local tests,
 logged-full-suite result, CI snapshot, unresolved issues, no self-audit claim, one next safe action, in
@@ -113,18 +105,10 @@ logged-full-suite result, CI snapshot, unresolved issues, no self-audit claim, o
 format, full suite, setup audit, diff check, open PRs, clean tree, residual blockers, one next action.
 
 Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED` (section 24.10): the retired `LANE:FABLE5_*` surge / challenge /
-full-repo-audit lanes and the retired Fable justification gate are never issued. Route former Fable work
-instead: broad-but-bounded T3 →
-`LANE:OPUS_HEAVY_IMPLEMENTATION` (bounded T2 → `LANE:SONNET_BOUNDED_IMPLEMENTATION` /
-`LANE:TERRA_BOUNDED_IMPLEMENTATION`); non-Class-C read-only architecture/contradiction/full-repo consistency
-analysis → the controller read-only-first lanes in §2 (`LANE:CONTROLLER_REPO_READONLY_AUDIT`,
-`LANE:CONTROLLER_LOW_RISK_AUDIT`, `LANE:CONTROLLER_CLASS_B_AUDIT`); protected Class-C →
-`LANE:SOL_PROTECTED_DESIGN_AUDIT`.
-
-`GATE:MODEL_EXPECTED_VALUE_PER_TOKEN` - serious prompts state: TOKEN_CLASS, TOKEN_BUDGET_ASSESSMENT,
-EXPECTED_VALUE_PER_TOKEN, EXPECTED_PROMPTS, MAX_REPAIR_CYCLES, CONTEXT_REUSE_PACKET, WHY_THIS_MODEL,
-CHEAPER_SAFE_ALTERNATIVE, STOP_IF_BUDGET_INSUFFICIENT. Measured harness cost, never hard-coded price
-rankings; correctness never sacrificed for tokens.
+full-repo-audit lanes and the retired Fable justification gate are never issued; the retired Luna, Sonnet 5 and
+Terra lanes and the former Sol protected-audit lane are likewise never issued. Former Fable work routes to
+`LANE:OPUS55_IMPLEMENTATION` or to the controller read-only-first lanes in §2; protected acceptance routes only to
+`LANE:ASTRA_PROTECTED_AUDIT`.
 
 ## 4. Research lanes (controller-orchestrated; read-only)
 
@@ -165,10 +149,10 @@ REPORT: AGENT_OS_HANDOFF_V1.
 ## 6. Invariants
 
 One open PR; one repository writer at a time; no direct main push; standard merge only; explicit human merge
-authorization; pending CI is NOT_READY; current valid P1/P2 block; Class-C Codex audit never replaceable;
-connector final gate never waived; postmerge verification before next work; research never mutates;
-crypto_core-only; no BIST/live/private API/orders/scheduler/readiness/shadow/capital work. No autonomous
-scheduler, no auto-loop, no direct model-to-model runtime messaging. ChatGPT is the read-only-first
-controller-auditor for non-Class-C work and never replaces local tests or the Class-C Sol audit. Claude
+authorization; pending CI is NOT_READY; current valid P1/P2 block; protected acceptance by GPT-6 Astra alone,
+never replaceable; connector final gate never waived; postmerge verification before next work; research never
+mutates; crypto_core-only; no BIST/live/private API/orders/scheduler/readiness/shadow/capital work. No autonomous
+scheduler, no auto-loop, no direct model-to-model runtime messaging. ChatGPT is the read-only-first default
+acceptance auditor for non-protected work and never replaces local tests or the protected GPT-6 Astra audit. Claude
 Fable 5 is `INACTIVE_EXPIRED_RETIRED` — never a lane, fallback, or dependency; pre-v5.2 Fable prompts are
 archived in `fable_exit_contract_index.md`, never active lanes.

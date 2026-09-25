@@ -35,8 +35,9 @@ generated output.
    GitHub discovery.
 2. The CONTROLLER_TO_IMPLEMENTER packet carries the exact read set, symbol map, allowed files, invariants,
    protected-risk class, validation ladder, and stops — implementers start from it.
-3. Pre-Codex triage: the controller removes state/metadata/mechanical questions before any Codex prompt and
-   sends only pinned head + exact changes + direct dependencies + unresolved semantic questions.
+3. Pre-Astra triage: the controller finishes all safely controller-owned work in its zero-count protected
+   preflight and sends GPT-6 Astra only a `PROTECTED_AUDIT_PACKET_V2` on a stabilized head (section 24.4) — never
+   chat-history recovery and never discovery the controller can do.
 4. Handoff reuse: downstream lanes consume the prior `AGENT_OS_HANDOFF_V1` packet instead of re-deriving it;
    accepted state lives with the controller, never re-proved by memory.
 5. Executors still prove their own LOCAL facts (git state, clean tree, tests) — controller packets never
@@ -59,11 +60,10 @@ fallback, and the `SETUP_*` block.
 
 ## 5. Model selection and proof
 
-Selection follows `MODEL_EXPECTED_VALUE_PER_TOKEN_POLICY` (workflow §24.10) — lowest capable lane by
-expected value per token: Luna or Sonnet 5 `low` for mechanics → runtime-proven Sonnet 5 `medium` or Terra
-for bounded T2 work → Opus 5.5 (default) for broad/complex local T3 work → Sol only for qualifying protected
-T4 on a narrow packet; non-Class-C read-only mapping/audit defaults to the ChatGPT read-only-first
-controller (`CONTROLLER_READONLY_FIRST_POLICY`). Effort is chosen per workflow §24.12: `xhigh` is the normal
+Lane selection is section 24.3 and 24.4, never restated here: the controller does every read-only task it safely
+can and accepts non-protected candidates; Claude Opus 5.5 carries implementation, repair and the repo-native work
+of that task; GPT-6 Astra is spent on protected acceptance only; Codex GPT-5.6 Sol runs only on a recorded reserve
+gap (`QUOTA_ROUTING_IS_ADAPTIVE` / `QUALITY_BAR_IS_CONSTANT`, §24.10). Effort is chosen per workflow §24.12: `xhigh` is the normal
 Opus 5.5 coding default, `max` only on an explicit T3B trigger, review at `medium`/`high`/`xhigh` by breadth.
 Claude Sonnet 5 is `NOT_IN_ACTIVE_COUNCIL` (§24.3) and is neither a lane nor a fallback, and no superseded
 Claude lane is one either; use measured session/harness cost, never hard-coded price
@@ -75,24 +75,19 @@ safety, repo state, or results.
 Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED` — never a lane or fallback; pre-v5.2 Fable-era contracts stay
 archived in `fable_exit_contract_index.md` and are never routing.
 
-## 6. Codex reduction matrix
+## 6. Codex quota economy
 
-Shifted AWAY from Codex (controller-owned): Class-A docs/setup/config audits; PR metadata and state proof;
-workflow/prompt consistency; routine CI state; broad repository discovery; already-proven scope/non-claim
-checks; mechanical low-risk audits. RETAINED by Codex (Class C, mandatory, never replaceable): digest/
-provenance/serialization/anchors, mutable/TOCTOU, denominator and record-set integrity, replay defense,
-Decimal/Fraction finance, governance thresholds, fail-closed trust transitions, READY/ADMITTED/ACCEPTED,
-SM-5/SM-6, Stage-4, machine-time, readiness/Deribit, live/order/scheduler/shadow/capital semantics,
-edge/profitability claims, complex security, current P1/P2 source findings. Codex capacity is preserved by
-narrowing the question, never by weakening the gate.
+The shared Codex quota is spent on protected acceptance and on recorded reserve gaps only. Which candidates are
+protected is the finite `PROTECTED_TRIGGER_MATRIX_V2` of section 24.4 alone — not restated here. A non-protected
+candidate costs zero Astra executions; a protected one costs one compact Astra audit (and at most one re-audit),
+prepared by the controller preflight so Astra never spends quota on discovery or on a head already known to be
+defective. Codex capacity is preserved by classifying, preparing and stabilizing, never by weakening the gate.
 
-## 7. Prompt-count budgets (LOW_PROMPT_MAXIMUM_WORK_POLICY)
+## 7. Execution budget
 
-Class A: 1 executor prompt end-to-end, then controller audit → human merge authorization → mechanical
-merge/postverify. Class B: 1 implementation prompt + 1 controller audit/triage (+ Terra audit only when
-required; at most 1 consolidated repair prompt before re-audit). Class C: 1 implementation + 1 focused Codex
-audit + at most 1 consolidated same-branch repair per audit cycle + re-audit only on material head change +
-1 mechanical merge/postverify. Never split coherent work into micro-prompts unless a stop condition fires;
+Section 24.8 alone (`HARD_FIVE_EXECUTION_BUDGET`): one budget of at most five meaningful prompts, in which every
+implementation, acceptance audit, repair, re-audit and challenge counts, and no execution six. Never split
+coherent work into micro-prompts unless a stop condition fires;
 never combine implementation with its own audit, merge with next feature, research with mutation, or two
 PRs/implementers.
 
@@ -113,14 +108,15 @@ UNKNOWN findings, and its refresh trigger. Research savings never outrank factua
 - Routing everything to Opus 5.5, or every Opus task to `max`; `max` without a named T3B trigger.
 - Generic re-verification loops ("double-check everything") in place of the deterministic gate ladder;
   rerunning a passed gate on an unchanged head; subagents for polling, routine commands or small patches.
-- Spending Codex on questions the connector already answered; broad Codex repo reads without justification.
+- Spending Codex on questions the connector already answered; broad Codex repo reads without justification;
+  dispatching Astra for a non-protected candidate, an unstable head or discovery; a challenge by reflex.
 - Broad scans, full logs, duplicate doctrine, `product/*` branch templates, per-PR reflex research.
 
 ## 10. Non-regression checks
 
 One open PR; one repository writer at a time; no direct `main` push; standard merge only; no merge without
-explicit human authorization; pending CI = `NOT_READY`; current valid P1/P2 threads block; Class-C
-independent Codex audits where required; connector final gate never waived; postmerge verification before
+explicit human authorization; pending CI = `NOT_READY`; current valid P1/P2 threads block; GPT-6 Astra as the
+sole protected acceptance, never reassigned; connector final gate never waived; postmerge verification before
 next work; crypto_core-only; no BIST, live/private API, orders, scheduler, readiness transition,
 shadow/live, or capital mutation.
 
