@@ -35,8 +35,10 @@ Trust model (shared kernel ``edge_artifact_core``):
   coverage mapping are derived from the registered profile and the binding; threshold VALUES live only in the ledger.
 * Bias proofs. LOOKAHEAD and REPAINT are proven only from authenticated EF-3 facts (registry-owned time policies,
   finalized-only discipline, point-in-time revision safety, feature-input eligibility, instrument coverage) and the
-  registered decision schedule; every profile input needs exactly one eligible source series per pinned instrument,
-  so no later gate can choose between candidate sources after seeing results. SURVIVORSHIP is proven only within the
+  registered decision schedule. Every profile input must be a data requirement the admitted StrategySpec declares
+  (manifest data the spec never declared is never admissible input) and needs exactly one eligible source series per
+  pinned instrument, so no later gate can choose between candidate sources after seeing results. SURVIVORSHIP is proven
+  only within the
   declared claim scope: a pinned-universe claim rests on the admitted instrument list and manifest coverage and carries
   explicit limitations, while a cross-sectional claim needs point-in-time universe membership that no authenticated
   authority holds (NEEDS_EXTERNAL_FACTS). A check failing on authenticated evidence is FAIL. No proof outcome exceeds
@@ -710,19 +712,35 @@ def _proof(
     )
 
 
-def _required_input_series(
-    profile: StrategyExecutableProfile, manifest: EdgeSourcePacketEvidence
-) -> dict[str, list[EdgeSourceSeriesRecord]]:
-    """Per profile-required data key, the EF-3 series of that key carrying the profile's required semantics."""
+def _admissible_input_series(
+    profile: StrategyExecutableProfile, manifest: EdgeSourcePacketEvidence, spec: StrategySpec
+) -> list[tuple[str, bool, list[EdgeSourceSeriesRecord]]]:
+    """Per profile-required data key: whether the admitted spec declares it, and its admissible EF-3 series.
 
-    return {
-        key: [
+    A key the authenticated StrategySpec does not declare has NO admissible series: the profile may never consume data
+    outside the admitted spec's data requirements, even when the manifest happens to carry that data.
+    """
+
+    declared_keys = set(spec.data_requirements)
+    admissible: list[tuple[str, bool, list[EdgeSourceSeriesRecord]]] = []
+    for key in sorted(profile.required_data_requirement_keys):
+        declared = key in declared_keys
+        series = [
             record
             for record in manifest.series
-            if record.data_requirement_key == key and record.funding_semantics == profile.required_funding_semantics
+            if declared
+            and record.data_requirement_key == key
+            and record.funding_semantics == profile.required_funding_semantics
         ]
-        for key in sorted(profile.required_data_requirement_keys)
-    }
+        admissible.append((key, declared, series))
+    return admissible
+
+
+def _input_authority_checks(key: str, declared: bool, series: Sequence[EdgeSourceSeriesRecord]) -> list[EdgeBiasCheck]:
+    checks = [_check("required_input_declared_by_admitted_strategy_spec", key, declared)]
+    if declared and not series:
+        checks.append(_check("required_input_series_present", key, False))
+    return checks
 
 
 def _schedule_check(profile: StrategyExecutableProfile) -> EdgeBiasCheck:
@@ -734,12 +752,13 @@ def _schedule_check(profile: StrategyExecutableProfile) -> EdgeBiasCheck:
 
 
 def _lookahead_proof(
-    profile: StrategyExecutableProfile, manifest: EdgeSourcePacketEvidence, universe: Sequence[str]
+    profile: StrategyExecutableProfile, manifest: EdgeSourcePacketEvidence, spec: StrategySpec, spec_digest: str
 ) -> EdgeBiasProof:
     checks = [_schedule_check(profile)]
-    for key, series in _required_input_series(profile, manifest).items():
-        if not series:
-            checks.append(_check("required_input_series_present", key, False))
+    for key, declared, series in _admissible_input_series(profile, manifest, spec):
+        checks.extend(_input_authority_checks(key, declared, series))
+        if not declared:
+            continue
         for record in series:
             policies_bound = record.registry_requirement_bound and None not in (
                 record.event_time_policy,
@@ -748,7 +767,7 @@ def _lookahead_proof(
             )
             checks.append(_check("input_series_time_policies_registry_bound", record.series_id, policies_bound))
             checks.append(_check("input_series_finalized_only", record.series_id, record.finalized_only))
-        for instrument in universe:
+        for instrument in spec.instrument_universe:
             sources = [
                 record.series_id
                 for record in series
@@ -764,6 +783,7 @@ def _lookahead_proof(
         EdgeBiasProofKind.LOOKAHEAD,
         _LOOKAHEAD_CLAIM_ID,
         (
+            spec_digest,
             manifest.source_packet_evidence_digest,
             manifest.data_requirement_registry_digest,
             profile.profile_semantics_digest,
@@ -773,11 +793,12 @@ def _lookahead_proof(
     )
 
 
-def _repaint_proof(profile: StrategyExecutableProfile, manifest: EdgeSourcePacketEvidence) -> EdgeBiasProof:
+def _repaint_proof(
+    profile: StrategyExecutableProfile, manifest: EdgeSourcePacketEvidence, spec: StrategySpec, spec_digest: str
+) -> EdgeBiasProof:
     checks = [_schedule_check(profile)]
-    for key, series in _required_input_series(profile, manifest).items():
-        if not series:
-            checks.append(_check("required_input_series_present", key, False))
+    for key, declared, series in _admissible_input_series(profile, manifest, spec):
+        checks.extend(_input_authority_checks(key, declared, series))
         for record in series:
             checks.append(_check("input_series_finalized_only", record.series_id, record.finalized_only))
             checks.append(
@@ -787,6 +808,7 @@ def _repaint_proof(profile: StrategyExecutableProfile, manifest: EdgeSourcePacke
         EdgeBiasProofKind.REPAINT,
         _REPAINT_CLAIM_ID,
         (
+            spec_digest,
             manifest.source_packet_evidence_digest,
             manifest.data_requirement_registry_digest,
             profile.profile_semantics_digest,
@@ -885,8 +907,8 @@ def _derive_facts(
         parameter_constraints=tuple(sorted(profile.parameter_constraints)),
         binding_coverage_digest=executable.coverage_digest,
         bias_proofs=(
-            _lookahead_proof(profile, manifest, universe),
-            _repaint_proof(profile, manifest),
+            _lookahead_proof(profile, manifest, spec, admission.strategy_spec_digest),
+            _repaint_proof(profile, manifest, spec, admission.strategy_spec_digest),
             _survivorship_proof(
                 scope,
                 spec_digest=admission.strategy_spec_digest,

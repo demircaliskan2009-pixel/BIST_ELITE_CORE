@@ -294,8 +294,14 @@ def _series(series_id: str, key: str) -> EdgeInputSeries:
     )
 
 
-def _chain_with_series(key: str, series: tuple[EdgeInputSeries, ...]):
-    """Authentic EF-2 → EF-4 chain over ``series`` of one data key, plus an approved binding mapping that key."""
+def _chain_with_series(series: tuple[EdgeInputSeries, ...], spec_keys: tuple[str, ...]):
+    """Authentic EF-2 → EF-4 chain over ``series`` whose spec declares ``spec_keys``, plus an approved binding.
+
+    The intake and manifest carry every series key; the binding maps each spec data element onto the profile's funding
+    data element — a governance text mapping the binding cannot machine-check.
+    """
+
+    keys = tuple(sorted({item.data_requirement_key for item in series}))
 
     packet = build_source_packet(
         packet_id="pkt-1",
@@ -316,7 +322,7 @@ def _chain_with_series(key: str, series: tuple[EdgeInputSeries, ...]):
         candidate_strategy_id="passive-funding-carry",
         edge_family="funding_basis_carry",
         economic_rationale="Funding pays carry.",
-        data_requirement_keys=(key,),
+        data_requirement_keys=keys,
         declared_regime_dependence="positive_funding_regime",
         kill_criteria_draft=support.CRITERIA,
         kill_criteria_policy=policy,
@@ -333,19 +339,31 @@ def _chain_with_series(key: str, series: tuple[EdgeInputSeries, ...]):
         input_series=series,
     )
     assert manifest.advances is True
-    admission = _admission_from(intake, manifest, spec_changes={"data_requirements": {key: "8h"}})
-    coverage = tuple(
-        replace(entry, spec_element_ref=key) if entry.spec_element_kind == "data_requirement" else entry
-        for entry in bind.COVERAGE
+    admission = _admission_from(intake, manifest, spec_changes={"data_requirements": dict.fromkeys(spec_keys, "8h")})
+    data_entry = next(entry for entry in bind.COVERAGE if entry.spec_element_kind == "data_requirement")
+    coverage = (
+        *(entry for entry in bind.COVERAGE if entry.spec_element_kind != "data_requirement"),
+        *(replace(data_entry, spec_element_ref=key) for key in spec_keys),
     )
-    return intake, admission, bind.executable_binding(admission, coverage)
+    binding = bind.executable_binding(admission, coverage)
+    assert (admission.advances, binding.advances) == (True, True)
+    return intake, admission, binding
 
 
 @cache
 def _mark_price_chain():
-    """The binding maps the spec's mark-price data element onto the funding profile: a governance mapping EF-5 checks."""
+    """Only mark prices exist and are declared; the binding maps them onto the funding profile's data element."""
 
-    return _chain_with_series("mark_price", (_series("mark-final", "mark_price"),))
+    return _chain_with_series((_series("mark-final", "mark_price"),), ("mark_price",))
+
+
+@cache
+def _undeclared_funding_chain():
+    """The manifest carries funding AND mark prices, but the admitted spec declares only mark prices."""
+
+    return _chain_with_series(
+        (_series("funding-final", "funding_rate"), _series("mark-final", "mark_price")), ("mark_price",)
+    )
 
 
 @cache
@@ -353,7 +371,7 @@ def _two_source_chain():
     """Two eligible final funding series cover the same instrument: the feature's input source is not pinned."""
 
     return _chain_with_series(
-        "funding_rate", (_series("funding-final", "funding_rate"), _series("funding-final-mirror", "funding_rate"))
+        (_series("funding-final", "funding_rate"), _series("funding-final-mirror", "funding_rate")), ("funding_rate",)
     )
 
 
@@ -459,12 +477,18 @@ def test_bias_proofs_are_structured_and_bound_to_the_exact_authorities() -> None
     evidence = _sealed()
     lookahead, repaint, survivorship = evidence.bias_proofs
     profile_digest = evidence.profile_semantics_digest
-    authorities = (manifest.source_packet_evidence_digest, manifest.data_requirement_registry_digest, profile_digest)
+    authorities = (
+        admission.strategy_spec_digest,
+        manifest.source_packet_evidence_digest,
+        manifest.data_requirement_registry_digest,
+        profile_digest,
+    )
     assert lookahead.authority_digests == authorities
     assert repaint.authority_digests == authorities
     assert survivorship.authority_digests == (admission.strategy_spec_digest, manifest.source_packet_evidence_digest)
     assert {(item.check_id, item.subject) for item in lookahead.checks} == {
         ("decision_schedule_point_in_time_visible", "final_funding_record_max_available_finalized.v1"),
+        ("required_input_declared_by_admitted_strategy_spec", "funding_rate"),
         ("input_series_finalized_only", support.SERIES),
         ("input_series_time_policies_registry_bound", support.SERIES),
         ("required_input_served_for_instrument", f"funding_rate:{support.BTC}"),
@@ -472,6 +496,7 @@ def test_bias_proofs_are_structured_and_bound_to_the_exact_authorities() -> None
     }
     assert {(item.check_id, item.subject) for item in repaint.checks} == {
         ("decision_schedule_point_in_time_visible", "final_funding_record_max_available_finalized.v1"),
+        ("required_input_declared_by_admitted_strategy_spec", "funding_rate"),
         ("input_series_finalized_only", support.SERIES),
         ("input_series_point_in_time_revision_safe", support.SERIES),
     }
@@ -1040,23 +1065,48 @@ def test_unproven_external_fact_is_needs_external_facts_and_governance_cannot_di
     assert evidence.preregistration_sealed is False
 
 
-def test_lookahead_and_repaint_fail_when_the_profile_input_is_not_in_the_point_in_time_manifest() -> None:
-    intake, admission, binding = _mark_price_chain()
-    assert admission.advances is True
-    assert binding.advances is True
+_UNDECLARED_FUNDING_CODES = {
+    _code("bias_proof_failed:lookahead:required_input_declared_by_admitted_strategy_spec:funding_rate"),
+    _code("bias_proof_failed:repaint:required_input_declared_by_admitted_strategy_spec:funding_rate"),
+}
+
+
+@pytest.mark.parametrize("chain", [_mark_price_chain, _undeclared_funding_chain])
+def test_profile_input_not_declared_by_the_admitted_spec_never_seals(chain) -> None:
+    """Regression: manifest data the admitted spec never declared is not admissible profile input.
+
+    ``_undeclared_funding_chain`` is the dual-series case: the manifest carries a valid final funding series, but the
+    spec declares only mark prices and the approved binding maps that element onto the funding profile.
+    """
+
+    intake, admission, binding = chain()
     evidence = prereg(admission=admission, binding=binding, intake=intake)
     _assert_receipt_invariants(evidence)
     assert evidence.gate_verdict is EdgeGateVerdict.FAIL
-    assert set(evidence.verdict_reason_codes) == {
-        _code("bias_proof_failed:lookahead:required_input_series_present:funding_rate"),
-        _code(f"bias_proof_failed:lookahead:required_input_served_for_instrument:funding_rate:{support.BTC}"),
-        _code("bias_proof_failed:repaint:required_input_series_present:funding_rate"),
-    }
+    assert set(evidence.verdict_reason_codes) == _UNDECLARED_FUNDING_CODES
+    assert evidence.preregistration_sealed is False
     assert [proof.outcome for proof in evidence.bias_proofs] == [
         EdgeBiasProofOutcome.FAILED,
         EdgeBiasProofOutcome.FAILED,
         EdgeBiasProofOutcome.PROVEN,
     ]
+    lookahead, repaint, _ = evidence.bias_proofs
+    cited = {item.subject for proof in (lookahead, repaint) for item in proof.checks}
+    assert "funding-final" not in cited
+
+
+def test_profile_input_declared_by_the_spec_seals_even_with_extra_declared_data() -> None:
+    intake, admission, binding = _chain_with_series(
+        (_series("funding-final", "funding_rate"), _series("mark-final", "mark_price")), ("funding_rate", "mark_price")
+    )
+    evidence = prereg(admission=admission, binding=binding, intake=intake)
+    _assert_receipt_invariants(evidence)
+    assert evidence.preregistration_sealed is True
+    lookahead = evidence.bias_proofs[0]
+    assert ("input_series_finalized_only", "funding-final") in {
+        (item.check_id, item.subject) for item in lookahead.checks
+    }
+    assert "mark-final" not in {item.subject for item in lookahead.checks}
 
 
 def test_ambiguous_input_source_fails_so_no_source_can_be_chosen_after_results() -> None:
@@ -1071,7 +1121,7 @@ def test_ambiguous_input_source_fails_so_no_source_can_be_chosen_after_results()
         ),
     )
     single_intake, single_admission, single_binding = _chain_with_series(
-        "funding_rate", (_series("funding-final", "funding_rate"),)
+        (_series("funding-final", "funding_rate"),), ("funding_rate",)
     )
     single = prereg(admission=single_admission, binding=single_binding, intake=single_intake)
     assert single.preregistration_sealed is True
