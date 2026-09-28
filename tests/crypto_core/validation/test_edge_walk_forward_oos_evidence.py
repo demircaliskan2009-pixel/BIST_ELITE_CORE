@@ -5,6 +5,10 @@ decision runs, real historical execution economics (Deep-Research-cited venue fa
 approval as test fixtures, per the economics test convention) and real P3 walk-forward metrics. Every governance value
 below is a SYNTHETIC TEST VALUE; EF-6 holds no production threshold.
 
+CI budget: the required ``tests`` CI job runs the suite twice (plain and coverage) under a 20-minute timeout, so the
+default suite keeps the real end-to-end world A and every test that needs only EF-5 or A; attack worlds that need extra
+authenticated economics are ``@pytest.mark.slow`` (run with ``--runslow`` and by the scheduled CI job).
+
 Cost control: the pure public P3 metrics verifier (as EF-6 calls it) and the pure public economics verifier (as P3
 calls it) are memoized for this module by the exact canonical payload text of the object verified — semantically
 transparent: the same payload always yields the same verification. Tests that change global registries disable both.
@@ -103,6 +107,7 @@ from tests.crypto_core.validation import test_strategy_executable_profiles as pr
 
 _PREFIX = "edge_walk_forward_oos_evidence"
 _UNSET = object()
+SLOW = pytest.mark.slow  # an extra authenticated economics world; see the module docstring
 DAY = mt.DAY
 S0 = mt.S0
 FUNDING = mt.FUNDING
@@ -374,6 +379,7 @@ def _window(index: int, start: int, params, **kwargs: object):
 def metrics(name: str) -> HistoricalWalkForwardMetricsResult:
     table: dict[str, tuple] = {
         "A": ((PA,) * 3, STARTS, {}),
+        "Adup": ((PA,) * 3, STARTS, {}),  # the same registered assignment evaluated a second time
         "N": ((PN,) * 3, STARTS, {}),
         "A1": ((PA,), (0,), {}),
         "B1": ((PB,), (0,), {}),
@@ -428,6 +434,15 @@ _LEDGERS = {
         (EdgeInputVariant("variant-a", PA), EdgeInputVariant("variant-n", PN)),
     ),
 }
+_LEDGERS["B"] = (
+    (
+        EdgeParameterSearchBound("entry_threshold", "fixed", (PB[0].value,)),
+        EdgeParameterSearchBound("exit_threshold", "fixed", (PB[1].value,)),
+        EdgeParameterSearchBound("final_funding_lookback_count", "fixed", (PB[2].value,)),
+        EdgeParameterSearchBound("unit_size", "fixed", (PB[3].value,)),
+    ),
+    (EdgeInputVariant("variant-b", PB),),
+)
 _DEFAULT_BUNDLES = {"A": ("A",), "AB": ("A1", "B1"), "AN": ("A", "N")}
 
 
@@ -541,12 +556,19 @@ def cheap() -> EdgeWalkForwardOosEvidence:
 
 
 @functools.cache
-def _passed_payload_text() -> str:
-    return edge_canonical_json(edge_walk_forward_oos_evidence_to_dict(passed()))
+def failed1() -> EdgeWalkForwardOosEvidence:
+    """Governed EF-6 over world A's one-window bundle: authentic, cheap, and FAIL (1 OOS window < approved 3)."""
+
+    return ef6("A", ("A1",))
 
 
-def _passed_payload() -> dict:
-    return json.loads(_passed_payload_text())
+@functools.cache
+def _failed1_payload_text() -> str:
+    return edge_canonical_json(edge_walk_forward_oos_evidence_to_dict(failed1()))
+
+
+def _failed1_payload() -> dict:
+    return json.loads(_failed1_payload_text())
 
 
 def _code(code: str) -> str:
@@ -688,6 +710,7 @@ def test_sealed_chain_real_metrics_and_governance_pass_with_truthful_consumption
     )
 
 
+@SLOW
 def test_two_variant_ledger_evaluates_every_registered_variant_once_and_reports_no_winner() -> None:
     evidence = passed_an()
     _assert_receipt_invariants(evidence)
@@ -703,6 +726,7 @@ def test_two_variant_ledger_evaluates_every_registered_variant_once_and_reports_
     assert not [name for name in names if any(token in name for token in ("best", "winner", "rank", "select"))]
 
 
+@SLOW
 def test_every_variant_uses_the_identical_governed_window_frame() -> None:
     evidence = passed_an()
     frames = [(frame.in_sample_start_ns - S0, frame.out_of_sample_start_ns - S0) for frame in evidence.window_frames]
@@ -713,6 +737,7 @@ def test_every_variant_uses_the_identical_governed_window_frame() -> None:
         assert frame.in_sample_dataset_digest == frame.out_of_sample_dataset_digest == dataset().dataset_digest
 
 
+@SLOW
 def test_partial_survival_reports_only_surviving_registered_digests() -> None:
     evidence = passed_an()
     _assert_shape(evidence)
@@ -739,25 +764,25 @@ def test_partial_survival_reports_only_surviving_registered_digests() -> None:
 def test_unsealed_ef5_is_rejected() -> None:
     unsealed = ef5("A", approve=False)
     assert (unsealed.status, unsealed.preregistration_sealed) == (EdgeEvidenceStatus.READY, False)
-    evidence = ef6("A", predecessor=unsealed, governance=None)
+    evidence = ef6("A", (), predecessor=unsealed, governance=None)
     _assert_shape(evidence)
     assert evidence.integrity_reason_codes == (_code("predecessor_not_sealed:NEEDS_GOVERNANCE_APPROVAL"),)
 
 
 def test_root_anchor_transplant_is_rejected() -> None:
-    evidence = ef6("A", governance=None, expected_root_intake_digest="e" * 64)
+    evidence = ef6("A", (), governance=None, expected_root_intake_digest="e" * 64)
     _assert_shape(evidence)
     assert evidence.integrity_reason_codes == (_code("chain_splice_root_intake_mismatch"),)
 
 
 def test_predecessor_anchor_transplant_is_rejected() -> None:
-    evidence = ef6("A", governance=None, expected_predecessor_digest=ef5("AB").leakage_bias_evidence_digest)
+    evidence = ef6("A", (), governance=None, expected_predecessor_digest=ef5("AB").leakage_bias_evidence_digest)
     _assert_shape(evidence)
     assert evidence.integrity_reason_codes == (_code("predecessor_digest_mismatch"),)
 
 
 def test_correlation_splice_is_rejected() -> None:
-    evidence = ef6("A", governance=None, correlation_id="corr-2")
+    evidence = ef6("A", ("A1",), governance=None, correlation_id="corr-2")
     _assert_shape(evidence)
     assert set(evidence.integrity_reason_codes) == {
         _code("predecessor_correlation_mismatch"),
@@ -769,11 +794,12 @@ def test_forged_resealed_ef5_is_rejected() -> None:
     genuine = ef5("A")
     forged = replace(genuine, multiple_testing_count=2)
     forged = replace(forged, leakage_bias_evidence_digest=edge_leakage_bias_evidence_digest(forged))
-    evidence = ef6("A", predecessor=forged, governance=None)
+    evidence = ef6("A", (), predecessor=forged, governance=None)
     _assert_shape(evidence)
     assert any(code.startswith(_code("predecessor_integrity_failure:")) for code in evidence.integrity_reason_codes)
 
 
+@SLOW
 def test_metrics_from_another_strategy_spec_and_binding_are_rejected() -> None:
     evidence = ef6("A", ("Aspec1",), governance=None)
     _assert_shape(evidence)
@@ -783,7 +809,7 @@ def test_metrics_from_another_strategy_spec_and_binding_are_rejected() -> None:
 
 
 def test_broken_metrics_authority_is_rejected() -> None:
-    genuine = metrics("A")
+    genuine = metrics("A1")
     window = genuine.windows[0]
     forged_window = replace(
         window, out_of_sample=replace(window.out_of_sample, annualized_sharpe="99.000000000000000000")
@@ -791,7 +817,7 @@ def test_broken_metrics_authority_is_rejected() -> None:
     forged = replace(genuine, windows=(forged_window, *genuine.windows[1:]))
     forged = replace(forged, result_digest=historical_walk_forward_metrics_digest(forged))
     predecessor = ef5("A")
-    arguments = arguments_for(predecessor, ("A",))
+    arguments = arguments_for(predecessor, ("A1",))
     arguments["variant_metrics"] = (EdgeVariantMetricsInput(forged, forged.result_digest),)
     evidence = build_edge_walk_forward_oos_evidence(predecessor, **arguments)
     _assert_shape(evidence)
@@ -803,12 +829,13 @@ def test_broken_metrics_authority_is_rejected() -> None:
 
 def test_metrics_anchor_mismatch_is_rejected() -> None:
     predecessor = ef5("A")
-    arguments = arguments_for(predecessor, ("A",))
-    arguments["variant_metrics"] = (EdgeVariantMetricsInput(metrics("A"), metrics("A1").result_digest),)
+    arguments = arguments_for(predecessor, ("A1",))
+    arguments["variant_metrics"] = (EdgeVariantMetricsInput(metrics("A1"), "f" * 64),)
     evidence = build_edge_walk_forward_oos_evidence(predecessor, **arguments)
     assert evidence.integrity_reason_codes == (_code("variant_metrics_0:digest_mismatch"),)
 
 
+@SLOW
 def test_profile_semantics_drift_rejects_the_whole_chain(monkeypatch: pytest.MonkeyPatch) -> None:
     genuine = passed()
     drifted = bind.drifted_registry_profile(max_decimal_text_length=59)
@@ -824,19 +851,17 @@ def test_profile_semantics_drift_rejects_the_whole_chain(monkeypatch: pytest.Mon
 
 
 def test_unregistered_excellent_assignment_is_rejected_regardless_of_performance() -> None:
-    assert metrics("B1").computation_verdict is EdgeGateVerdict.PASS
-    evidence = ef6("A", ("A1", "B1"), governance=None)
+    assert passed().variant_evaluations[0].evaluation_status is EdgeVariantEvaluationStatus.SURVIVED
+    evidence = ef6("B", ("A1",), governance=None)
     _assert_shape(evidence)
     assert any(code.endswith(":parameter_assignment_unregistered") for code in evidence.integrity_reason_codes)
     assert evidence.surviving_assignment_digests == ()
 
 
 def test_duplicate_evaluation_of_one_assignment_is_rejected() -> None:
-    evidence = ef6("AB", ("A1", "A1dup", "B1"), governance=None)
+    evidence = ef6("A", ("A1", "A1dup"), governance=None)
     _assert_shape(evidence)
-    duplicated = next(
-        item.parameter_assignment_digest for item in ef5("AB").registered_variants if item.variant_id == "variant-a"
-    )
+    duplicated = ef5("A").registered_parameter_assignment_digests[0]
     assert evidence.integrity_reason_codes == (_code(f"parameter_assignment_evaluated_more_than_once:{duplicated}"),)
 
 
@@ -849,7 +874,7 @@ def test_identical_duplicate_input_is_a_construction_error() -> None:
 
 
 def test_missing_registered_variant_is_incomplete_coverage_fail() -> None:
-    evidence = ef6("AB", ("A",))
+    evidence = ef6("AB", ("A1",))
     _assert_shape(evidence)
     assert evidence.gate_verdict is EdgeGateVerdict.FAIL
     assert evidence.verdict_reason_codes == (_code("registered_variant_not_evaluated:variant-b"),)
@@ -868,6 +893,7 @@ def test_no_variant_evaluated_is_fail_and_consumes_nothing() -> None:
     assert (evidence.performance_data_consumed, evidence.walk_forward_evaluated) == (False, False)
 
 
+@SLOW
 def test_per_window_assignment_switching_is_rejected() -> None:
     switching = metrics("AB2")
     assert switching.computation_verdict is EdgeGateVerdict.PASS  # P3 permits it; EF-6 must not
@@ -880,6 +906,7 @@ def test_per_window_assignment_switching_is_rejected() -> None:
 # --- window fairness ----------------------------------------------------------------------------------------------------
 
 
+@SLOW
 @pytest.mark.parametrize(
     ("reference", "candidate", "computed"),
     [
@@ -903,7 +930,7 @@ def test_result_aware_frame_differences_are_unfair_and_fail(reference: str, cand
 
 
 def test_missing_governance_needs_approval_and_evaluates_no_variant() -> None:
-    evidence = _draft("A", ("A",), "main")
+    evidence = _draft("A", ("A1",), "main")
     _assert_receipt_invariants(evidence)
     assert evidence.gate_verdict is EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL
     assert evidence.verdict_reason_codes == (_code("oos_governance_missing"),)
@@ -921,7 +948,7 @@ def test_copied_governance_with_every_commitment_changed_needs_approval() -> Non
         approved_rule_set_digest="2" * 64,
         approved_evaluation_frame_digest="3" * 64,
     )
-    evidence = ef6("A", governance=approval)
+    evidence = ef6("A", ("A1",), governance=approval)
     _assert_shape(evidence)
     assert evidence.verdict_reason_codes == tuple(
         sorted(
@@ -939,8 +966,8 @@ def test_copied_governance_with_every_commitment_changed_needs_approval() -> Non
 
 
 def test_governance_approved_for_another_ledger_cannot_be_reused() -> None:
-    evidence = ef6("AN", governance=governance_for(passed()))
-    assert evidence.gate_verdict is EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL
+    evidence = ef6("AB", ("A1",), governance=governance_for(passed()))
+    assert evidence.advances is False
     assert {
         _code("oos_governance_predecessor_digest_mismatch"),
         _code("oos_governance_variant_ledger_digest_mismatch"),
@@ -950,14 +977,14 @@ def test_governance_approved_for_another_ledger_cannot_be_reused() -> None:
 
 def test_governance_looser_than_prdv4_floors_needs_approval() -> None:
     approval = governance_for(
-        passed(),
+        _draft("A", ("A1",), "main"),
         min_oos_window_count=2,
         min_sharpe_retention_ratio="0.499999999999999999",
         min_hit_rate_delta_percentage_points="-10.000000000000000001",
         positive_expectancy_fraction_numerator=1,
         positive_expectancy_fraction_denominator=2,
     )
-    evidence = ef6("A", governance=approval)
+    evidence = ef6("A", ("A1",), governance=approval)
     assert evidence.verdict_reason_codes == tuple(
         sorted(
             _code(f"oos_governance_below_prdv4_floor:{name}")
@@ -1029,28 +1056,50 @@ def _hit_boundary_pp() -> Fraction:
     return min(100 * (_units(w.out_of_sample.hit_rate) - _units(w.in_sample.hit_rate)) for w in _windows_a())
 
 
-@pytest.mark.parametrize(
-    ("override", "survives"),
-    [
-        (lambda: {"min_sharpe_retention_ratio": _text(_floor18(_sharpe_boundary()))}, True),
-        (lambda: {"min_sharpe_retention_ratio": _text(_floor18(_sharpe_boundary()) + ULP)}, False),
-        (lambda: {"min_hit_rate_delta_percentage_points": _text(_hit_boundary_pp())}, True),
-        (lambda: {"min_hit_rate_delta_percentage_points": _text(_hit_boundary_pp() + ULP)}, False),
-        (lambda: {"max_drawdown_ratio_exclusive": "1.000000000000000000"}, False),
-        (lambda: {"max_drawdown_ratio_exclusive": "1.000000000000000001"}, True),
-        (lambda: {"min_profit_factor_exclusive": _windows_a()[0].out_of_sample.profit_factor}, False),
-        (
-            lambda: {"min_profit_factor_exclusive": _text(_units(_windows_a()[0].out_of_sample.profit_factor) - ULP)},
-            True,
-        ),
-        (lambda: {"positive_expectancy_fraction_numerator": 1, "positive_expectancy_fraction_denominator": 1}, True),
-    ],
-)
+_BOUNDARY_CASES = [
+    (lambda: {"min_sharpe_retention_ratio": _text(_floor18(_sharpe_boundary()))}, True),
+    (lambda: {"min_sharpe_retention_ratio": _text(_floor18(_sharpe_boundary()) + ULP)}, False),
+    (lambda: {"min_hit_rate_delta_percentage_points": _text(_hit_boundary_pp())}, True),
+    (lambda: {"min_hit_rate_delta_percentage_points": _text(_hit_boundary_pp() + ULP)}, False),
+    (lambda: {"max_drawdown_ratio_exclusive": "1.000000000000000000"}, False),
+    (lambda: {"max_drawdown_ratio_exclusive": "1.000000000000000001"}, True),
+    (lambda: {"min_profit_factor_exclusive": _windows_a()[0].out_of_sample.profit_factor}, False),
+    (lambda: {"min_profit_factor_exclusive": _text(_units(_windows_a()[0].out_of_sample.profit_factor) - ULP)}, True),
+    (lambda: {"positive_expectancy_fraction_numerator": 1, "positive_expectancy_fraction_denominator": 1}, True),
+]
+
+
+@pytest.mark.parametrize(("override", "survives"), _BOUNDARY_CASES)
 def test_exact_rule_boundaries_on_authenticated_metrics(override, survives: bool) -> None:
+    """The governed rules applied to world A's REAL authenticated P3 window texts at each exact boundary."""
+
+    record = governance_for(passed(), **override())
+    _, thresholds = ef6_module._governance_reasons(
+        record,
+        {
+            "predecessor_digest": record.approved_predecessor_digest,
+            "variant_ledger_digest": record.approved_variant_ledger_digest,
+            "multiple_testing_count": record.approved_multiple_testing_count,
+            "rule_set_digest": record.approved_rule_set_digest,
+            "evaluation_frame_digest": record.approved_evaluation_frame_digest,
+        },
+    )
+    assert thresholds is not None
+    bundle = ef6_module._Bundle(
+        metrics=metrics("A"),
+        binding=EdgeAuthorityBinding(snapshot_json="{}", expected_digest=metrics("A").result_digest),
+        assignment_digest=ef5("A").registered_parameter_assignment_digests[0],
+        frames=(),
+    )
+    evaluation = ef6_module._evaluate_bundle("variant-a", bundle, thresholds)
+    expected = EdgeVariantEvaluationStatus.SURVIVED if survives else EdgeVariantEvaluationStatus.FAILED
+    assert evaluation.evaluation_status is expected
+
+
+@pytest.mark.parametrize(("override", "survives"), [_BOUNDARY_CASES[0], _BOUNDARY_CASES[1]])
+def test_exact_boundary_through_the_public_builder(override, survives: bool) -> None:
     evidence = ef6("A", governance=governance_for(passed(), **override()))
     _assert_shape(evidence)
-    expected = EdgeVariantEvaluationStatus.SURVIVED if survives else EdgeVariantEvaluationStatus.FAILED
-    assert evidence.variant_evaluations[0].evaluation_status is expected
     assert evidence.gate_verdict is (EdgeGateVerdict.PASS if survives else EdgeGateVerdict.FAIL)
 
 
@@ -1228,6 +1277,7 @@ def test_costs_are_proven_upstream_and_never_added_again() -> None:
     assert at.variant_evaluations[0].profit_factor_window_count == 0
 
 
+@SLOW
 def test_synthetic_facts_and_approval_can_never_advance_a_real_gate() -> None:
     assert metrics("Asyn1").synthetic_test_facts_used is True
     assert metrics("Asyn1").synthetic_test_approval_used is True
@@ -1242,6 +1292,7 @@ def test_synthetic_facts_and_approval_can_never_advance_a_real_gate() -> None:
     assert evidence.variant_evaluations[0].evaluation_status is EdgeVariantEvaluationStatus.NOT_EVALUATED
 
 
+@SLOW
 def test_multi_instrument_universe_fails_closed_without_overclaiming() -> None:
     evidence = ef6("A", ("Amulti1",), world_name="multi", governance=None)
     _assert_shape(evidence)
@@ -1253,7 +1304,7 @@ def test_multi_instrument_universe_fails_closed_without_overclaiming() -> None:
 
 
 def test_regime_state_is_always_present_and_explicitly_unavailable() -> None:
-    for evidence in (passed(), _draft("A", ("A",), "main")):
+    for evidence in (passed(), _draft("A", ("A1",), "main")):
         assert evidence.regime_split_report == EDGE_REGIME_EVIDENCE_UNAVAILABLE
         assert evidence.regime_evidence_status == EDGE_REGIME_EVIDENCE_UNAVAILABLE
         assert evidence.regime_evidence_available is False
@@ -1266,8 +1317,8 @@ def test_regime_state_is_always_present_and_explicitly_unavailable() -> None:
     ("artifact", "changes", "field"),
     [
         ("passed", {"surviving_assignment_digests": ()}, "surviving_assignment_digests"),
-        ("passed", {"surviving_variant_count": 0}, "surviving_variant_count"),
-        ("passed", {"window_frames": ()}, "window_frames"),
+        ("failed1", {"surviving_variant_count": 1}, "surviving_variant_count"),
+        ("failed1", {"window_frames": ()}, "window_frames"),
         ("cheap", {"surviving_assignment_digests": ("a" * 64,)}, "surviving_assignment_digests"),
         ("cheap", {"multiple_testing_count": 5}, "multiple_testing_count"),
         ("cheap", {"registered_variant_count": 2}, "registered_variant_count"),
@@ -1292,12 +1343,12 @@ def test_regime_state_is_always_present_and_explicitly_unavailable() -> None:
     ],
 )
 def test_derived_field_tamper_with_reseal_never_verifies(artifact: str, changes: dict[str, object], field: str) -> None:
-    base = passed() if artifact == "passed" else cheap()
+    base = {"passed": passed, "failed1": failed1, "cheap": cheap}[artifact]()
     _assert_not_intact(_reseal(base, **changes), f"field_mismatch:{field}")
 
 
 def test_tampered_variant_verdict_and_forced_pass_never_verify() -> None:
-    draft = _draft("A", ("A",), "main")
+    draft = _draft("A", ("A1",), "main")
     variant = replace(draft.variant_evaluations[0], evaluation_status=EdgeVariantEvaluationStatus.SURVIVED)
     forced = _reseal(
         draft,
@@ -1312,15 +1363,15 @@ def test_tampered_variant_verdict_and_forced_pass_never_verify() -> None:
 
 
 def test_changed_approval_values_change_the_evidence_deterministically() -> None:
-    stricter = ef6("A", governance=governance_for(passed(), min_oos_window_count=4))
-    assert stricter.governance_digest != passed().governance_digest
-    payload = _passed_payload()
+    stricter = ef6("A", ("A1",), governance=governance_for(_draft("A", ("A1",), "main"), min_oos_window_count=4))
+    assert stricter.governance_digest != failed1().governance_digest
+    payload = _failed1_payload()
     payload["governance"]["min_oos_window_count"] = 4
     _assert_not_intact(_resealed_payload(payload), "field_mismatch:governance_digest")
 
 
 def test_nested_metrics_forgery_with_every_digest_recomputed_never_verifies() -> None:
-    payload = _passed_payload()
+    payload = _failed1_payload()
     snapshot = payload["variant_metrics_bindings"][0]["snapshot"]
     snapshot["windows"][0]["out_of_sample"]["annualized_sharpe"] = "99.000000000000000000"
     snapshot["result_digest"] = edge_payload_digest(snapshot, "result_digest")
@@ -1328,7 +1379,14 @@ def test_nested_metrics_forgery_with_every_digest_recomputed_never_verifies() ->
     _assert_not_intact(_resealed_payload(payload), "field_mismatch:status")
 
 
-def test_deterministic_rebuild_is_byte_identical_and_input_order_insensitive() -> None:
+def test_deterministic_rebuild_is_byte_identical() -> None:
+    again = ef6("A", ("A1",), governance=failed1().governance)
+    assert again == failed1()
+    assert edge_canonical_json(edge_walk_forward_oos_evidence_to_dict(again)) == _failed1_payload_text()
+
+
+@SLOW
+def test_rebuild_is_input_order_insensitive() -> None:
     first = passed_an()
     again = ef6("AN", ("N", "A"), governance=first.governance)
     assert edge_walk_forward_oos_evidence_to_dict(again) == edge_walk_forward_oos_evidence_to_dict(first)
@@ -1374,25 +1432,27 @@ def test_public_verifier_is_total_for_any_object(artifact: object) -> None:
 
 
 @pytest.mark.parametrize(
-    ("path", "value"),
+    ("base", "path", "value"),
     [
-        (("status",), None),
-        (("multiple_testing_count",), True),
-        (("multiple_testing_count",), -1),
-        (("surviving_variant_count",), 1.0),
-        (("governance",), {}),
-        (("governance", "min_oos_window_count"), "3"),
-        (("variant_evaluations", 0, "evaluation_status"), "WINNER"),
-        (("variant_evaluations", 0, "extra"), 1),
-        (("window_frames", 0, "in_sample_start_ns"), -1),
-        (("variant_metrics_bindings", 0, "snapshot"), {}),
-        (("predecessor_binding", "snapshot"), {}),
-        (("performance_data_consumed",), 1),
-        (("walk_forward_evaluated",), _UNSET),
+        ("cheap", ("status",), None),
+        ("cheap", ("multiple_testing_count",), True),
+        ("cheap", ("multiple_testing_count",), -1),
+        ("cheap", ("surviving_variant_count",), 1.0),
+        ("cheap", ("governance",), {}),
+        ("cheap", ("governance", "min_oos_window_count"), "3"),
+        ("passed", ("variant_evaluations", 0, "evaluation_status"), "WINNER"),
+        ("passed", ("variant_evaluations", 0, "extra"), 1),
+        ("passed", ("window_frames", 0, "in_sample_start_ns"), -1),
+        ("passed", ("variant_metrics_bindings", 0, "snapshot"), {}),
+        ("cheap", ("predecessor_binding", "snapshot"), {}),
+        ("cheap", ("performance_data_consumed",), 1),
+        ("cheap", ("walk_forward_evaluated",), _UNSET),
     ],
 )
-def test_parser_refuses_every_state_the_builder_cannot_produce(path: tuple[object, ...], value: object) -> None:
-    payload = _passed_payload()
+def test_parser_refuses_every_state_the_builder_cannot_produce(
+    base: str, path: tuple[object, ...], value: object
+) -> None:
+    payload = _failed1_payload() if base == "passed" else _payload(cheap())
     node = payload
     for key in path[:-1]:
         node = node[key]
@@ -1462,17 +1522,24 @@ def test_rule_set_commits_the_prdv4_floors_and_the_hit_rate_unit_identity() -> N
 
 @pytest.mark.parametrize(
     "state",
-    ["pass", "pass_partial", "fail_no_survivor", "fail_coverage", "needs_governance", "needs_external", "rejected"],
+    [
+        pytest.param("pass_partial", marks=SLOW),
+        "fail_no_survivor",
+        "fail_coverage",
+        "needs_governance",
+        pytest.param("needs_external", marks=SLOW),
+        "rejected",
+    ],
 )
 def test_every_builder_state_round_trips_through_the_verifier(state: str) -> None:
     builders = {
         "pass": passed,
         "pass_partial": passed_an,
-        "fail_no_survivor": lambda: ef6("A", governance=governance_for(passed(), min_oos_window_count=4)),
-        "fail_coverage": lambda: ef6("AB", ("A",)),
-        "needs_governance": lambda: _draft("A", ("A",), "main"),
+        "fail_no_survivor": failed1,
+        "fail_coverage": cheap,
+        "needs_governance": lambda: _draft("A", ("A1",), "main"),
         "needs_external": lambda: ef6("A", ("Asyn1",)),
-        "rejected": lambda: ef6("A", governance=None, correlation_id="corr-2"),
+        "rejected": lambda: ef6("A", (), governance=None, correlation_id="corr-2"),
     }
     _assert_receipt_invariants(builders[state]())
 
@@ -1599,5 +1666,5 @@ def test_single_assembly_path_serves_builder_and_verifier() -> None:
 
 
 def test_real_p3_verifier_agrees_with_the_memo_for_the_happy_bundle() -> None:
-    assert _REAL_VERIFY_METRICS(metrics("A")) == _MEMO(metrics("A"))
+    assert _REAL_VERIFY_METRICS(metrics("A1")) == _MEMO(metrics("A1"))
     assert verify_historical_walk_forward_metrics is _REAL_VERIFY_METRICS
