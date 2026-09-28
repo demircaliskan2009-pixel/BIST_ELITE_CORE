@@ -3,16 +3,22 @@
 Fixtures are REAL authenticated chains: EF-2 → EF-3 → EF-4 → executable binding → sealed EF-5, one PIT dataset, real
 decision runs, real historical execution economics (Deep-Research-cited venue facts and a human-governance economics
 approval as test fixtures, per the economics test convention) and real P3 walk-forward metrics. Every governance value
-below is a SYNTHETIC TEST VALUE; EF-6 holds no production threshold.
+below is a SYNTHETIC TEST VALUE; EF-6 holds no production threshold. World A trades densely (a two-day funding cycle
+whose rate repeats ``0, H, H`` under a lookback-1 carry) so every 365-day in-sample segment carries more than the PRDV4
+§1.13 Stage 1 floor of 50 CLOSED trades; a sparse constant-rate dataset reproduces a backtest with none.
 
 CI budget: the required ``tests`` CI job runs the suite twice (plain and coverage) under a 20-minute timeout, so the
 default suite keeps the real end-to-end world A and every test that needs only EF-5 or A; attack worlds that need extra
-authenticated economics are ``@pytest.mark.slow`` (run with ``--runslow`` and by the scheduled CI job).
+authenticated economics, and end-to-end repeats of the default boundary grid, are ``@pytest.mark.slow`` (run with
+``--runslow`` and by the scheduled CI job).
 
-Cost control: the pure public EF-5/EF-4/EF-3/EF-2 and P3 metrics verifiers (as EF-6 calls them) and the pure public
-economics verifier, strict parser and shape predicate (as P3 calls them) are memoized for this module by the exact
-canonical payload text — semantically transparent: the same payload always yields the same result, results are
-immutable, and a raising call is never cached. Tests that change global registries disable every memo.
+Cost control: pure public UPSTREAM functions are memoized for this module, each at the call site that resolves it:
+the EF-5/EF-4/EF-3/EF-2 and P3 metrics verifiers and the P3 strict parser and shape predicate (as EF-6 calls them), the
+economics verifier, strict parser and shape predicate (as P3 calls them), the decision-run verifier (as economics calls
+it) and the PIT dataset verifier (as the decision run calls it). EF-6's own code is never memoized. Keys are exact: a
+record's exact type and every field value (a str-enum alias, ``True`` versus ``1`` and a tuple versus a list never
+collide), or a JSON payload's canonical text. Semantically transparent: the same input always yields the same immutable
+result, and a raising call is never cached. Tests that change global registries disable every memo.
 """
 
 from __future__ import annotations
@@ -22,13 +28,16 @@ import functools
 import importlib
 import inspect
 import json
-from dataclasses import MISSING, fields, replace
+from dataclasses import MISSING, fields, is_dataclass, replace
+from enum import Enum
 from fractions import Fraction
 from pathlib import Path
 
 import pytest
 
 import crypto_core.validation.edge_walk_forward_oos_evidence as ef6_module
+import crypto_core.validation.historical_decision_run as run_module
+import crypto_core.validation.historical_execution_economics as economics_module
 import crypto_core.validation.historical_walk_forward_metrics as metrics_module
 import crypto_core.validation.strategy_executable_profiles as profiles_module
 from crypto_core.data.requirements import data_requirement_registry_digest, default_perp_data_requirement_registry
@@ -47,10 +56,8 @@ from crypto_core.validation.edge_artifact_core import (
     edge_sha256_text,
 )
 from crypto_core.validation.edge_idea_intake_evidence import (
-    EdgeIdeaIntakeEvidence,
     build_edge_idea_intake_evidence,
     build_edge_kill_criteria_policy,
-    edge_idea_intake_evidence_to_dict,
 )
 from crypto_core.validation.edge_leakage_bias_evidence import (
     EdgeInputVariant,
@@ -58,18 +65,13 @@ from crypto_core.validation.edge_leakage_bias_evidence import (
     EdgeParameterSearchBound,
     build_edge_leakage_bias_evidence,
     edge_leakage_bias_evidence_digest,
-    edge_leakage_bias_evidence_to_dict,
 )
 from crypto_core.validation.edge_source_packet_evidence import (
     EdgeInputSeries,
-    EdgeSourcePacketEvidence,
     build_edge_source_packet_evidence,
-    edge_source_packet_evidence_to_dict,
 )
 from crypto_core.validation.edge_strategy_spec_admission import (
-    EdgeStrategySpecAdmissionEvidence,
     build_edge_strategy_spec_admission,
-    edge_strategy_spec_admission_to_dict,
 )
 from crypto_core.validation.edge_walk_forward_oos_evidence import (
     EDGE_WALK_FORWARD_OOS_NON_CLAIM_FLAGS,
@@ -88,9 +90,8 @@ from crypto_core.validation.edge_walk_forward_oos_evidence import (
     verify_edge_walk_forward_oos_evidence,
 )
 from crypto_core.validation.historical_execution_economics import (
-    HistoricalExecutionEconomicsResult,
+    HistoricalExecutionTradeStatus,
     build_historical_execution_economics,
-    historical_execution_economics_to_dict,
 )
 from crypto_core.validation.historical_execution_economics_policy import (
     HistoricalExecutionApprovalKind,
@@ -107,7 +108,6 @@ from crypto_core.validation.historical_walk_forward_metrics import (
     HistoricalWalkForwardSegmentMetrics,
     HistoricalWalkForwardWindowMetrics,
     historical_walk_forward_metrics_digest,
-    historical_walk_forward_metrics_to_dict,
     verify_historical_walk_forward_metrics,
 )
 from tests.crypto_core.validation import test_edge_leakage_bias_evidence as ef5t
@@ -123,96 +123,81 @@ _UNSET = object()
 SLOW = pytest.mark.slow  # an extra authenticated economics world; see the module docstring
 DAY = mt.DAY
 S0 = mt.S0
-FUNDING = mt.FUNDING
+FUNDING = 2 * DAY  # a short governed funding cycle: one closed trade every three cycles, 60 per in-sample segment
 HORIZON_DAYS = 640  # three governed windows end at day 635
 MARK_STEP = 10 * DAY
-RATE = "0.003000000000000000"  # synthetic: funding income dominates the one-time entry cost
+RATE = "0.003000000000000000"  # synthetic: one settlement of RATE dominates the entry and exit costs of a trade
+ZERO_RATE = "0.000000000000000000"
+SPARSE_DATASET = "dataset-sparse"  # a constant RATE: the carry opens once and never closes a trade
 INS = econ.INS
 d = polt.d
 STARTS = (0, 90, 180)  # three governed windows: IS [s, s+365), OOS [s+365, s+455)
 
-PA = prof.params()  # variant-a
-PB = prof.params(unit="2.000000000000000000")  # variant-b
-PN = prof.params(entry="0.010000000000000000")  # variant-n: never enters, so P3 cannot compute a profit factor
+PA = prof.params(n="1")  # variant-a: a lookback-1 carry
+PB = prof.params(n="1", unit="2.000000000000000000")  # variant-b
+PN = prof.params(n="1", entry="0.010000000000000000")  # variant-n: never enters, so P3 cannot compute a profit factor
 S = HistoricalWalkForwardSegmentKind
 
-# --- memoized pure verifiers (see module docstring) --------------------------------------------------------------------
-
-_REAL_VERIFY_METRICS = ef6_module.verify_historical_walk_forward_metrics
-_REAL_VERIFY_ECONOMICS = metrics_module.verify_historical_execution_economics
-
-
-class _MemoizedVerifier:
-    def __init__(self, real, cls: type, to_dict) -> None:
-        self.real, self.cls, self.to_dict = real, cls, to_dict
-        self.cache: dict[str, EdgeEvidenceVerification] = {}
-
-    def __call__(self, artifact: object) -> EdgeEvidenceVerification:
-        if not _MEMO_ENABLED[0] or type(artifact) is not self.cls:
-            return self.real(artifact)
-        try:
-            key = edge_canonical_json(self.to_dict(artifact))
-        except Exception:  # noqa: BLE001 - a non-serializable object is verified directly
-            return self.real(artifact)
-        if key not in self.cache:
-            self.cache[key] = self.real(artifact)
-        return self.cache[key]
-
+# --- memoized pure upstream functions (see module docstring) -----------------------------------------------------------
 
 _MEMO_ENABLED = [True]
-_MEMO = _MemoizedVerifier(
-    _REAL_VERIFY_METRICS, HistoricalWalkForwardMetricsResult, historical_walk_forward_metrics_to_dict
-)
-_ECONOMICS_MEMO = _MemoizedVerifier(
-    _REAL_VERIFY_ECONOMICS, HistoricalExecutionEconomicsResult, historical_execution_economics_to_dict
-)
 
 
-class _MemoizedPayloadFunction:
-    """Exact memo of a pure payload function (strict parse / shape predicate) keyed by the canonical payload text."""
+def _exact_key(value: object) -> object:
+    """An exact hashable identity: the exact type is part of every key and records recurse over every field."""
 
-    def __init__(self, real) -> None:
-        self.real = real
-        self.cache: dict[str, object] = {}
+    kind = type(value)
+    if kind in (str, int, bool, type(None)) or isinstance(value, Enum):
+        return kind, value
+    if kind in (tuple, list):
+        return kind, tuple(_exact_key(item) for item in value)  # type: ignore[union-attr]
+    if is_dataclass(value) and not isinstance(value, type):
+        return kind, tuple((field.name, _exact_key(getattr(value, field.name))) for field in fields(value))
+    raise TypeError(f"no exact memo key for {kind.__name__}")
 
-    def __call__(self, payload: object) -> object:
+
+class _Memoized:
+    """Exact memo of one pure upstream function; an input without an exact key is evaluated directly."""
+
+    def __init__(self, real, key) -> None:
+        self.real, self.key = real, key
+        self.cache: dict[object, object] = {}
+
+    def __call__(self, value: object) -> object:
         if not _MEMO_ENABLED[0]:
-            return self.real(payload)
+            return self.real(value)
         try:
-            key = edge_canonical_json(payload)
-        except Exception:  # noqa: BLE001 - a non-serializable payload is evaluated directly
-            return self.real(payload)
+            key = self.key(value)
+        except Exception:  # noqa: BLE001 - no exact key: evaluate directly
+            return self.real(value)
         if key not in self.cache:
-            self.cache[key] = self.real(payload)  # a raising call is never cached
+            self.cache[key] = self.real(value)  # a raising call is never cached
         return self.cache[key]
 
 
-_CHAIN_MEMOS = {
-    name: _MemoizedVerifier(getattr(ef6_module, name), cls, to_dict)
-    for name, cls, to_dict in (
-        ("verify_edge_leakage_bias_evidence", EdgeLeakageBiasEvidence, edge_leakage_bias_evidence_to_dict),
-        (
-            "verify_edge_strategy_spec_admission",
-            EdgeStrategySpecAdmissionEvidence,
-            edge_strategy_spec_admission_to_dict,
-        ),
-        ("verify_edge_source_packet_evidence", EdgeSourcePacketEvidence, edge_source_packet_evidence_to_dict),
-        ("verify_edge_idea_intake_evidence", EdgeIdeaIntakeEvidence, edge_idea_intake_evidence_to_dict),
-    )
-}
-_ECONOMICS_SHAPE_MEMO = _MemoizedPayloadFunction(metrics_module.historical_execution_economics_payload_is_well_formed)
-_ECONOMICS_PARSE_MEMO = _MemoizedPayloadFunction(metrics_module.historical_execution_economics_from_payload)
+# (calling module, name it resolves at call time, key). Payload functions only ever receive ``json.loads`` output here.
+_MEMO_TARGETS = (
+    (ef6_module, "verify_edge_leakage_bias_evidence", _exact_key),
+    (ef6_module, "verify_edge_strategy_spec_admission", _exact_key),
+    (ef6_module, "verify_edge_source_packet_evidence", _exact_key),
+    (ef6_module, "verify_edge_idea_intake_evidence", _exact_key),
+    (ef6_module, "verify_historical_walk_forward_metrics", _exact_key),
+    (ef6_module, "historical_walk_forward_metrics_from_payload", edge_canonical_json),
+    (ef6_module, "historical_walk_forward_metrics_payload_is_well_formed", edge_canonical_json),
+    (metrics_module, "verify_historical_execution_economics", _exact_key),
+    (metrics_module, "historical_execution_economics_from_payload", edge_canonical_json),
+    (metrics_module, "historical_execution_economics_payload_is_well_formed", edge_canonical_json),
+    (economics_module, "verify_historical_decision_run", _exact_key),
+    (run_module, "verify_historical_pit_dataset", _exact_key),
+)
+_MEMOS = {(module, name): _Memoized(getattr(module, name), key) for module, name, key in _MEMO_TARGETS}
 
 
 @pytest.fixture(autouse=True, scope="module")
 def _memoized_verification():
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(ef6_module, "verify_historical_walk_forward_metrics", _MEMO)
-        patch.setattr(metrics_module, "verify_historical_execution_economics", _ECONOMICS_MEMO)
-        patch.setattr(metrics_module, "historical_execution_economics_payload_is_well_formed", _ECONOMICS_SHAPE_MEMO)
-        patch.setattr(metrics_module, "historical_execution_economics_from_payload", _ECONOMICS_PARSE_MEMO)
-        for name, memo in _CHAIN_MEMOS.items():
-            patch.setattr(ef6_module, name, memo)
+        for (module, name), memo in _MEMOS.items():
+            patch.setattr(module, name, memo)
         yield
 
 
@@ -234,9 +219,18 @@ def _pit(series: str, key: str, sequence: int, event: int, values: dict[str, str
 
 
 @functools.cache
-def records() -> tuple:
-    """Constant marks and books every 10 days; a final funding settlement every 10 days (final after its cycle)."""
+def records(sparse: bool, start_day: int, days: int) -> tuple:
+    """The PIT slice one segment ``[start, start + days)`` consumes, cut from one fixed series.
 
+    Constant marks every 10 days; a final funding settlement (final after its cycle) and a book every cycle. Dense: the
+    rate repeats ``0, H, H``. A lookback-1 carry opens a short on the first ``H``, earns the second ``H`` at its
+    settlement and closes on the ``0``: one CLOSED trade every three cycles. Sparse: a constant ``H``. The slice keeps
+    every settlement and book from before the start to after the end and a mark within the staleness bound of the start,
+    so each segment's run and economics see exactly the records they need and payloads stay small.
+    """
+
+    low, high = S0 + start_day * DAY, S0 + (start_day + days) * DAY
+    count = HORIZON_DAYS * DAY // FUNDING + 2
     funding = [
         build_historical_pit_record(
             series_id="funding-final",
@@ -247,15 +241,21 @@ def records() -> tuple:
             available_at_ns=S0 + k * FUNDING + 10,
             finalized_at_ns=S0 + k * FUNDING + 10,
             revision_vintage_id=None,
-            values=(HistoricalPitValue("funding_rate", RATE),),
+            values=(HistoricalPitValue("funding_rate", RATE if sparse or k % 3 else ZERO_RATE),),
         )
-        for k in range(HORIZON_DAYS // 10 + 2)
+        for k in range(count)
+        if low - 2 * FUNDING <= S0 + (k - 1) * FUNDING <= high + FUNDING
     ]
     marks = [
         _pit("mark", "mark_price", j, S0 + j * MARK_STEP - 1_000, {"mark_price": d(100)})
         for j in range(HORIZON_DAYS // 10 + 2)
+        if low - 12 * DAY <= S0 + j * MARK_STEP <= high + MARK_STEP
     ]
-    books = [_pit("book", "order_book", k, S0 + k * FUNDING + 500, mt._book()) for k in range(HORIZON_DAYS // 10 + 2)]
+    books = [
+        _pit("book", "order_book", k, S0 + k * FUNDING + 500, mt._book())
+        for k in range(count)
+        if low - FUNDING <= S0 + k * FUNDING <= high + FUNDING
+    ]
     return tuple(funding + marks + books)
 
 
@@ -353,18 +353,20 @@ def world(name: str = "main"):
 
 
 @functools.cache
-def dataset(world_name: str = "main", dataset_id: str = "dataset-1"):
+def dataset(world_name: str, dataset_id: str, start_day: int, days: int):
+    """The PIT dataset of one segment; its id names the series and the segment."""
+
     _, manifest, _, registry, _ = world(world_name)
     return build_historical_pit_dataset(
         manifest,
         expected_source_manifest_digest=manifest.source_packet_evidence_digest,
         expected_data_requirement_registry_digest=data_requirement_registry_digest(registry),
-        dataset_id=dataset_id,
+        dataset_id=f"{dataset_id}-{start_day}-{days}",
         correlation_id="corr-1",
         source_reference="archive:history",
         rights_status="own_research",
         rights_reference="license-1",
-        records=records(),
+        records=records(dataset_id == SPARSE_DATASET, start_day, days),
     )
 
 
@@ -392,7 +394,7 @@ def economics(
     _, _, _, registry, binding = world(world_name)
     run_id = f"run-{world_name}-{dataset_id}-{start_day}-{days}-{edge_sha256_text(str(params))[:8]}"
     run = runt.decision_run(
-        dataset(world_name, dataset_id),
+        dataset(world_name, dataset_id, start_day, days),
         binding,
         instrument=INS,
         evaluation_start_ns=S0 + start_day * DAY,
@@ -445,6 +447,7 @@ def metrics(name: str) -> HistoricalWalkForwardMetricsResult:
         "Aspec1": ((PA,), (0,), {"world_name": "spec"}),
         "Asyn1": ((PA,), (0,), {"synthetic": True}),
         "Amulti1": ((PA,), (0,), {"world_name": "multi"}),
+        "Asparse": ((PA,) * 3, STARTS, {"dataset_id": SPARSE_DATASET}),
     }
     if name == "B1ds":  # the in-sample segment on another dataset with identical records
         return mt.build(
@@ -527,6 +530,7 @@ AUTO = object()
 # SYNTHETIC TEST VALUES: exactly the PRDV4 floors where PRDV4 names one, plus test-only drawdown/profit-factor values.
 GOVERNED_VALUES = {
     "min_oos_window_count": 3,
+    "min_in_sample_closed_trade_count": 50,
     "min_sharpe_retention_ratio": "0.500000000000000000",
     "min_hit_rate_delta_percentage_points": "-10.000000000000000000",
     "positive_expectancy_fraction_numerator": 2,
@@ -787,7 +791,9 @@ def test_every_variant_uses_the_identical_governed_window_frame() -> None:
     for frame in evidence.window_frames:
         assert frame.in_sample_end_ns - frame.in_sample_start_ns == 365 * DAY
         assert frame.out_of_sample_end_ns - frame.out_of_sample_start_ns == 90 * DAY
-        assert frame.in_sample_dataset_digest == frame.out_of_sample_dataset_digest == dataset().dataset_digest
+        start = (frame.in_sample_start_ns - S0) // DAY
+        assert frame.in_sample_dataset_digest == dataset("main", "dataset-1", start, 365).dataset_digest
+        assert frame.out_of_sample_dataset_digest == dataset("main", "dataset-1", start + 365, 90).dataset_digest
 
 
 @SLOW
@@ -1032,6 +1038,7 @@ def test_governance_looser_than_prdv4_floors_needs_approval() -> None:
     approval = governance_for(
         _draft("A", ("A1",), "main"),
         min_oos_window_count=2,
+        min_in_sample_closed_trade_count=49,
         min_sharpe_retention_ratio="0.499999999999999999",
         min_hit_rate_delta_percentage_points="-10.000000000000000001",
         positive_expectancy_fraction_numerator=1,
@@ -1043,6 +1050,7 @@ def test_governance_looser_than_prdv4_floors_needs_approval() -> None:
             _code(f"oos_governance_below_prdv4_floor:{name}")
             for name in (
                 "min_oos_window_count",
+                "min_in_sample_closed_trade_count",
                 "min_sharpe_retention_ratio",
                 "min_hit_rate_delta_percentage_points",
                 "positive_expectancy_fraction",
@@ -1109,6 +1117,17 @@ def _hit_boundary_pp() -> Fraction:
     return min(100 * (_units(w.out_of_sample.hit_rate) - _units(w.in_sample.hit_rate)) for w in _windows_a())
 
 
+def _closed_trades(start_day: int, **kwargs: object) -> int:
+    """CLOSED excursions of a real in-sample economics result, counted from the typed ledger (independently of EF-6)."""
+
+    trades = economics(start_day, 365, PA, **kwargs).trades
+    return sum(1 for trade in trades if trade.status is HistoricalExecutionTradeStatus.CLOSED)
+
+
+def _trade_boundary() -> int:
+    return min(_closed_trades(start) for start in STARTS)
+
+
 _BOUNDARY_CASES = [
     (lambda: {"min_sharpe_retention_ratio": _text(_floor18(_sharpe_boundary()))}, True),
     (lambda: {"min_sharpe_retention_ratio": _text(_floor18(_sharpe_boundary()) + ULP)}, False),
@@ -1119,6 +1138,8 @@ _BOUNDARY_CASES = [
     (lambda: {"min_profit_factor_exclusive": _windows_a()[0].out_of_sample.profit_factor}, False),
     (lambda: {"min_profit_factor_exclusive": _text(_units(_windows_a()[0].out_of_sample.profit_factor) - ULP)}, True),
     (lambda: {"positive_expectancy_fraction_numerator": 1, "positive_expectancy_fraction_denominator": 1}, True),
+    (lambda: {"min_in_sample_closed_trade_count": _trade_boundary()}, True),
+    (lambda: {"min_in_sample_closed_trade_count": _trade_boundary() + 1}, False),
 ]
 
 
@@ -1143,17 +1164,69 @@ def test_exact_rule_boundaries_on_authenticated_metrics(override, survives: bool
         binding=EdgeAuthorityBinding(snapshot_json="{}", expected_digest=metrics("A").result_digest),
         assignment_digest=ef5("A").registered_parameter_assignment_digests[0],
         frames=(),
+        in_sample_closed_trade_counts=tuple(_closed_trades(start) for start in STARTS),
     )
     evaluation = ef6_module._evaluate_bundle("variant-a", bundle, thresholds)
     expected = EdgeVariantEvaluationStatus.SURVIVED if survives else EdgeVariantEvaluationStatus.FAILED
     assert evaluation.evaluation_status is expected
 
 
+@SLOW
 @pytest.mark.parametrize(("override", "survives"), [_BOUNDARY_CASES[0], _BOUNDARY_CASES[1]])
 def test_exact_boundary_through_the_public_builder(override, survives: bool) -> None:
     evidence = ef6("A", governance=governance_for(passed(), **override()))
     _assert_shape(evidence)
     assert evidence.gate_verdict is (EdgeGateVerdict.PASS if survives else EdgeGateVerdict.FAIL)
+
+
+def test_in_sample_closed_trade_count_is_read_from_the_authenticated_trade_ledger() -> None:
+    """PRDV4 §1.13 Stage 1: each window's count equals the real IS ledger's CLOSED excursions; OPEN is not a trade."""
+
+    outcomes = passed().variant_evaluations[0].window_outcomes
+    assert [outcome.in_sample_closed_trade_count for outcome in outcomes] == [_closed_trades(s) for s in STARTS]
+    assert all(outcome.in_sample_trade_count_holds for outcome in outcomes)
+    ledger = economics(0, 365, PA).trades
+    assert (_closed_trades(0), len(ledger), ledger[-1].status) == (60, 61, HistoricalExecutionTradeStatus.OPEN)
+
+
+def test_governed_trade_minimum_above_the_real_count_fails_every_window() -> None:
+    evidence = ef6("A", governance=governance_for(passed(), min_in_sample_closed_trade_count=_trade_boundary() + 1))
+    _assert_shape(evidence)
+    assert (evidence.status, evidence.gate_verdict) == (EdgeEvidenceStatus.READY, EdgeGateVerdict.FAIL)
+    evaluation = evidence.variant_evaluations[0]
+    assert evaluation.failure_codes == tuple(f"window_{i}:in_sample_closed_trade_count_below_minimum" for i in range(3))
+    assert not any(outcome.in_sample_trade_count_holds for outcome in evaluation.window_outcomes)
+    assert evidence.surviving_assignment_digests == ()
+
+
+@SLOW
+def test_a_backtest_without_fifty_closed_trades_cannot_survive() -> None:
+    """The reviewed gap: every performance rule holds, but no in-sample segment carries the 50 PRDV4 closed trades."""
+
+    assert [_closed_trades(start, dataset_id=SPARSE_DATASET) for start in STARTS] == [0, 0, 0]
+    evidence = ef6("A", ("Asparse",))
+    _assert_shape(evidence)
+    assert (evidence.status, evidence.gate_verdict) == (EdgeEvidenceStatus.READY, EdgeGateVerdict.FAIL)
+    evaluation = evidence.variant_evaluations[0]
+    assert evaluation.failure_codes == tuple(f"window_{i}:in_sample_closed_trade_count_below_minimum" for i in range(3))
+    assert [outcome.in_sample_closed_trade_count for outcome in evaluation.window_outcomes] == [0, 0, 0]
+    assert evidence.surviving_assignment_digests == ()
+
+
+@pytest.mark.parametrize(
+    ("snapshot", "expected"),
+    [
+        ({"trades": []}, 0),
+        ({"trades": [{"status": "CLOSED"}, {"status": "OPEN"}, {"status": "CLOSED"}]}, 2),
+        ({}, None),
+        ({"trades": [{"status": "CLOSED"}, "CLOSED"]}, None),
+        ({"trades": [{"status": "closed"}]}, None),
+        ({"trades": [{}]}, None),
+        ({"trades": {"status": "CLOSED"}}, None),
+    ],
+)
+def test_closed_trade_count_reads_only_an_exact_trade_ledger_shape(snapshot: dict, expected: int | None) -> None:
+    assert ef6_module._closed_trade_count(snapshot) == expected
 
 
 def test_hit_rate_boundary_is_a_ratio_delta_in_percentage_points() -> None:
@@ -1217,6 +1290,7 @@ def _window_metrics(
 def _thresholds(**changes: object):
     values = {
         "min_windows": 3,
+        "min_in_sample_closed_trades": 50,
         "sharpe_ratio": 5 * 10**17,
         "hit_delta_pp": -10 * 10**18,
         "expectancy_fraction": (2, 3),
@@ -1234,6 +1308,7 @@ def _evaluate(windows, **changes: object):
         binding=EdgeAuthorityBinding(snapshot_json="{}", expected_digest="a" * 64),
         assignment_digest="b" * 64,
         frames=(),
+        in_sample_closed_trade_counts=(50,) * len(windows),
     )
     return ef6_module._evaluate_bundle("variant-x", bundle, _thresholds(**changes))
 
@@ -1423,6 +1498,12 @@ def test_changed_approval_values_change_the_evidence_deterministically() -> None
     _assert_not_intact(_resealed_payload(payload), "field_mismatch:governance_digest")
 
 
+def test_forged_in_sample_trade_count_with_reseal_never_verifies() -> None:
+    payload = _failed1_payload()
+    payload["variant_evaluations"][0]["window_outcomes"][0]["in_sample_closed_trade_count"] = 999
+    _assert_not_intact(_resealed_payload(payload), "field_mismatch:variant_evaluations")
+
+
 def test_nested_metrics_forgery_with_every_digest_recomputed_never_verifies() -> None:
     payload = _failed1_payload()
     snapshot = payload["variant_metrics_bindings"][0]["snapshot"]
@@ -1565,6 +1646,7 @@ def test_rule_set_commits_the_prdv4_floors_and_the_hit_rate_unit_identity() -> N
     rules = edge_walk_forward_oos_rule_set()
     assert edge_sha256_text(edge_canonical_json(rules)) == EDGE_WALK_FORWARD_OOS_RULE_SET_DIGEST
     assert rules["prdv4_min_oos_window_count"] == 3
+    assert rules["prdv4_min_in_sample_closed_trade_count"] == 50
     assert rules["prdv4_min_sharpe_retention_ratio"] == "0.500000000000000000"
     assert rules["prdv4_min_hit_rate_delta_percentage_points"] == "-10.000000000000000000"
     assert rules["prdv4_min_positive_expectancy_fraction"] == [2, 3]
@@ -1719,5 +1801,16 @@ def test_single_assembly_path_serves_builder_and_verifier() -> None:
 
 
 def test_real_p3_verifier_agrees_with_the_memo_for_the_happy_bundle() -> None:
-    assert _REAL_VERIFY_METRICS(metrics("A1")) == _MEMO(metrics("A1"))
-    assert verify_historical_walk_forward_metrics is _REAL_VERIFY_METRICS
+    memo = _MEMOS[(ef6_module, "verify_historical_walk_forward_metrics")]
+    assert memo.real(metrics("A1")) == memo(metrics("A1"))
+    assert verify_historical_walk_forward_metrics is memo.real
+
+
+def test_memo_keys_are_exact() -> None:
+    assert _exact_key(EdgeEvidenceStatus.READY) != _exact_key("READY")
+    assert _exact_key(True) != _exact_key(1)
+    assert _exact_key((1,)) != _exact_key([1])
+    assert _exact_key(replace(passed(), evidence_id="ef6-2")) != _exact_key(passed())
+    assert _exact_key(replace(passed())) == _exact_key(passed())
+    with pytest.raises(TypeError):
+        _exact_key(0.5)

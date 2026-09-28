@@ -32,19 +32,24 @@ Authority (shared kernel ``edge_artifact_core``):
   and the ordered IS/OOS intervals with their PIT dataset digests; any difference is FAIL. The frame digest is
   approved by governance, so the horizon, data and cost model cannot be changed after the fact.
 * Governance. ``EdgeWalkForwardOosGovernance`` carries every governance-owned EF-6 value (minimum OOS window count,
-  Sharpe retention ratio, hit-rate delta in percentage points, positive-expectancy window fraction, drawdown ratio,
-  profit-factor minimum and window fraction) and commits to the EF-5 digest, the variant ledger digest, the
-  multiple-testing count, the EF-6 rule set digest and the evaluation frame digest. Missing, non-matching or looser
-  than the PRDV4 §1.13 Stage 2 / §12.3 floors (>= 3 OOS windows, retention >= 0.5, hit-rate delta >= -10pp, positive
-  expectancy in >= 2/3 of windows) is NEEDS_GOVERNANCE_APPROVAL. No value is defaulted; legacy defaults are never
-  treated as approval. ``governance_digest`` commits the exact approved record for any later consumer.
+  minimum in-sample closed trade count, Sharpe retention ratio, hit-rate delta in percentage points,
+  positive-expectancy window fraction, drawdown ratio, profit-factor minimum and window fraction) and commits to the
+  EF-5 digest, the variant ledger digest, the multiple-testing count, the EF-6 rule set digest and the evaluation frame
+  digest. Missing, non-matching or looser than the PRDV4 §1.13 Stage 1 / Stage 2 / §12.3 floors (>= 50 backtest
+  trades, >= 3 OOS windows, retention >= 0.5, hit-rate delta >= -10pp, positive expectancy in >= 2/3 of windows) is
+  NEEDS_GOVERNANCE_APPROVAL. No value is defaulted; legacy defaults are never treated as approval.
+  ``governance_digest`` commits the exact approved record for any later consumer.
 * Rules (``EDGE_WALK_FORWARD_OOS_RULE_SET_V1``, committed by ``rule_set_digest``), exact integer arithmetic over
   canonical scale-18 texts, no float, no epsilon, no ``decimal`` context. P3 hit rate is a RATIO; the approved delta
   is in percentage points and converts as ``ratio = pp / 100`` (0.55 ratio is 55 percentage points). A variant
-  survives iff its metrics were computed and: OOS window count >= the approved minimum; in EVERY window OOS Sharpe >=
-  IS Sharpe x ratio, OOS hit rate >= IS hit rate + pp/100 and IS max drawdown > 0 with OOS max drawdown strictly below
-  ratio x IS max drawdown; OOS expectancy strictly positive in >= ceil(n x fraction) windows; OOS profit factor
-  strictly above the minimum in >= ceil(n x fraction) windows. The rules are applied ONLY to an admissible evaluation
+  survives iff its metrics were computed and: OOS window count >= the approved minimum; in EVERY window the in-sample
+  segment holds at least the approved minimum of CLOSED trades, OOS Sharpe >= IS Sharpe x ratio, OOS hit rate >= IS
+  hit rate + pp/100 and IS max drawdown > 0 with OOS max drawdown strictly below ratio x IS max drawdown; OOS
+  expectancy strictly positive in >= ceil(n x fraction) windows; OOS profit factor strictly above the minimum in >=
+  ceil(n x fraction) windows. The PRDV4 §1.13 Stage 1 "minimum 50 trades in backtest" is read on every window's
+  in-sample economics: a trade is one ``CLOSED`` excursion (FLAT -> nonzero -> FLAT) of the authenticated trade
+  ledger carried by the IS economics source the metrics verifier re-proved; an excursion still ``OPEN`` at the segment
+  end is not counted. The count is read, never re-derived. The rules are applied ONLY to an admissible evaluation
   set (complete, fair, single-instrument, non-synthetic, under valid governance); otherwise no computed variant is
   evaluated and no survivor is reported.
 * Synthetic facts. Metrics whose economics used TEST_ONLY synthetic venue facts are NEEDS_EXTERNAL_FACTS; a TEST_ONLY
@@ -131,8 +136,10 @@ _INT64_MAX = 9223372036854775807
 _DAY_NS = 86_400_000_000_000
 
 # PRDV4 §1.13 Stage 2 / §12.3 floors (governance may be stricter, never looser) and the accepted P3 V1 geometry reading
-# of "each >= 3 months" as 90 UTC days, plus the §1.13 Stage 1 "12 months in-sample" read as 365 UTC days.
+# of "each >= 3 months" as 90 UTC days, plus the §1.13 Stage 1 "12 months in-sample" read as 365 UTC days and its
+# "minimum 50 trades in backtest" read as closed excursions in every window's in-sample economics trade ledger.
 _PRDV4_MIN_OOS_WINDOW_COUNT = 3
+_PRDV4_MIN_IN_SAMPLE_CLOSED_TRADE_COUNT = 50
 _PRDV4_MIN_SHARPE_RETENTION_RATIO = "0.500000000000000000"
 _PRDV4_MIN_HIT_RATE_DELTA_PERCENTAGE_POINTS = "-10.000000000000000000"
 _PRDV4_MIN_POSITIVE_EXPECTANCY_FRACTION = (2, 3)
@@ -155,6 +162,9 @@ _SOURCE_TEXT_FIELDS = (
     "dataset_digest",
 )
 _SOURCE_TIME_FIELDS = ("evaluation_start_ns", "evaluation_end_ns")
+# ``HistoricalExecutionTradeStatus`` values of the authenticated economics trade ledger; only CLOSED is a trade.
+_CLOSED_TRADE_STATUS = "CLOSED"
+_TRADE_STATUSES = frozenset({_CLOSED_TRADE_STATUS, "OPEN"})
 
 _RULE_SET_V1: dict[str, object] = {
     "rule_set_id": "edge_walk_forward_oos_rules.v1",
@@ -170,6 +180,8 @@ _RULE_SET_V1: dict[str, object] = {
     "positive_expectancy_rule_id": "oos_expectancy_strictly_positive_in_at_least_ceil_n_times_fraction_windows.v1",
     "profit_factor_rule_id": "oos_profit_factor_strictly_above_minimum_in_at_least_ceil_n_times_fraction_windows.v1",
     "window_count_rule_id": "oos_window_count_at_least_approved_minimum.v1",
+    "in_sample_trade_count_rule_id": "every_window_in_sample_closed_trade_count_at_least_approved_minimum.v1",
+    "trade_count_source_id": "closed_excursions_of_the_authenticated_in_sample_economics_trade_ledger_open_excluded.v1",
     "survival_rule_id": "variant_survives_iff_metrics_computed_and_every_rule_holds.v1",
     "gate_rule_id": "pass_iff_complete_fair_coverage_and_at_least_one_registered_variant_survives.v1",
     "numeric_rule_id": "exact_integer_comparison_of_canonical_scale18_texts_no_float_no_decimal_context.v1",
@@ -177,8 +189,9 @@ _RULE_SET_V1: dict[str, object] = {
     "synthetic_fact_rule_id": "synthetic_facts_need_external_facts_synthetic_approval_needs_governance.v1",
     "regime_rule_id": "regime_split_explicit_unavailable_until_accepted_rf_chain.v1",
     "cost_accounting_basis_id": _COST_ACCOUNTING_BASIS_ID,
-    "prdv4_floor_rule_id": "governance_values_never_looser_than_prdv4_1_13_stage_2_and_12_3.v1",
+    "prdv4_floor_rule_id": "governance_values_never_looser_than_prdv4_1_13_stages_1_2_and_12_3.v1",
     "prdv4_min_oos_window_count": _PRDV4_MIN_OOS_WINDOW_COUNT,
+    "prdv4_min_in_sample_closed_trade_count": _PRDV4_MIN_IN_SAMPLE_CLOSED_TRADE_COUNT,
     "prdv4_min_sharpe_retention_ratio": _PRDV4_MIN_SHARPE_RETENTION_RATIO,
     "prdv4_min_hit_rate_delta_percentage_points": _PRDV4_MIN_HIT_RATE_DELTA_PERCENTAGE_POINTS,
     "prdv4_min_positive_expectancy_fraction": list(_PRDV4_MIN_POSITIVE_EXPECTANCY_FRACTION),
@@ -247,6 +260,7 @@ class EdgeWalkForwardOosGovernance:
     approved_rule_set_digest: str
     approved_evaluation_frame_digest: str
     min_oos_window_count: int
+    min_in_sample_closed_trade_count: int
     min_sharpe_retention_ratio: str
     min_hit_rate_delta_percentage_points: str
     positive_expectancy_fraction_numerator: int
@@ -276,6 +290,8 @@ class EdgeWalkForwardWindowOutcome:
 
     window_index: int
     window_digest: str
+    in_sample_closed_trade_count: int
+    in_sample_trade_count_holds: bool
     sharpe_retention_holds: bool
     hit_rate_retention_holds: bool
     drawdown_holds: bool
@@ -396,6 +412,7 @@ class _Bundle:
     binding: EdgeAuthorityBinding
     assignment_digest: str
     frames: tuple[EdgeWalkForwardWindowFrame, ...]
+    in_sample_closed_trade_counts: tuple[int, ...]
 
 
 @dataclass(frozen=True)
@@ -403,6 +420,7 @@ class _Thresholds:
     """Approved governance values as exact scale units; built only from a validated governance record."""
 
     min_windows: int
+    min_in_sample_closed_trades: int
     sharpe_ratio: int
     hit_delta_pp: int
     expectancy_fraction: tuple[int, int]
@@ -548,6 +566,9 @@ def _canonical_governance(governance: object) -> EdgeWalkForwardOosGovernance | 
         min_oos_window_count=_require_int(
             attribute("min_oos_window_count"), "governance_min_oos_window_count", minimum=1
         ),
+        min_in_sample_closed_trade_count=_require_int(
+            attribute("min_in_sample_closed_trade_count"), "governance_min_in_sample_closed_trade_count", minimum=1
+        ),
         min_sharpe_retention_ratio=_require_decimal(
             attribute("min_sharpe_retention_ratio"), "governance_min_sharpe_retention_ratio"
         ),
@@ -662,10 +683,22 @@ def _chain_authority(
     return [], _Chain(ef5=ef5, admission=admission, manifest=manifest)
 
 
+def _closed_trade_count(snapshot: Mapping[str, object]) -> int | None:
+    """The number of CLOSED excursions in one authenticated economics trade ledger; ``None`` for an unexpected shape."""
+
+    trades = snapshot.get("trades")
+    if type(trades) is not list:
+        return None
+    statuses = [trade.get("status") if type(trade) is dict else None for trade in trades]
+    if any(status not in _TRADE_STATUSES for status in statuses):
+        return None
+    return statuses.count(_CLOSED_TRADE_STATUS)
+
+
 def _source_identities(
     metrics: HistoricalWalkForwardMetricsResult,
-) -> tuple[list[tuple[dict[str, object], dict[str, object]]], list[EdgeWalkForwardWindowFrame]] | None:
-    """The identity fields of every IS/OOS economics source, read from the window-binding snapshots.
+) -> tuple[list[tuple[dict[str, object], dict[str, object]]], list[EdgeWalkForwardWindowFrame], tuple[int, ...]] | None:
+    """The identity fields of every IS/OOS economics source and each IS closed trade count, read from the snapshots.
 
     The snapshots are exactly the economics payloads the metrics verifier just re-proved against their anchors (and the
     metrics shape predicate strictly parsed), so their fields are authenticated; they are read, never re-derived. Any
@@ -673,6 +706,7 @@ def _source_identities(
     """
 
     sources: list[tuple[dict[str, object], dict[str, object]]] = []
+    trade_counts: list[int] = []
     for window in metrics.window_bindings:
         pair = []
         for binding in (window.in_sample_binding, window.out_of_sample_binding):
@@ -682,6 +716,11 @@ def _source_identities(
                 type(identity[name]) is not int for name in _SOURCE_TIME_FIELDS
             ):
                 return None
+            if not pair:
+                closed = _closed_trade_count(snapshot)
+                if closed is None:
+                    return None
+                trade_counts.append(closed)
             pair.append(identity)
         sources.append((pair[0], pair[1]))
     frames = [
@@ -696,7 +735,7 @@ def _source_identities(
         )
         for index, (in_sample, out_of_sample) in enumerate(sources)
     ]
-    return sources, frames
+    return sources, frames, tuple(trade_counts)
 
 
 def _bundle_authority(
@@ -720,7 +759,7 @@ def _bundle_authority(
     identities = _source_identities(metrics)
     if identities is None:
         return [_reason(f"{label}:source_snapshot_malformed")], None
-    sources, frames = identities
+    sources, frames, trade_counts = identities
     expected = {
         "strategy_spec_digest": ef5.strategy_spec_digest,
         "profile_semantics_digest": ef5.profile_semantics_digest,
@@ -755,6 +794,7 @@ def _bundle_authority(
         binding=binding,
         assignment_digest=next(iter(assignments)),  # type: ignore[arg-type]
         frames=tuple(frames),
+        in_sample_closed_trade_counts=trade_counts,
     )
 
 
@@ -782,6 +822,8 @@ def _governance_reasons(
     floor_num, floor_den = _PRDV4_MIN_POSITIVE_EXPECTANCY_FRACTION
     if governance.min_oos_window_count < _PRDV4_MIN_OOS_WINDOW_COUNT:
         codes.append(_reason("oos_governance_below_prdv4_floor:min_oos_window_count"))
+    if governance.min_in_sample_closed_trade_count < _PRDV4_MIN_IN_SAMPLE_CLOSED_TRADE_COUNT:
+        codes.append(_reason("oos_governance_below_prdv4_floor:min_in_sample_closed_trade_count"))
     if sharpe < _units(_PRDV4_MIN_SHARPE_RETENTION_RATIO):  # type: ignore[operator]
         codes.append(_reason("oos_governance_below_prdv4_floor:min_sharpe_retention_ratio"))
     if hit < _units(_PRDV4_MIN_HIT_RATE_DELTA_PERCENTAGE_POINTS):  # type: ignore[operator]
@@ -792,6 +834,7 @@ def _governance_reasons(
         return codes, None
     return [], _Thresholds(
         min_windows=governance.min_oos_window_count,
+        min_in_sample_closed_trades=governance.min_in_sample_closed_trade_count,
         sharpe_ratio=sharpe,  # type: ignore[arg-type]
         hit_delta_pp=hit,  # type: ignore[arg-type]
         expectancy_fraction=expectancy,
@@ -805,11 +848,13 @@ def _governance_reasons(
 
 
 def _window_outcome(
-    window: HistoricalWalkForwardWindowMetrics, thresholds: _Thresholds
+    window: HistoricalWalkForwardWindowMetrics, in_sample_closed_trades: int, thresholds: _Thresholds
 ) -> tuple[EdgeWalkForwardWindowOutcome, list[str]]:
     """Exact rule outcomes of one window; every comparison is between integers at the common scale."""
 
     in_sample, out_of_sample = window.in_sample, window.out_of_sample
+    trades_hold = in_sample_closed_trades >= thresholds.min_in_sample_closed_trades
+    trade_codes = [] if trades_hold else [f"window_{window.window_index}:in_sample_closed_trade_count_below_minimum"]
     values = [
         _units(text)
         for text in (
@@ -826,9 +871,17 @@ def _window_outcome(
     prefix = f"window_{window.window_index}"
     if any(value is None for value in values):
         outcome = EdgeWalkForwardWindowOutcome(
-            window.window_index, window.window_digest, False, False, False, False, False
+            window.window_index,
+            window.window_digest,
+            in_sample_closed_trades,
+            trades_hold,
+            False,
+            False,
+            False,
+            False,
+            False,
         )
-        return outcome, [f"{prefix}:metric_text_noncanonical"]
+        return outcome, [*trade_codes, f"{prefix}:metric_text_noncanonical"]
     is_sharpe, oos_sharpe, is_hit, oos_hit, is_drawdown, oos_drawdown, oos_expectancy, oos_profit_factor = values
     sharpe_holds = oos_sharpe * _SCALE_UNITS >= is_sharpe * thresholds.sharpe_ratio  # type: ignore[operator]
     hit_holds = (
@@ -839,13 +892,15 @@ def _window_outcome(
     outcome = EdgeWalkForwardWindowOutcome(
         window_index=window.window_index,
         window_digest=window.window_digest,
+        in_sample_closed_trade_count=in_sample_closed_trades,
+        in_sample_trade_count_holds=trades_hold,
         sharpe_retention_holds=sharpe_holds,
         hit_rate_retention_holds=hit_holds,
         drawdown_holds=drawdown_holds,
         positive_expectancy=oos_expectancy > 0,  # type: ignore[operator]
         profit_factor_above_minimum=oos_profit_factor > thresholds.profit_factor_min,  # type: ignore[operator]
     )
-    codes: list[str] = []
+    codes = list(trade_codes)
     if not sharpe_holds:
         codes.append(f"{prefix}:sharpe_retention_below_minimum")
     if not hit_holds:
@@ -898,8 +953,8 @@ def _evaluate_bundle(
         )
     outcomes: list[EdgeWalkForwardWindowOutcome] = []
     codes: list[str] = []
-    for window in windows:
-        outcome, window_codes = _window_outcome(window, thresholds)
+    for window, closed_trades in zip(windows, bundle.in_sample_closed_trade_counts, strict=True):
+        outcome, window_codes = _window_outcome(window, closed_trades, thresholds)
         outcomes.append(outcome)
         codes.extend(window_codes)
     count = len(windows)
@@ -1275,6 +1330,7 @@ def _as_metrics_bindings(value: object) -> tuple[EdgeAuthorityBinding, ...]:
 _GOVERNANCE_CONVERTERS: dict[str, Callable[[object], object]] = {
     "approved_multiple_testing_count": _as_int,
     "min_oos_window_count": _as_int,
+    "min_in_sample_closed_trade_count": _as_int,
     "positive_expectancy_fraction_numerator": _as_int,
     "positive_expectancy_fraction_denominator": _as_int,
     "profit_factor_fraction_numerator": _as_int,
@@ -1289,6 +1345,8 @@ _FRAME_CONVERTERS: dict[str, Callable[[object], object]] = {
 }
 _OUTCOME_CONVERTERS: dict[str, Callable[[object], object]] = {
     "window_index": _as_int,
+    "in_sample_closed_trade_count": _as_int,
+    "in_sample_trade_count_holds": _as_bool,
     "sharpe_retention_holds": _as_bool,
     "hit_rate_retention_holds": _as_bool,
     "drawdown_holds": _as_bool,
