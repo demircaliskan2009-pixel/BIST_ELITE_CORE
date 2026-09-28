@@ -9,9 +9,10 @@ CI budget: the required ``tests`` CI job runs the suite twice (plain and coverag
 default suite keeps the real end-to-end world A and every test that needs only EF-5 or A; attack worlds that need extra
 authenticated economics are ``@pytest.mark.slow`` (run with ``--runslow`` and by the scheduled CI job).
 
-Cost control: the pure public P3 metrics verifier (as EF-6 calls it) and the pure public economics verifier (as P3
-calls it) are memoized for this module by the exact canonical payload text of the object verified — semantically
-transparent: the same payload always yields the same verification. Tests that change global registries disable both.
+Cost control: the pure public EF-5/EF-4/EF-3/EF-2 and P3 metrics verifiers (as EF-6 calls them) and the pure public
+economics verifier, strict parser and shape predicate (as P3 calls them) are memoized for this module by the exact
+canonical payload text — semantically transparent: the same payload always yields the same result, results are
+immutable, and a raising call is never cached. Tests that change global registries disable every memo.
 """
 
 from __future__ import annotations
@@ -46,8 +47,10 @@ from crypto_core.validation.edge_artifact_core import (
     edge_sha256_text,
 )
 from crypto_core.validation.edge_idea_intake_evidence import (
+    EdgeIdeaIntakeEvidence,
     build_edge_idea_intake_evidence,
     build_edge_kill_criteria_policy,
+    edge_idea_intake_evidence_to_dict,
 )
 from crypto_core.validation.edge_leakage_bias_evidence import (
     EdgeInputVariant,
@@ -55,9 +58,19 @@ from crypto_core.validation.edge_leakage_bias_evidence import (
     EdgeParameterSearchBound,
     build_edge_leakage_bias_evidence,
     edge_leakage_bias_evidence_digest,
+    edge_leakage_bias_evidence_to_dict,
 )
-from crypto_core.validation.edge_source_packet_evidence import EdgeInputSeries, build_edge_source_packet_evidence
-from crypto_core.validation.edge_strategy_spec_admission import build_edge_strategy_spec_admission
+from crypto_core.validation.edge_source_packet_evidence import (
+    EdgeInputSeries,
+    EdgeSourcePacketEvidence,
+    build_edge_source_packet_evidence,
+    edge_source_packet_evidence_to_dict,
+)
+from crypto_core.validation.edge_strategy_spec_admission import (
+    EdgeStrategySpecAdmissionEvidence,
+    build_edge_strategy_spec_admission,
+    edge_strategy_spec_admission_to_dict,
+)
 from crypto_core.validation.edge_walk_forward_oos_evidence import (
     EDGE_WALK_FORWARD_OOS_NON_CLAIM_FLAGS,
     EDGE_WALK_FORWARD_OOS_RULE_SET_DIGEST,
@@ -155,11 +168,51 @@ _ECONOMICS_MEMO = _MemoizedVerifier(
 )
 
 
+class _MemoizedPayloadFunction:
+    """Exact memo of a pure payload function (strict parse / shape predicate) keyed by the canonical payload text."""
+
+    def __init__(self, real) -> None:
+        self.real = real
+        self.cache: dict[str, object] = {}
+
+    def __call__(self, payload: object) -> object:
+        if not _MEMO_ENABLED[0]:
+            return self.real(payload)
+        try:
+            key = edge_canonical_json(payload)
+        except Exception:  # noqa: BLE001 - a non-serializable payload is evaluated directly
+            return self.real(payload)
+        if key not in self.cache:
+            self.cache[key] = self.real(payload)  # a raising call is never cached
+        return self.cache[key]
+
+
+_CHAIN_MEMOS = {
+    name: _MemoizedVerifier(getattr(ef6_module, name), cls, to_dict)
+    for name, cls, to_dict in (
+        ("verify_edge_leakage_bias_evidence", EdgeLeakageBiasEvidence, edge_leakage_bias_evidence_to_dict),
+        (
+            "verify_edge_strategy_spec_admission",
+            EdgeStrategySpecAdmissionEvidence,
+            edge_strategy_spec_admission_to_dict,
+        ),
+        ("verify_edge_source_packet_evidence", EdgeSourcePacketEvidence, edge_source_packet_evidence_to_dict),
+        ("verify_edge_idea_intake_evidence", EdgeIdeaIntakeEvidence, edge_idea_intake_evidence_to_dict),
+    )
+}
+_ECONOMICS_SHAPE_MEMO = _MemoizedPayloadFunction(metrics_module.historical_execution_economics_payload_is_well_formed)
+_ECONOMICS_PARSE_MEMO = _MemoizedPayloadFunction(metrics_module.historical_execution_economics_from_payload)
+
+
 @pytest.fixture(autouse=True, scope="module")
 def _memoized_verification():
     with pytest.MonkeyPatch.context() as patch:
         patch.setattr(ef6_module, "verify_historical_walk_forward_metrics", _MEMO)
         patch.setattr(metrics_module, "verify_historical_execution_economics", _ECONOMICS_MEMO)
+        patch.setattr(metrics_module, "historical_execution_economics_payload_is_well_formed", _ECONOMICS_SHAPE_MEMO)
+        patch.setattr(metrics_module, "historical_execution_economics_from_payload", _ECONOMICS_PARSE_MEMO)
+        for name, memo in _CHAIN_MEMOS.items():
+            patch.setattr(ef6_module, name, memo)
         yield
 
 
