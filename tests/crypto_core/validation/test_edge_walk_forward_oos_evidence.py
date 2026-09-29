@@ -129,6 +129,8 @@ MARK_STEP = 10 * DAY
 RATE = "0.003000000000000000"  # synthetic: one settlement of RATE dominates the entry and exit costs of a trade
 ZERO_RATE = "0.000000000000000000"
 SPARSE_DATASET = "dataset-sparse"  # a constant RATE: the carry opens once and never closes a trade
+LOSING_RATE = "0.001000000000000000"  # synthetic: one settlement no longer covers a trade's costs
+LOSING_DATASET = "dataset-losing"  # the dense pattern at LOSING_RATE: negative in-sample and out-of-sample Sharpe
 INS = econ.INS
 d = polt.d
 STARTS = (0, 90, 180)  # three governed windows: IS [s, s+365), OOS [s+365, s+455)
@@ -218,13 +220,20 @@ def _pit(series: str, key: str, sequence: int, event: int, values: dict[str, str
     )
 
 
+def _rate(series: str, k: int) -> str:
+    if series == "sparse":
+        return RATE
+    return (LOSING_RATE if series == "losing" else RATE) if k % 3 else ZERO_RATE
+
+
 @functools.cache
-def records(sparse: bool, start_day: int, days: int) -> tuple:
+def records(series: str, start_day: int, days: int) -> tuple:
     """The PIT slice one segment ``[start, start + days)`` consumes, cut from one fixed series.
 
     Constant marks every 10 days; a final funding settlement (final after its cycle) and a book every cycle. Dense: the
     rate repeats ``0, H, H``. A lookback-1 carry opens a short on the first ``H``, earns the second ``H`` at its
-    settlement and closes on the ``0``: one CLOSED trade every three cycles. Sparse: a constant ``H``. The slice keeps
+    settlement and closes on the ``0``: one CLOSED trade every three cycles. Losing: the same pattern at a rate that
+    does not cover a trade's costs. Sparse: a constant ``H``. The slice keeps
     every settlement and book from before the start to after the end and a mark within the staleness bound of the start,
     so each segment's run and economics see exactly the records they need and payloads stay small.
     """
@@ -241,7 +250,7 @@ def records(sparse: bool, start_day: int, days: int) -> tuple:
             available_at_ns=S0 + k * FUNDING + 10,
             finalized_at_ns=S0 + k * FUNDING + 10,
             revision_vintage_id=None,
-            values=(HistoricalPitValue("funding_rate", RATE if sparse or k % 3 else ZERO_RATE),),
+            values=(HistoricalPitValue("funding_rate", _rate(series, k)),),
         )
         for k in range(count)
         if low - 2 * FUNDING <= S0 + (k - 1) * FUNDING <= high + FUNDING
@@ -366,7 +375,7 @@ def dataset(world_name: str, dataset_id: str, start_day: int, days: int):
         source_reference="archive:history",
         rights_status="own_research",
         rights_reference="license-1",
-        records=records(dataset_id == SPARSE_DATASET, start_day, days),
+        records=records({SPARSE_DATASET: "sparse", LOSING_DATASET: "losing"}.get(dataset_id, "dense"), start_day, days),
     )
 
 
@@ -428,6 +437,18 @@ def _window(index: int, start: int, params, **kwargs: object):
     )
 
 
+_LOSING = {"dataset_id": LOSING_DATASET}
+_FEE6 = {"fee": d(6)}
+# Bundles whose segments differ: per window (start, params, in-sample kwargs, out-of-sample kwargs).
+_SEGMENTED: dict[str, tuple] = {
+    "B1ds": ((0, PB, {"dataset_id": "dataset-2"}, {}),),  # the in-sample segment on another dataset, same records
+    "Aneg1": ((0, PA, _LOSING, _LOSING),),  # negative IS and OOS Sharpe
+    "Aneg3": ((0, PA, _LOSING, _LOSING), (90, PA, {}, {}), (180, PA, {}, {})),  # one losing window of three
+    "A1mixoos": ((0, PA, {}, _FEE6),),  # the out-of-sample source under another economics policy
+    "Bmix3": ((0, PB, {}, {}), (90, PB, _FEE6, {}), (180, PB, {}, {})),  # a later in-sample source under another
+}
+
+
 # Named variant bundles. Only the happy/partial-survival bundles need the three governed windows; every isolation case
 # compares two bundles of the SAME reduced geometry, so the one property under test is the only difference.
 @functools.cache
@@ -449,10 +470,17 @@ def metrics(name: str) -> HistoricalWalkForwardMetricsResult:
         "Amulti1": ((PA,), (0,), {"world_name": "multi"}),
         "Asparse": ((PA,) * 3, STARTS, {"dataset_id": SPARSE_DATASET}),
     }
-    if name == "B1ds":  # the in-sample segment on another dataset with identical records
+    if name in _SEGMENTED:
         return mt.build(
-            (mt.window("wf-1", economics(0, 365, PB, dataset_id="dataset-2"), economics(365, 90, PB)),),
-            result_id="wf-B1ds",
+            tuple(
+                mt.window(
+                    f"wf-{index + 1}",
+                    economics(start, 365, param, **in_kw),
+                    economics(start + 365, 90, param, **out_kw),
+                )
+                for index, (start, param, in_kw, out_kw) in enumerate(_SEGMENTED[name])
+            ),
+            result_id=f"wf-{name}",
         )
     params, starts, kwargs = table[name]
     windows = tuple(_window(index, start, param, **kwargs) for index, (start, param) in enumerate(zip(starts, params)))
@@ -1302,13 +1330,13 @@ def _thresholds(**changes: object):
     return ef6_module._Thresholds(**values)  # type: ignore[arg-type]
 
 
-def _evaluate(windows, **changes: object):
+def _evaluate(windows, closed_trades: int = 50, **changes: object):
     bundle = ef6_module._Bundle(
         metrics=replace(metrics("A"), windows=tuple(windows), window_count=len(windows)),
         binding=EdgeAuthorityBinding(snapshot_json="{}", expected_digest="a" * 64),
         assignment_digest="b" * 64,
         frames=(),
-        in_sample_closed_trade_counts=(50,) * len(windows),
+        in_sample_closed_trade_counts=(closed_trades,) * len(windows),
     )
     return ef6_module._evaluate_bundle("variant-x", bundle, _thresholds(**changes))
 
@@ -1436,6 +1464,186 @@ def test_regime_state_is_always_present_and_explicitly_unavailable() -> None:
         assert evidence.regime_split_report == EDGE_REGIME_EVIDENCE_UNAVAILABLE
         assert evidence.regime_evidence_status == EDGE_REGIME_EVIDENCE_UNAVAILABLE
         assert evidence.regime_evidence_available is False
+
+
+# --- protected audit repairs: the signed PRDV4 Sharpe floor and one economics-policy frame ----------------------------
+
+_RATIOS = ("0.500000000000000000", "1.000000000000000000", "2.000000000000000000")
+
+
+def _ratio_units(ratio: str) -> int:
+    return int(Fraction(ratio) * 10**18)
+
+
+@pytest.mark.parametrize("ratio", _RATIOS)
+def test_negative_in_sample_sharpe_is_never_loosened_by_a_larger_approved_ratio(ratio: str) -> None:
+    """A signed product ``OOS >= IS x ratio`` alone lets a larger ratio LOWER the bar when IS Sharpe is negative."""
+
+    window = metrics("Aneg1").windows[0]
+    is_sharpe, oos_sharpe = _units(window.in_sample.annualized_sharpe), _units(window.out_of_sample.annualized_sharpe)
+    assert is_sharpe < oos_sharpe < 0 and oos_sharpe < is_sharpe / 2  # the audited shape, on REAL P3 texts
+    bundle = ef6_module._Bundle(
+        metrics=metrics("Aneg1"),
+        binding=EdgeAuthorityBinding(snapshot_json="{}", expected_digest=metrics("Aneg1").result_digest),
+        assignment_digest=ef5("A").registered_parameter_assignment_digests[0],
+        frames=(),
+        in_sample_closed_trade_counts=(_closed_trades(0, dataset_id=LOSING_DATASET),),
+    )
+    assert bundle.in_sample_closed_trade_counts == (60,)
+    evaluation = ef6_module._evaluate_bundle("variant-a", bundle, _thresholds(sharpe_ratio=_ratio_units(ratio)))
+    outcome = evaluation.window_outcomes[0]
+    assert outcome.sharpe_retention_holds is False
+    assert (outcome.hit_rate_retention_holds, outcome.drawdown_holds, outcome.in_sample_trade_count_holds) == (
+        True,
+        True,
+        True,
+    )
+    assert "window_0:sharpe_retention_below_minimum" in evaluation.failure_codes
+
+
+@SLOW
+@pytest.mark.parametrize("ratio", _RATIOS)
+def test_the_audited_negative_sharpe_bundle_never_passes_at_any_approved_ratio(ratio: str) -> None:
+    """Two profitable windows and one losing window: before the repair, ratio 1.0 made it SURVIVE and advance."""
+
+    record = governance_for(_draft("A", ("Aneg3",), "main"), min_sharpe_retention_ratio=ratio)
+    evidence = ef6("A", ("Aneg3",), governance=record)
+    _assert_shape(evidence)
+    assert (evidence.status, evidence.gate_verdict, evidence.advances) == (
+        EdgeEvidenceStatus.READY,
+        EdgeGateVerdict.FAIL,
+        False,
+    )
+    assert evidence.surviving_assignment_digests == ()
+    evaluation = evidence.variant_evaluations[0]
+    assert "window_0:sharpe_retention_below_minimum" in evaluation.failure_codes
+    if ratio == _RATIOS[0]:
+        assert evaluation.failure_codes == ("window_0:sharpe_retention_below_minimum",)
+
+
+@pytest.mark.parametrize(
+    ("is_sharpe", "oos_sharpe", "ratio", "holds"),
+    [
+        ("-1", "-0.5", "0.5", True),  # exactly the PRDV4 floor
+        ("-1", "-0.5", "2", True),  # a larger approved ratio never lowers the bar below the floor ...
+        ("-1", "-0.500000000000000001", "0.5", False),
+        ("-1", "-0.500000000000000001", "2", False),  # ... nor raises the pass set above it
+        ("-1", "-1", "1", False),  # the signed product alone would accept this
+        ("-12.316407671228772967", "-11.994822050568919996", "1", False),  # the audit reproduction values
+        ("-12.316407671228772967", "-11.994822050568919996", "2", False),
+        ("-1", "-0.4", "2", True),  # no positive-Sharpe requirement is invented
+        ("0", "0", "2", True),
+        ("0", "-0.000000000000000001", "0.5", False),
+        ("1", "0.5", "0.5", True),
+        ("1", "0.5", "1", False),  # for a positive IS Sharpe a larger approved ratio is genuinely stricter
+        ("1", "1", "1", True),
+        ("1", "1.999999999999999999", "2", False),
+        ("1", "2", "2", True),
+    ],
+)
+def test_sharpe_threshold_is_the_stricter_of_the_prdv4_floor_and_the_approved_ratio(
+    is_sharpe: str, oos_sharpe: str, ratio: str, holds: bool
+) -> None:
+    windows = [_window_metrics(i, is_sharpe=is_sharpe, oos_sharpe=oos_sharpe) for i in range(3)]
+    expected = EdgeVariantEvaluationStatus.SURVIVED if holds else EdgeVariantEvaluationStatus.FAILED
+    assert _evaluate(windows, sharpe_ratio=_ratio_units(ratio)).evaluation_status is expected
+
+
+def test_sharpe_rule_is_monotone_in_the_approved_ratio_for_every_signed_sharpe() -> None:
+    values = ("-3", "-1.5", "-1", "-0.5", "-0.05", "0", "0.05", "0.5", "1", "1.5", "3")
+    ratios = ("0.5", "0.75", "1", "2", "5")
+    for is_sharpe in values:
+        for oos_sharpe in values:
+            window = _window_metrics(0, is_sharpe=is_sharpe, oos_sharpe=oos_sharpe)
+            holds = [
+                ef6_module._window_outcome(window, 50, _thresholds(sharpe_ratio=_ratio_units(r)))[
+                    0
+                ].sharpe_retention_holds
+                for r in ratios
+            ]
+            assert holds == sorted(holds, reverse=True), (is_sharpe, oos_sharpe)  # a larger ratio is never easier
+            assert holds[0] is (Fraction(oos_sharpe) >= Fraction(is_sharpe) / 2)  # the PRDV4 floor, exactly
+
+
+def test_forged_sharpe_outcome_with_reseal_never_verifies() -> None:
+    payload = _payload(ef6("A", ("Aneg1",)))
+    assert payload["variant_evaluations"][0]["window_outcomes"][0]["sharpe_retention_holds"] is False
+    payload["variant_evaluations"][0]["window_outcomes"][0]["sharpe_retention_holds"] = True
+    _assert_not_intact(_resealed_payload(payload), "field_mismatch:variant_evaluations")
+
+
+def test_an_out_of_sample_source_under_another_economics_policy_makes_the_set_inadmissible() -> None:
+    upstream = metrics("A1mixoos")
+    assert verify_historical_walk_forward_metrics(upstream).intact is True  # P3 itself stays intact ...
+    assert upstream.verdict_reason_codes == (
+        "historical_walk_forward_metrics:source_inconsistent:economics_policy_digest",
+    )  # ... and only reports a computation FAIL
+    evidence = ef6("A", ("A1mixoos",))
+    _assert_shape(evidence)
+    assert (evidence.status, evidence.gate_verdict, evidence.advances) == (
+        EdgeEvidenceStatus.READY,
+        EdgeGateVerdict.FAIL,
+        False,
+    )
+    assert evidence.surviving_assignment_digests == ()
+    assert (
+        _code("economics_policy_outside_evaluation_frame:variant-a:window_0:out_of_sample")
+        in evidence.verdict_reason_codes
+    )
+    frame = evidence.window_frames[0]
+    assert frame.in_sample_economics_policy_digest == economics_policy().policy_digest
+    assert frame.out_of_sample_economics_policy_digest == economics_policy(d(6)).policy_digest
+    forged = _payload(evidence)
+    forged.update(gate_verdict="PASS", advances=True, verdict_reason_codes=[])
+    _assert_not_intact(_resealed_payload(forged), "field_mismatch:gate_verdict")
+
+
+def test_a_consistent_economics_policy_frame_keeps_the_happy_path() -> None:
+    evidence = passed()
+    assert evidence.gate_verdict is EdgeGateVerdict.PASS
+    policies = {
+        policy
+        for frame in evidence.window_frames
+        for policy in (frame.in_sample_economics_policy_digest, frame.out_of_sample_economics_policy_digest)
+    }
+    assert policies == {evidence.economics_policy_digest} == {economics_policy().policy_digest}
+
+
+@SLOW
+def test_a_later_in_sample_source_of_another_variant_under_another_policy_blocks_every_survivor() -> None:
+    """The audit reproduction: variant A would survive; B's window-1 IS source uses another economics policy."""
+
+    assert verify_historical_walk_forward_metrics(metrics("Bmix3")).intact is True
+    evidence = ef6("AB", ("A", "Bmix3"))
+    _assert_shape(evidence)
+    assert (evidence.status, evidence.gate_verdict, evidence.advances) == (
+        EdgeEvidenceStatus.READY,
+        EdgeGateVerdict.FAIL,
+        False,
+    )
+    assert evidence.surviving_assignment_digests == ()
+    assert {
+        _code("economics_policy_outside_evaluation_frame:variant-b:window_1:in_sample"),
+        _code("evaluation_frame_mismatch:variant-b"),
+    } <= set(evidence.verdict_reason_codes)
+    statuses = {item.variant_id: item.evaluation_status for item in evidence.variant_evaluations}
+    assert statuses == {
+        "variant-a": EdgeVariantEvaluationStatus.NOT_EVALUATED,
+        "variant-b": EdgeVariantEvaluationStatus.FAILED,
+    }
+
+
+@pytest.mark.parametrize(("closed", "survives"), [(49, False), (50, True)])
+def test_the_prdv4_trade_floor_counts_closed_trades_and_never_the_open_one(closed: int, survives: bool) -> None:
+    ledger = {"trades": [{"status": "CLOSED"}] * closed + [{"status": "OPEN"}]}
+    counted = ef6_module._closed_trade_count(ledger)
+    assert counted == closed
+    evaluation = _evaluate([_window_metrics(i) for i in range(3)], closed_trades=counted)
+    assert (evaluation.evaluation_status is EdgeVariantEvaluationStatus.SURVIVED) is survives
+    if not survives:
+        assert evaluation.failure_codes == tuple(
+            f"window_{i}:in_sample_closed_trade_count_below_minimum" for i in range(3)
+        )
 
 
 # --- tamper, reseal and totality ---------------------------------------------------------------------------------------
@@ -1647,6 +1855,9 @@ def test_rule_set_commits_the_prdv4_floors_and_the_hit_rate_unit_identity() -> N
     assert edge_sha256_text(edge_canonical_json(rules)) == EDGE_WALK_FORWARD_OOS_RULE_SET_DIGEST
     assert rules["prdv4_min_oos_window_count"] == 3
     assert rules["prdv4_min_in_sample_closed_trade_count"] == 50
+    assert "prdv4_floor" in str(rules["sharpe_retention_rule_id"])
+    assert "economics_polic" in str(rules["evaluation_frame_fields_id"])
+    assert str(rules["economics_policy_frame_rule_id"]).startswith("every_is_oos_economics_source")
     assert rules["prdv4_min_sharpe_retention_ratio"] == "0.500000000000000000"
     assert rules["prdv4_min_hit_rate_delta_percentage_points"] == "-10.000000000000000000"
     assert rules["prdv4_min_positive_expectancy_fraction"] == [2, 3]

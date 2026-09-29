@@ -29,8 +29,12 @@ Authority (shared kernel ``edge_artifact_core``):
 * Coverage (``ALL_REGISTERED_VARIANTS_EVALUATED_EXACTLY_ONCE``). The evaluated assignment set must equal the sealed
   EF-5 set; a missing registered variant is FAIL.
 * Fairness. Every variant must share one evaluation frame — metric policy, economics policy, instrument, market type
-  and the ordered IS/OOS intervals with their PIT dataset digests; any difference is FAIL. The frame digest is
-  approved by governance, so the horizon, data and cost model cannot be changed after the fact.
+  and the ordered IS/OOS intervals with the PIT dataset digest and the economics policy digest of each segment's
+  authenticated source; any difference is FAIL. Every IS/OOS economics source of every variant must carry the ONE
+  frame economics policy, read from the source itself and never only from the metrics summary (P3 summarizes the
+  first source); a source under another policy is FAIL, even when its variant's metrics were not computed, so a
+  mixed cost frame can never be laundered through ``metrics_not_computed`` while another variant survives. The frame
+  digest is approved by governance, so the horizon, data and cost model cannot be changed after the fact.
 * Governance. ``EdgeWalkForwardOosGovernance`` carries every governance-owned EF-6 value (minimum OOS window count,
   minimum in-sample closed trade count, Sharpe retention ratio, hit-rate delta in percentage points,
   positive-expectancy window fraction, drawdown ratio, profit-factor minimum and window fraction) and commits to the
@@ -43,10 +47,14 @@ Authority (shared kernel ``edge_artifact_core``):
   canonical scale-18 texts, no float, no epsilon, no ``decimal`` context. P3 hit rate is a RATIO; the approved delta
   is in percentage points and converts as ``ratio = pp / 100`` (0.55 ratio is 55 percentage points). A variant
   survives iff its metrics were computed and: OOS window count >= the approved minimum; in EVERY window the in-sample
-  segment holds at least the approved minimum of CLOSED trades, OOS Sharpe >= IS Sharpe x ratio, OOS hit rate >= IS
-  hit rate + pp/100 and IS max drawdown > 0 with OOS max drawdown strictly below ratio x IS max drawdown; OOS
-  expectancy strictly positive in >= ceil(n x fraction) windows; OOS profit factor strictly above the minimum in >=
-  ceil(n x fraction) windows. The PRDV4 §1.13 Stage 1 "minimum 50 trades in backtest" is read on every window's
+  segment holds at least the approved minimum of CLOSED trades, OOS Sharpe >= IS Sharpe x 0.5 (the PRDV4 floor) AND
+  OOS Sharpe >= IS Sharpe x the approved ratio, OOS hit rate >= IS hit rate + pp/100 and IS max drawdown > 0 with OOS
+  max drawdown strictly below ratio x IS max drawdown; OOS expectancy strictly positive in >= ceil(n x fraction)
+  windows; OOS profit factor strictly above the minimum in >= ceil(n x fraction) windows. Sharpe is SIGNED: the two
+  Sharpe bounds make the threshold ``max(0.5 x IS, ratio x IS)``, which is the approved (stricter) one for a positive
+  IS Sharpe, 0 for a zero one, and the PRDV4 floor for a negative one, so a larger approved ratio can never make a
+  window easier to pass than the mandatory floor and no positive-Sharpe requirement is added. The PRDV4 §1.13
+  Stage 1 "minimum 50 trades in backtest" is read on every window's
   in-sample economics: a trade is one ``CLOSED`` excursion (FLAT -> nonzero -> FLAT) of the authenticated trade
   ledger carried by the IS economics source the metrics verifier re-proved; an excursion still ``OPEN`` at the segment
   end is not counted. The count is read, never re-derived. The rules are applied ONLY to an admissible evaluation
@@ -160,6 +168,7 @@ _SOURCE_TEXT_FIELDS = (
     "source_manifest_digest",
     "parameter_assignment_digest",
     "dataset_digest",
+    "economics_policy_digest",
 )
 _SOURCE_TIME_FIELDS = ("evaluation_start_ns", "evaluation_end_ns")
 # ``HistoricalExecutionTradeStatus`` values of the authenticated economics trade ledger; only CLOSED is a trade.
@@ -172,8 +181,9 @@ _RULE_SET_V1: dict[str, object] = {
     "selection_provenance_rule_id": "no_selection_every_registered_variant_evaluated_independently.v1",
     "assignment_rule_id": "one_registered_parameter_assignment_across_every_window_and_segment.v1",
     "window_fairness_rule_id": "identical_evaluation_frame_across_variants.v1",
-    "evaluation_frame_fields_id": "metric_policy_economics_policy_instrument_market_type_ordered_is_oos_intervals_and_pit_datasets.v1",
-    "sharpe_retention_rule_id": "every_window_oos_sharpe_at_least_is_sharpe_times_min_ratio.v1",
+    "evaluation_frame_fields_id": "metric_policy_economics_policy_instrument_market_type_ordered_is_oos_intervals_pit_datasets_and_source_economics_policies.v1",
+    "economics_policy_frame_rule_id": "every_is_oos_economics_source_of_every_variant_carries_the_one_frame_economics_policy_else_fail.v1",
+    "sharpe_retention_rule_id": "every_window_signed_oos_sharpe_at_least_is_sharpe_times_prdv4_floor_and_times_approved_ratio.v1",
     "hit_rate_retention_rule_id": "every_window_oos_hit_rate_at_least_is_hit_rate_plus_delta.v1",
     "hit_rate_unit_conversion_id": "p3_hit_rate_is_a_ratio_delta_percentage_points_divided_by_100.v1",
     "drawdown_rule_id": "every_window_positive_is_max_drawdown_and_oos_strictly_below_ratio_times_is.v1",
@@ -273,15 +283,17 @@ class EdgeWalkForwardOosGovernance:
 
 @dataclass(frozen=True)
 class EdgeWalkForwardWindowFrame:
-    """One governed window: IS and OOS half-open intervals and the PIT dataset digest each segment consumed."""
+    """One governed window: IS/OOS half-open intervals and, per segment, the PIT dataset and source economics policy."""
 
     window_index: int
     in_sample_start_ns: int
     in_sample_end_ns: int
     in_sample_dataset_digest: str
+    in_sample_economics_policy_digest: str
     out_of_sample_start_ns: int
     out_of_sample_end_ns: int
     out_of_sample_dataset_digest: str
+    out_of_sample_economics_policy_digest: str
 
 
 @dataclass(frozen=True)
@@ -481,6 +493,10 @@ def _units(value: object) -> int | None:
     if not historical_execution_decimal_is_canonical(value):
         return None
     return int(value.replace(".", ""))  # type: ignore[union-attr]
+
+
+# The mandatory PRDV4 Sharpe-retention floor in exact scale-18 units, applied to every window independently of governance.
+_PRDV4_MIN_SHARPE_RETENTION_UNITS: int = _units(_PRDV4_MIN_SHARPE_RETENTION_RATIO)  # type: ignore[assignment]
 
 
 def _require_decimal(value: object, field_name: str) -> str:
@@ -729,9 +745,11 @@ def _source_identities(
             in_sample_start_ns=in_sample["evaluation_start_ns"],  # type: ignore[arg-type]
             in_sample_end_ns=in_sample["evaluation_end_ns"],  # type: ignore[arg-type]
             in_sample_dataset_digest=in_sample["dataset_digest"],  # type: ignore[arg-type]
+            in_sample_economics_policy_digest=in_sample["economics_policy_digest"],  # type: ignore[arg-type]
             out_of_sample_start_ns=out_of_sample["evaluation_start_ns"],  # type: ignore[arg-type]
             out_of_sample_end_ns=out_of_sample["evaluation_end_ns"],  # type: ignore[arg-type]
             out_of_sample_dataset_digest=out_of_sample["dataset_digest"],  # type: ignore[arg-type]
+            out_of_sample_economics_policy_digest=out_of_sample["economics_policy_digest"],  # type: ignore[arg-type]
         )
         for index, (in_sample, out_of_sample) in enumerate(sources)
     ]
@@ -824,7 +842,7 @@ def _governance_reasons(
         codes.append(_reason("oos_governance_below_prdv4_floor:min_oos_window_count"))
     if governance.min_in_sample_closed_trade_count < _PRDV4_MIN_IN_SAMPLE_CLOSED_TRADE_COUNT:
         codes.append(_reason("oos_governance_below_prdv4_floor:min_in_sample_closed_trade_count"))
-    if sharpe < _units(_PRDV4_MIN_SHARPE_RETENTION_RATIO):  # type: ignore[operator]
+    if sharpe < _PRDV4_MIN_SHARPE_RETENTION_UNITS:  # type: ignore[operator]
         codes.append(_reason("oos_governance_below_prdv4_floor:min_sharpe_retention_ratio"))
     if hit < _units(_PRDV4_MIN_HIT_RATE_DELTA_PERCENTAGE_POINTS):  # type: ignore[operator]
         codes.append(_reason("oos_governance_below_prdv4_floor:min_hit_rate_delta_percentage_points"))
@@ -883,7 +901,12 @@ def _window_outcome(
         )
         return outcome, [*trade_codes, f"{prefix}:metric_text_noncanonical"]
     is_sharpe, oos_sharpe, is_hit, oos_hit, is_drawdown, oos_drawdown, oos_expectancy, oos_profit_factor = values
-    sharpe_holds = oos_sharpe * _SCALE_UNITS >= is_sharpe * thresholds.sharpe_ratio  # type: ignore[operator]
+    # Sharpe is signed. Both bounds hold independently: the PRDV4 floor and the approved ratio. Their conjunction is
+    # ``OOS >= max(floor x IS, ratio x IS)``, so for a negative IS Sharpe a larger ratio can never lower the bar.
+    sharpe_holds = (
+        oos_sharpe * _SCALE_UNITS >= is_sharpe * _PRDV4_MIN_SHARPE_RETENTION_UNITS  # type: ignore[operator]
+        and oos_sharpe * _SCALE_UNITS >= is_sharpe * thresholds.sharpe_ratio  # type: ignore[operator]
+    )
     hit_holds = (
         _PERCENTAGE_POINTS_PER_RATIO * oos_hit  # type: ignore[operator]
         >= _PERCENTAGE_POINTS_PER_RATIO * is_hit + thresholds.hit_delta_pp  # type: ignore[operator]
@@ -992,6 +1015,22 @@ def _frame_payload(
     }
 
 
+def _economics_policy_frame_reasons(
+    variant_id: str, frames: Sequence[EdgeWalkForwardWindowFrame], frame_policy: str
+) -> list[str]:
+    """Every IS/OOS economics source must carry the one frame economics policy, read from the source, never the summary."""
+
+    return [
+        _reason(f"economics_policy_outside_evaluation_frame:{variant_id}:window_{frame.window_index}:{segment}")
+        for frame in frames
+        for segment, policy in (
+            ("in_sample", frame.in_sample_economics_policy_digest),
+            ("out_of_sample", frame.out_of_sample_economics_policy_digest),
+        )
+        if policy != frame_policy
+    ]
+
+
 def _frame_geometry_reasons(frames: Sequence[EdgeWalkForwardWindowFrame]) -> list[str]:
     reasons: list[str] = []
     for frame in frames:
@@ -1087,6 +1126,9 @@ def _assemble_evidence(
             variant_id = variant_ids[bundle.assignment_digest]
             if _frame_payload(bundle.metrics, bundle.frames) != _frame_payload(reference.metrics, frames):  # type: ignore[union-attr]
                 fail.append(_reason(f"evaluation_frame_mismatch:{variant_id}"))
+            fail.extend(
+                _economics_policy_frame_reasons(variant_id, bundle.frames, reference.metrics.economics_policy_digest)  # type: ignore[union-attr]
+            )
             if bundle.metrics.synthetic_test_facts_used:
                 needs_external.append(_reason(f"synthetic_test_facts_used:{variant_id}"))
             if bundle.metrics.synthetic_test_approval_used:
