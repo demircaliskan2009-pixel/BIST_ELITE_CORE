@@ -46,7 +46,7 @@ jobs:
           else
             python -m pip install pytest
           fi
-          python -m pip install ruff
+          python -m pip install pytest-cov ruff
 
       - name: Ruff lint
         run: ruff check src/crypto_core tests/crypto_core scripts/crypto_core --output-format=github
@@ -54,16 +54,10 @@ jobs:
       - name: Ruff format check
         run: ruff format --check src/crypto_core tests/crypto_core scripts/crypto_core
 
-      - name: Run pytest
+      - name: Run pytest with coverage
         run: |
           set -euo pipefail
-          python -m pytest -q -W error tests/crypto_core
-
-      - name: Coverage report
-        run: |
-          set -euo pipefail
-          python -m pip install pytest-cov
-          python -m pytest --cov=src/crypto_core --cov-report=term --cov-fail-under=70 -q tests/crypto_core
+          python -m pytest -q -W error --cov=src/crypto_core --cov-report=term --cov-fail-under=70 tests/crypto_core
 
   slow-tests:
     name: slow-tests
