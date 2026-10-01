@@ -2,19 +2,20 @@
 
 EF-8 is the lifecycle state machine of ``docs/crypto_core/edge_factory_design.md`` §1.7: ACTIVE → DISABLED (a sealed
 kill criterion is hit) → [> 30 UTC days] QUARANTINE → [>= 14 UTC days + revalidation from EF-5 onward] governed
-re-admission to ACTIVE. There is NO auto-reactivation, ever. Every transition is one immutable, digest-bound artifact
-that carries its reason and authenticates its exact prior. EF-8 proves lifecycle PROCESS state only; it never means an
-edge, profitability, paper performance, portfolio allocation, capital, execution permission, operational readiness or
-any live/shadow/Deribit authority.
+re-admission to ACTIVE. Inside a bound chain there is NO auto-reactivation. Every transition is one immutable,
+digest-bound HISTORICAL receipt that carries its reason and authenticates its exact prior. EF-8 proves lifecycle PROCESS
+history only; it never means current paper admission, the current lifecycle head, an edge, profitability, paper
+performance, portfolio allocation, capital, execution permission, operational readiness or any live/shadow/Deribit
+authority.
 
 Authority (shared kernel ``edge_artifact_core``):
 
 * Admission. ``INITIAL_ACTIVATION`` consumes an actual ``EdgePaperAdmissionDecision`` as an ``EdgeAuthorityBinding``
   re-proven through the public ``verify_edge_paper_admission_decision`` against the caller's anchor (which re-proves
   EF-6 → EF-2); its root and correlation must equal this artifact's anchors. Only an EF-7 that is READY + PASS +
-  advancing, admitted to paper and SEALED opens an ACTIVE lifecycle; an authentic non-advancing EF-7 propagates its
-  verdict and anything else is REJECTED. An activation may not precede its admission's out-of-sample evaluation horizon
-  (the latest OOS end of the authenticated EF-6 frames).
+  advancing, admitted to paper and SEALED opens a lifecycle chain (a historical ACTIVE result); an authentic
+  non-advancing EF-7 propagates its verdict and anything else is REJECTED. An activation may not precede its
+  admission's out-of-sample evaluation horizon (the latest OOS end of the authenticated EF-6 frames).
 * Seal. No caller input carries kill criteria. The immutable kill policy is the EF-7 seal: the final criteria, their
   digest (recomputed through the public EF-2 digest) and the kill-criteria record digest (recomputed from the EF-7
   lineage fields) must agree with ``sealed_kill_criteria_digest``. Every later artifact re-derives the seal from its
@@ -23,7 +24,7 @@ Authority (shared kernel ``edge_artifact_core``):
 * Chain. Every later transition binds its exact prior EF-8 artifact and re-proves it through the public
   ``verify_edge_kill_quarantine_decision`` against the caller's anchor (recursively down to the EF-7 genesis); root and
   correlation must match. A REJECTED prior is REJECTED and a non-advancing prior propagates its verdict, so only an
-  advancing artifact is ever a lifecycle state. A prior digest alone is never authority.
+  advancing receipt is ever a valid predecessor. A prior digest alone is never authority.
 * Transitions: INITIAL_ACTIVATION → ACTIVE; KILL_DISABLE ACTIVE → DISABLED; QUARANTINE_ENTRY DISABLED → QUARANTINE;
   GOVERNED_READMISSION QUARANTINE → ACTIVE as a NEW cycle. Any other source state is FAIL. Coordinates are explicit
   caller UTC epoch nanoseconds (int64, never a clock) and strictly increase along the chain.
@@ -45,13 +46,22 @@ Authority (shared kernel ``edge_artifact_core``):
 * Governance. ``EdgeReadmissionGovernance`` commits to the prior (QUARANTINE) artifact, the lifecycle subject, the
   revalidation EF-7, the seal, the re-admission coordinate and the EF-8 rule set. Missing or non-matching is
   NEEDS_GOVERNANCE_APPROVAL; nothing is defaulted. Kill and quarantine need no approval: they grant nothing.
+* History, never current authority. EF-8 is stateless and no accepted lifecycle registry or head authority exists in
+  this slice: a receipt cannot see its successors, so an old ACTIVE receipt stays authentic after a later disable and
+  another INITIAL_ACTIVATION over the same EF-7 can always be built, after a kill too. A receipt therefore proves only
+  that its exact transition, from its exact authenticated prior or EF-7, met every committed rule at its coordinate:
+  ``resulting_lifecycle_state`` is that historical result (``resulting_lifecycle_state_status`` states it in every
+  receipt), ``advances`` means a valid predecessor for the next receipt of this exact chain, and ``lifecycle_sequence``
+  orders one chain without ever selecting a head. No receipt (a genesis, a second genesis, a stale ACTIVE receipt, one
+  of several forked children or a governed re-admission) claims current paper admission or the current lifecycle head:
+  ``candidate_admitted_to_paper``, ``current_lifecycle_head_proven`` and ``auto_reactivation_enabled`` are structural
+  False. The nested EF-7 is the historical admission evidence and EF-8 never re-grants it; current-head authority is
+  UNPROVEN here and fails closed.
 * ``status`` is integrity only and ``gate_verdict`` the outcome (FAIL > NEEDS_EXTERNAL_FACTS >
   NEEDS_GOVERNANCE_APPROVAL > PASS); REJECTED implies NOT_EVALUATED; only READY + PASS advances and only an advancing
-  artifact carries ``resulting_lifecycle_state``. ``candidate_admitted_to_paper`` is True exactly when an advancing
-  artifact establishes ACTIVE. EF-8 is stateless evidence: ``lifecycle_subject_digest`` names the lifecycle and
-  ``lifecycle_sequence`` orders it, but no registry proves which artifact is the current head
-  (``current_lifecycle_head_proven`` stays False). One assembly path serves the four builders and verifier reassembly;
-  ``verify_edge_kill_quarantine_decision`` is total. Paper-only, deterministic, no IO/clock/network/float/decimal.
+  receipt carries ``resulting_lifecycle_state``; ``lifecycle_subject_digest`` names the lifecycle. One assembly path
+  serves the four builders and verifier reassembly; ``verify_edge_kill_quarantine_decision`` is total. Paper-only,
+  deterministic, no IO/clock/network/float/decimal.
 """
 
 from __future__ import annotations
@@ -110,10 +120,21 @@ _IMMUTABLE_STAGE = "IMMUTABLE"
 _KILL_CRITERIA_COMBINATION_POLICY = "any_single_criterion_triggers_kill.v1"
 
 EDGE_KILL_OBSERVATION_STATUS = "CALLER_DECLARED_NEGATIVE_DIRECTION_ONLY_NOT_PERFORMANCE_OR_VENUE_EVIDENCE"
+EDGE_RESULTING_LIFECYCLE_STATE_STATUS = "HISTORICAL_TRANSITION_RESULT_NOT_CURRENT_LIFECYCLE_HEAD_OR_PAPER_AUTHORITY"
+# The claims only an accepted lifecycle-head authority could support. A stateless EF-8 receipt carries each as a
+# structural False; as in every other EF artifact, EF-7 alone grants paper admission.
+_CURRENT_AUTHORITY_NON_CLAIMS = (
+    "candidate_admitted_to_paper",
+    "current_lifecycle_head_proven",
+    "auto_reactivation_enabled",
+)
 
 
 class EdgeLifecycleState(str, Enum):
-    """Lifecycle state established by an advancing EF-8 artifact. Never a readiness, allocation or live state."""
+    """The HISTORICAL result of one advancing EF-8 receipt's exact transition.
+
+    Never the current lifecycle state or head, and never a readiness, allocation or live state.
+    """
 
     ACTIVE = "ACTIVE"
     DISABLED = "DISABLED"
@@ -176,9 +197,13 @@ _RULE_SET_V1: dict[str, object] = {
     "activation_horizon_rule_id": "every_activation_at_or_after_its_admission_oos_evaluation_horizon.v1",
     "revalidation_rule_id": "new_passing_ef7_same_subject_and_seal_unconsumed_ef7_ef6_horizon_after_disable.v1",
     "governance_rule_id": "readmission_approval_commits_prior_subject_revalidation_seal_coordinate_rule_set.v1",
-    "no_auto_reactivation_rule_id": "active_only_by_ef7_genesis_or_governed_fresh_readmission_never_time_metric_or_flag.v1",
+    "no_auto_reactivation_rule_id": "bound_chain_active_only_by_genesis_or_governed_fresh_readmission.v1",
     "lifecycle_identity_rule_id": "subject_digest_over_ef2_to_ef4_identity_market_universe_sleeve_correlation.v1",
-    "lifecycle_head_rule_id": "stateless_evidence_head_is_highest_sequence_advancing_artifact_never_proven_here.v1",
+    "receipt_authority_rule_id": "stateless_historical_transition_receipt_never_current_paper_admission_or_head.v1",
+    "resulting_lifecycle_state_status": EDGE_RESULTING_LIFECYCLE_STATE_STATUS,
+    "advances_rule_id": "advances_is_valid_predecessor_for_the_next_receipt_of_this_exact_chain_never_current_head.v1",
+    "lifecycle_head_rule_id": "no_head_authority_here_head_never_inferred_from_sequence_state_or_verdict.v1",
+    "current_authority_non_claims": list(_CURRENT_AUTHORITY_NON_CLAIMS),
     "gate_rule_id": "pass_iff_authentic_chain_allowed_transition_and_every_transition_rule_holds.v1",
     "numeric_rule_id": "signed_canonical_scale18_text_bounded_exact_integer_units_no_float_no_decimal_context.v1",
 }
@@ -197,11 +222,10 @@ def edge_kill_quarantine_rule_set() -> dict[str, object]:
     return {key: list(value) if isinstance(value, list) else value for key, value in _RULE_SET_V1.items()}
 
 
-# EF-8 computes these five flags from authenticated proof; every other non-claim is a structural default, reusing the
-# EF-7 vocabulary plus the three lifecycle-specific non-claims.
+# EF-8 computes these four historical facts from authenticated proof; every other non-claim is a structural default,
+# reusing the EF-7 vocabulary plus the current-authority and kill-observation non-claims.
 _COMPUTED_FLAGS = frozenset(
     {
-        "candidate_admitted_to_paper",
         "kill_criteria_sealed",
         "preregistration_sealed",
         "performance_data_consumed",
@@ -210,9 +234,8 @@ _COMPUTED_FLAGS = frozenset(
 )
 EDGE_KILL_QUARANTINE_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
     *EDGE_PAPER_ADMISSION_NON_CLAIM_FLAGS,
-    ("auto_reactivation_enabled", False),
+    *((name, False) for name in _CURRENT_AUTHORITY_NON_CLAIMS),
     ("kill_observation_verified", False),
-    ("current_lifecycle_head_proven", False),
 )
 _FLAG_NAMES = frozenset(name for name, _ in EDGE_KILL_QUARANTINE_NON_CLAIM_FLAGS)
 # The stable identity a lifecycle keeps across every cycle; EF-2 → EF-4 facts plus the traded market and paper sleeve.
@@ -282,7 +305,10 @@ class EdgeReadmissionGovernance:
 
 @dataclass(frozen=True)
 class EdgeKillQuarantineDecision:
-    """Immutable, digest-bound EF-8 lifecycle transition. PAPER ONLY; lifecycle process state, never an edge."""
+    """Immutable, digest-bound HISTORICAL receipt of one EF-8 lifecycle transition. PAPER ONLY.
+
+    It records lifecycle process history: never the current lifecycle head, current paper admission or an edge.
+    """
 
     schema_version: str
     gate_id: str
@@ -298,6 +324,7 @@ class EdgeKillQuarantineDecision:
     prior_lifecycle_state: EdgeLifecycleState | None
     prior_effective_at_ns: int | None
     resulting_lifecycle_state: EdgeLifecycleState | None
+    resulting_lifecycle_state_status: str
     effective_at_ns: int
     transition_reason_code: str
     transition_reason_reference: str
@@ -338,7 +365,6 @@ class EdgeKillQuarantineDecision:
     rule_set_digest: str
     integrity_reason_codes: tuple[str, ...]
     verdict_reason_codes: tuple[str, ...]
-    candidate_admitted_to_paper: bool
     kill_criteria_sealed: bool
     preregistration_sealed: bool
     performance_data_consumed: bool
@@ -369,6 +395,7 @@ class EdgeKillQuarantineDecision:
     capital_allocated: bool = False
     execution_authorized: bool = False
     capacity_empirically_proven: bool = False
+    candidate_admitted_to_paper: bool = False
     auto_reactivation_enabled: bool = False
     kill_observation_verified: bool = False
     current_lifecycle_head_proven: bool = False
@@ -1000,6 +1027,7 @@ def _assemble_decision(
 
     ready = status is EdgeEvidenceStatus.READY
     advances = ready and verdict is EdgeGateVerdict.PASS
+    # A historical ACTIVE result opens a new cycle of this chain; it is bookkeeping only and sets no authority flag.
     activates = advances and target_state is _ACTIVE
     if source is None:
         subject = dict.fromkeys(_SUBJECT_FIELDS, "")
@@ -1062,6 +1090,7 @@ def _assemble_decision(
         prior_lifecycle_state=None if prior is None or rejected else prior.resulting_lifecycle_state,
         prior_effective_at_ns=None if prior is None or rejected else prior.effective_at_ns,
         resulting_lifecycle_state=target_state if advances else None,
+        resulting_lifecycle_state_status=EDGE_RESULTING_LIFECYCLE_STATE_STATUS,
         effective_at_ns=effective,
         transition_reason_code=reason_code,
         transition_reason_reference=reason_reference,
@@ -1106,7 +1135,6 @@ def _assemble_decision(
         rule_set_digest=EDGE_KILL_QUARANTINE_RULE_SET_DIGEST,
         integrity_reason_codes=integrity,
         verdict_reason_codes=verdict_reasons,
-        candidate_admitted_to_paper=activates,
         kill_criteria_sealed=ready and sealed_digest != "",
         preregistration_sealed=mirrored["preregistration_sealed"],
         performance_data_consumed=mirrored["performance_data_consumed"],
@@ -1126,11 +1154,13 @@ def build_edge_kill_quarantine_initial_activation(
     correlation_id: str,
     reason_reference: str,
 ) -> EdgeKillQuarantineDecision:
-    """Open an EF-8 lifecycle (INITIAL_ACTIVATION → ACTIVE) from an authentic, passing, sealed EF-7 admission.
+    """Record a genesis receipt (INITIAL_ACTIVATION, historical result ACTIVE) over an authentic, passing, sealed EF-7.
 
-    There is deliberately no input for a state, a flag, kill criteria or a prior: ACTIVE derives only from the
-    re-proven EF-7 and the committed rules. Malformed caller input raises ``EdgeKillQuarantineDecisionError``; a
-    broken, spliced or rejected admission is ``REJECTED``; an authentic non-advancing admission propagates its verdict.
+    There is deliberately no input for a state, a flag, kill criteria or a prior: the historical ACTIVE result derives
+    only from the re-proven EF-7 and the committed rules. The receipt is history, never current paper admission or the
+    current head, so a second genesis over the same EF-7 (after a kill, too) grants nothing and is no successor of that
+    kill. Malformed caller input raises ``EdgeKillQuarantineDecisionError``; a broken, spliced or rejected admission is
+    ``REJECTED``; an authentic non-advancing admission propagates its verdict.
     """
 
     _require_caller_fields(expected_root_intake_digest, effective_at_ns, decision_id, correlation_id, reason_reference)
@@ -1229,7 +1259,8 @@ def build_edge_kill_quarantine_governed_readmission(
 
     Requires at least 14 UTC days of quarantine, a new authentic passing EF-7 of the same lifecycle subject and seal
     whose EF-7 and EF-6 were never consumed by this lifecycle and whose OOS horizon lies after the disable, and one exact
-    human approval (``None`` is ``NEEDS_GOVERNANCE_APPROVAL``).
+    human approval (``None`` is ``NEEDS_GOVERNANCE_APPROVAL``). A passing receipt proves this exact historical
+    re-admission, never current paper admission or the current head.
     """
 
     _require_caller_fields(expected_root_intake_digest, effective_at_ns, decision_id, correlation_id, reason_reference)
@@ -1431,7 +1462,8 @@ def verify_edge_kill_quarantine_decision(decision: object) -> EdgeEvidenceVerifi
 
     Every derived field — lifecycle states, subject, seal, cycle facts, kill evaluation, flags and verdict — must equal
     the reassembled artifact, which re-proves the prior lifecycle artifact and any EF-7 through their public verifiers.
-    Total: never raises.
+    ``intact`` proves the historical receipt, never that it is the current lifecycle head or current paper authority:
+    a receipt asserting either never verifies. Total: never raises.
     """
 
     return verify_edge_artifact_total(
@@ -1449,6 +1481,7 @@ __all__ = [
     "EDGE_KILL_OBSERVATION_STATUS",
     "EDGE_KILL_QUARANTINE_NON_CLAIM_FLAGS",
     "EDGE_KILL_QUARANTINE_RULE_SET_DIGEST",
+    "EDGE_RESULTING_LIFECYCLE_STATE_STATUS",
     "EdgeKillEvaluation",
     "EdgeKillObservation",
     "EdgeKillQuarantineDecision",

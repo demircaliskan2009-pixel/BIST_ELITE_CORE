@@ -10,6 +10,10 @@ non-advancing lifecycle over the EF-7 module's governed FAIL admission exercises
 verifier at small payload size. Every approval, observation and coordinate below is a SYNTHETIC TEST VALUE; EF-8 holds no
 production threshold (its 30/14-day boundaries are the accepted Edge Factory design).
 
+Every receipt is lifecycle HISTORY. Whatever its historical result, no receipt (a genesis, a second genesis over an
+already killed EF-7, a stale ACTIVE receipt, one of several forked children or a governed re-admission) claims current
+paper admission or the current lifecycle head; Astra's G0 → D1 → G0b reproduction is a direct regression.
+
 The EF-7 and EF-6 test modules are imported under the module names pytest collects them with (basename import), so their
 cached authentic worlds and memos are one object shared with their own tests.
 
@@ -59,6 +63,7 @@ from crypto_core.validation.edge_kill_quarantine_decision import (
     EDGE_KILL_OBSERVATION_STATUS,
     EDGE_KILL_QUARANTINE_NON_CLAIM_FLAGS,
     EDGE_KILL_QUARANTINE_RULE_SET_DIGEST,
+    EDGE_RESULTING_LIFECYCLE_STATE_STATUS,
     EdgeKillEvaluation,
     EdgeKillObservation,
     EdgeKillQuarantineDecision,
@@ -138,12 +143,13 @@ SUBJECT_FIELDS = (
     "paper_sleeve_id",
 )
 COMPUTED_FLAGS = (
-    "candidate_admitted_to_paper",
     "kill_criteria_sealed",
     "preregistration_sealed",
     "performance_data_consumed",
     "oos_evidence_consumed",
 )
+# Only an accepted lifecycle-head authority could support these; a stateless receipt never claims them.
+CURRENT_AUTHORITY_CLAIMS = ("candidate_admitted_to_paper", "current_lifecycle_head_proven", "auto_reactivation_enabled")
 
 # --- memoized re-proof of other artifacts (see module docstring) ---------------------------------------------------------
 
@@ -371,6 +377,20 @@ def quarantined() -> EdgeKillQuarantineDecision:
 
 
 @functools.cache
+def second_genesis() -> EdgeKillQuarantineDecision:
+    """Astra's G0b: INITIAL_ACTIVATION again over the SAME, already killed EF-7 at a coordinate after the disable."""
+
+    return activate(admission(), effective_at_ns=T_KILL + DAY, decision_id="ef8-second-genesis")
+
+
+@functools.cache
+def forked_disable() -> EdgeKillQuarantineDecision:
+    """A second authentic child of the same genesis: another sealed criterion triggered at the same coordinate."""
+
+    return disable(genesis(), observe(FUNDING_FLIP, "13.000000000000000000"), decision_id="ef8-disable-b")
+
+
+@functools.cache
 def readmission_draft() -> EdgeKillQuarantineDecision:
     return readmit(quarantined(), revalidation(), governance=None)
 
@@ -465,7 +485,7 @@ def _assert_shape(decision: EdgeKillQuarantineDecision) -> None:
         T.GOVERNED_READMISSION: ACTIVE,
     }[decision.transition]
     assert decision.resulting_lifecycle_state is (target if decision.advances else None)
-    assert decision.candidate_admitted_to_paper is (decision.advances and target is ACTIVE)
+    assert decision.resulting_lifecycle_state_status == EDGE_RESULTING_LIFECYCLE_STATE_STATUS
     assert decision.kill_criteria_sealed is (ready and decision.sealed_kill_criteria_digest != "")
     assert decision.kill_criteria_lifecycle_stage == ("IMMUTABLE" if decision.sealed_kill_criteria_digest else "")
     assert {name: getattr(decision, name) for name, _ in EDGE_KILL_QUARANTINE_NON_CLAIM_FLAGS} == dict(
@@ -502,10 +522,19 @@ def _assert_receipt(decision: EdgeKillQuarantineDecision) -> None:
     assert edge_kill_quarantine_decision_payload_is_well_formed(json.loads(verification.canonical_json)) is True
 
 
+def _assert_history_only(decision: EdgeKillQuarantineDecision) -> None:
+    """Whatever its historical result, a receipt claims neither current paper admission nor the current head."""
+
+    assert decision.resulting_lifecycle_state_status == EDGE_RESULTING_LIFECYCLE_STATE_STATUS
+    assert {name: getattr(decision, name) for name in CURRENT_AUTHORITY_CLAIMS} == dict.fromkeys(
+        CURRENT_AUTHORITY_CLAIMS, False
+    )
+
+
 # --- A. initial activation -----------------------------------------------------------------------------------------------
 
 
-def test_authentic_passing_admission_opens_an_active_paper_lifecycle() -> None:
+def test_authentic_passing_admission_records_a_historical_active_genesis_receipt() -> None:
     decision = genesis()
     ef7 = admission()
     _assert_receipt(decision)
@@ -552,8 +581,9 @@ def test_authentic_passing_admission_opens_an_active_paper_lifecycle() -> None:
     assert decision.transition_reason_code == "initial_activation:authenticated_ef7_admission_with_sealed_kill_criteria"
     assert decision.transition_reason_reference == "admission-review-1"
     assert (decision.kill_observation, decision.kill_evaluation, decision.governance) == (None, None, None)
-    # Paper-only lifecycle process state: admitted to paper, nothing more.
-    assert decision.candidate_admitted_to_paper is True
+    # Lifecycle history only: the nested EF-7 is the historical admission evidence and EF-8 never re-grants it.
+    assert ef7.candidate_admitted_to_paper is True
+    _assert_history_only(decision)
     assert (decision.preregistration_sealed, decision.performance_data_consumed, decision.oos_evidence_consumed) == (
         True,
         True,
@@ -1095,7 +1125,32 @@ def test_the_boundaries_are_committed_code_defined_rules() -> None:
     assert genesis().rule_set_id == "edge_kill_quarantine_rules.v1"
 
 
-# --- D. no auto-reactivation ---------------------------------------------------------------------------------------------
+def test_the_rule_set_commits_that_a_receipt_is_history_never_current_authority() -> None:
+    rules = edge_kill_quarantine_rule_set()
+    assert EDGE_KILL_QUARANTINE_RULE_SET_DIGEST == ef7t._digest(rules)
+    assert rules["receipt_authority_rule_id"] == (
+        "stateless_historical_transition_receipt_never_current_paper_admission_or_head.v1"
+    )
+    assert rules["resulting_lifecycle_state_status"] == EDGE_RESULTING_LIFECYCLE_STATE_STATUS
+    assert rules["advances_rule_id"] == (
+        "advances_is_valid_predecessor_for_the_next_receipt_of_this_exact_chain_never_current_head.v1"
+    )
+    assert (
+        rules["lifecycle_head_rule_id"]
+        == "no_head_authority_here_head_never_inferred_from_sequence_state_or_verdict.v1"
+    )
+    assert (
+        rules["no_auto_reactivation_rule_id"] == "bound_chain_active_only_by_genesis_or_governed_fresh_readmission.v1"
+    )
+    # The committed current-authority claims are exactly the structural False non-claims every receipt carries.
+    assert rules["current_authority_non_claims"] == list(CURRENT_AUTHORITY_CLAIMS)
+    assert {
+        name: dict(EDGE_KILL_QUARANTINE_NON_CLAIM_FLAGS)[name] for name in CURRENT_AUTHORITY_CLAIMS
+    } == dict.fromkeys(CURRENT_AUTHORITY_CLAIMS, False)
+    assert "highest_sequence" not in edge_canonical_json(rules)
+
+
+# --- D. no auto-reactivation, and a receipt is history, never current authority ---------------------------------------
 
 
 def test_disabled_can_never_return_to_active_directly() -> None:
@@ -1178,17 +1233,111 @@ def test_a_caller_can_never_forge_an_active_state(changes: dict[str, object]) ->
     _assert_not_intact(_reseal(cheap_genesis(), **changes))
 
 
-def test_rerooting_after_a_kill_is_the_same_lifecycle_subject_at_sequence_zero() -> None:
-    """EF-8 is stateless evidence: a second genesis names the same lifecycle and is ordered below its later states."""
+def test_a_second_genesis_after_a_kill_over_the_old_admission_grants_no_current_authority() -> None:
+    """Astra P1 EF8_POSITIVE_ACTIVATION_WITHOUT_AUTHORITATIVE_LIFECYCLE_CONTEXT: G0 → D1, then G0b over the SAME EF-7.
 
-    for ef7, later in ((admission(), disabled()), (revalidation(), quarantined())):
-        rerooted = activate(ef7, effective_at_ns=T_READMIT, decision_id="ef8-reroot")
-        _assert_shape(rerooted)
-        assert rerooted.resulting_lifecycle_state is ACTIVE
-        assert rerooted.lifecycle_subject_digest == later.lifecycle_subject_digest
-        assert rerooted.lifecycle_sequence == 0 < later.lifecycle_sequence
-        assert rerooted.current_lifecycle_head_proven is False and later.current_lifecycle_head_proven is False
-    assert edge_kill_quarantine_rule_set()["lifecycle_head_rule_id"].startswith("stateless_evidence_head")  # type: ignore[union-attr]
+    Stateless EF-8 cannot see D1, so G0b stays a deterministic historical INITIAL_ACTIVATION receipt. It never becomes
+    current paper admission or the current head, and it is no successor of the kill, so it bypasses no revalidation.
+    """
+
+    g0, d1, g0b = genesis(), disabled(), second_genesis()
+    assert (d1.resulting_lifecycle_state, d1.prior_digest) == (DISABLED, g0.kill_quarantine_decision_digest)
+    _assert_receipt(g0b)
+    assert (g0b.status, g0b.gate_verdict, g0b.advances, g0b.resulting_lifecycle_state) == (
+        EdgeEvidenceStatus.READY,
+        EdgeGateVerdict.PASS,
+        True,
+        ACTIVE,
+    )
+    # No current authority: not paper admission, not the head, not a reactivation; forging either never verifies.
+    _assert_history_only(g0b)
+    _assert_not_intact(
+        _reseal(g0b, candidate_admitted_to_paper=True, current_lifecycle_head_proven=True),
+        "field_mismatch:candidate_admitted_to_paper",
+        "field_mismatch:current_lifecycle_head_proven",
+    )
+    # No successor of D1: no prior, sequence 0, the same subject, and nothing but its coordinate and id differs from G0,
+    # so nothing in either receipt can say which one is current.
+    assert (g0b.prior_binding, g0b.prior_digest, g0b.prior_lifecycle_state, g0b.lifecycle_sequence) == (
+        None,
+        "",
+        None,
+        0,
+    )
+    assert g0b.lifecycle_subject_digest == g0.lifecycle_subject_digest == d1.lifecycle_subject_digest
+    differing = {
+        item.name for item in fields(EdgeKillQuarantineDecision) if getattr(g0b, item.name) != getattr(g0, item.name)
+    }
+    assert differing == {"decision_id", "effective_at_ns", "cycle_activated_at_ns", _SELF}
+    # Reusing the old EF-7 bypasses no governed revalidation: any chain from G0b has already consumed it, and the
+    # killed chain re-admits only on a fresh revalidation.
+    assert g0b.consumed_admission_decision_digests == (admission().paper_admission_decision_digest,)
+    reused = readmit(quarantined(), admission())
+    assert reused.verdict_reason_codes == _codes(
+        "revalidation_admission_reused",
+        "revalidation_horizon_not_after_disable",
+        "revalidation_walk_forward_evidence_reused",
+    )
+    assert (reused.advances, reused.resulting_lifecycle_state) == (False, None)
+
+
+def test_a_genesis_over_a_passing_revalidation_is_no_governed_readmission_and_grants_nothing() -> None:
+    """The same P1 through the fresh EF-7: rerooting on it skips quarantine and governance, so it re-admits nothing."""
+
+    rerooted = activate(revalidation(), effective_at_ns=T_READMIT, decision_id="ef8-reroot")
+    _assert_receipt(rerooted)
+    assert (rerooted.transition, rerooted.advances, rerooted.resulting_lifecycle_state) == (
+        T.INITIAL_ACTIVATION,
+        True,
+        ACTIVE,
+    )
+    _assert_history_only(rerooted)
+    # It binds neither the kill nor the quarantine, carries no approval and opens its own first cycle.
+    assert (rerooted.prior_digest, rerooted.governance, rerooted.lifecycle_sequence, rerooted.lifecycle_cycle) == (
+        "",
+        None,
+        0,
+        1,
+    )
+    assert rerooted.consumed_admission_decision_digests == (revalidation().paper_admission_decision_digest,)
+    assert rerooted.lifecycle_subject_digest == quarantined().lifecycle_subject_digest
+
+
+def test_the_stale_original_genesis_stays_valid_history_after_its_disable_and_proves_no_current_state() -> None:
+    g0, d1 = genesis(), disabled()
+    assert (d1.prior_digest, d1.advances, d1.resulting_lifecycle_state) == (
+        g0.kill_quarantine_decision_digest,
+        True,
+        DISABLED,
+    )
+    # Presented after D1, G0 still re-proves: a successor never rewrites history ...
+    _assert_receipt(g0)
+    assert (g0.advances, g0.resulting_lifecycle_state, g0.lifecycle_sequence) == (True, ACTIVE, 0)
+    # ... but G0's ACTIVE is the historical result of its own transition; neither G0 nor D1 is proven current.
+    for receipt in (g0, d1):
+        _assert_history_only(receipt)
+
+
+def test_forked_children_are_each_valid_history_and_none_alone_proves_the_current_head() -> None:
+    """Stateless evidence admits siblings: two kills of one genesis, and two genesis receipts over one EF-7."""
+
+    first, second = disabled(), forked_disable()
+    for child in (first, second):
+        _assert_receipt(child)
+        assert (child.prior_digest, child.lifecycle_sequence, child.resulting_lifecycle_state) == (
+            genesis().kill_quarantine_decision_digest,
+            1,
+            DISABLED,
+        )
+        _assert_history_only(child)
+    assert first.kill_quarantine_decision_digest != second.kill_quarantine_decision_digest
+    triggered = {child.kill_evaluation.criterion_id for child in (first, second)}  # type: ignore[union-attr]
+    assert triggered == {DRAWDOWN, FUNDING_FLIP}
+    for sibling in (genesis(), second_genesis()):
+        _assert_receipt(sibling)
+        assert (sibling.prior_digest, sibling.lifecycle_sequence, sibling.resulting_lifecycle_state) == ("", 0, ACTIVE)
+        _assert_history_only(sibling)
+    assert genesis().kill_quarantine_decision_digest != second_genesis().kill_quarantine_decision_digest
 
 
 # --- E. governed revalidation from EF-5 onward ---------------------------------------------------------------------------
@@ -1237,8 +1386,25 @@ def test_governed_fresh_revalidation_readmits_as_a_new_cycle_under_the_same_seal
     assert reval.sealed_kill_criteria_digest == genesis().sealed_kill_criteria_digest
     assert decision.lifecycle_subject_digest == genesis().lifecycle_subject_digest == _subject_digest(reval)
     assert decision.governance == approval_for(quarantined(), reval)
-    assert decision.candidate_admitted_to_paper is True
+    # A valid historical re-admission receipt: never current paper admission or the current head.
+    _assert_history_only(decision)
     assert decision.transition_reason_code.startswith("governed_readmission:quarantine_at_least_14_utc_days")
+
+
+def test_a_governed_readmission_is_valid_history_that_never_proves_current_authority() -> None:
+    decision = readmitted()
+    _assert_receipt(decision)
+    assert (decision.advances, decision.resulting_lifecycle_state, decision.lifecycle_cycle) == (True, ACTIVE, 2)
+    _assert_history_only(decision)
+    # Its quarantine prior stays valid history after the re-admission and claims nothing current either.
+    _assert_receipt(quarantined())
+    _assert_history_only(quarantined())
+    # Forging current paper admission or the current head onto the authentic re-admission never verifies.
+    _assert_not_intact(
+        _reseal(decision, candidate_admitted_to_paper=True, current_lifecycle_head_proven=True),
+        "field_mismatch:candidate_admitted_to_paper",
+        "field_mismatch:current_lifecycle_head_proven",
+    )
 
 
 def test_readmission_without_governance_needs_approval_and_grants_nothing() -> None:
@@ -1361,8 +1527,7 @@ def test_every_approval_commitment_must_match_exactly() -> None:
 
 
 def test_an_approval_from_another_lifecycle_chain_cannot_be_replayed() -> None:
-    fork_disabled = disable(genesis(), observe(FUNDING_FLIP, "13.000000000000000000"), decision_id="ef8-disable-b")
-    fork = quarantine(fork_disabled, decision_id="ef8-quarantine-b")
+    fork = quarantine(forked_disable(), decision_id="ef8-quarantine-b")
     assert fork.resulting_lifecycle_state is QUARANTINE
     assert fork.lifecycle_subject_digest == quarantined().lifecycle_subject_digest
     decision = readmit(fork, revalidation(), governance=approval_for(quarantined(), revalidation()))
@@ -1520,6 +1685,7 @@ def test_a_nested_revalidation_mutation_resealed_through_the_chain_never_verifie
         lambda d: {"kill_criteria_sealed": True},
         lambda d: {"rule_set_digest": "0" * 64},
         lambda d: {"kill_observation_status": "VERIFIED_PERFORMANCE"},
+        lambda d: {"resulting_lifecycle_state_status": "CURRENT_LIFECYCLE_HEAD"},
         lambda d: {"kill_observation_digest": "0" * 64},
         lambda d: {"sealed_kill_criteria_digest": "0" * 64},
         lambda d: {"cycle_disabled_at_ns": T_KILL},
@@ -1647,6 +1813,8 @@ def _governance_payload() -> dict:
         (("transition",), "INITIAL_ACTIVATION"),
         (("prior_lifecycle_state",), "LIVE"),
         (("resulting_lifecycle_state",), 1),
+        (("resulting_lifecycle_state_status",), None),
+        (("resulting_lifecycle_state_status",), _UNSET),
         (("effective_at_ns",), True),
         (("effective_at_ns",), -1),
         (("effective_at_ns",), 2**63),
