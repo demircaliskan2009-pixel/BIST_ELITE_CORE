@@ -838,9 +838,11 @@ definitions survive only in the HISTORICAL sections and the dated changelog. Act
   - `SOL_AUDIT_PREFLIGHT_PACKET` — before every Sol audit or re-audit the controller supplies, as governance (24.8):
     the PR number, base SHA, head SHA, head tree when known, changed files, the semantic boundary, the
     required-check snapshot, the review-thread snapshot, the known P1/P2 identities and, for a re-audit, the old
-    head and the previous audit's blocker identities. The auditor re-proves its exact head, changed scope and
-    required checks once; it does not poll CI, rediscover the PR, enumerate unrelated history, replay chat history
-    or reread every repository document.
+    head and the previous audit's blocker identities. These values travel inside the canonical serious-prompt
+    fields (24.6) — the PR, SHAs, tree, changed files and check and thread snapshots in `STATE_PIN`, the boundary in
+    `SEMANTIC_BOUNDARY`, the known and previous blocker identities in `BLOCKER_INVENTORY` — never as a separate,
+    reordered block. The auditor re-proves its exact head, changed scope and required checks once; it does not poll
+    CI, rediscover the PR, enumerate unrelated history, replay chat history or reread every repository document.
   - Read scope — the whole declared semantic contract, approached from the exact changed files, their direct
     authority, their immediate load-bearing dependencies and the exact-head tests and CI, with targeted
     adversarial probes for material trust questions. It widens only where a concrete material concern requires it,
@@ -896,13 +898,18 @@ contract the PR closes (24.8); `BLOCKER_INVENTORY` carries the inherited blocker
 a prompt never drops a stop condition, invariant, permission boundary or validation gate. Status reads and
 polling need no serious prompt.
 
-`PROMPT_COMPACTION_V1` — stable policy lives in this repository: a serious prompt references it and never pastes
-generic doctrine the repository already owns. The prompt carries the task-specific invariants and the dynamic
-state — SHAs, PR, changed files, blocker identities, check and thread snapshots — as a late suffix after the
-stable instructions; it never replays conversation history, never embeds long volatile logs (failure tails
-only), and does not reword stable instructions gratuitously, so reusable prefixes stay cache-friendly. No prompt
-or report claims a cache hit or a measured saving, and compaction never drops a stop condition, invariant,
-permission boundary or validation gate.
+`PROMPT_COMPACTION_V1` — compaction optimizes within `SERIOUS_PROMPT_COMPILER`, never against it. Stable policy
+lives in this repository, and a serious prompt references it instead of reproducing it. The twelve top-level
+fields keep their canonical order exactly — `STATE_PIN` third, `BLOCKER_INVENTORY` seventh — and every required
+dynamic value stays inside its own field: PR, SHAs, tree, changed files and check and thread snapshots in
+`STATE_PIN`, runtime requests in `MODEL_RUNTIME_PROOF`, blocker identities in `BLOCKER_INVENTORY`. Each field
+carries only the task-specific material it needs: large volatile logs (failure tails only), repeated history,
+redundant prose and non-schema material are omitted or summarized, and genuinely needed supplemental volatile
+material sits compactly inside the appropriate field or as explicitly subordinate material, never reordering the
+top-level fields. Cache friendliness comes from stable doctrine and template references and minimal repeated
+prose, never from relocating a required field. No prompt or report claims a cache hit or a measured saving;
+compaction never drops a stop condition, invariant, permission boundary or validation gate, and compact
+presentation never permits omission of mandatory `AGENT_OS_HANDOFF_V1` fields.
 
 `AGENT_OS_HANDOFF_V1` — every serious task ends with one handoff: result; the runtime-proof block (24.12);
 setup fields (24.7); state proof (base, branch, head, PR, open PRs); files changed; validation and CI with exact
@@ -1090,12 +1097,20 @@ or the execution stops before any mutation or audit. Effort telemetry is not loa
   general default and never a reward for a project mattering. Thinking is always enabled on Claude Opus 5.5, and
   `THINKING_ACTUAL` is still reported from runtime evidence rather than assumed from this rule. Routine status
   and read-only evidence work stays controller-owned instead of spending the Claude lane.
-- `SOL_AUDIT_EFFORT_POLICY` — a GPT-6.1 Sol audit or re-audit requires `MODEL_ID_REQUIRED=gpt-6.1-sol` and thinking
-  `ENABLED`, and requests `Ultra` on the ChatGPT Work/Codex host; for protected work
-  `PROTECTED_AUDIT_EFFORT_REQUESTED=Ultra` is mandatory. When the selector does not expose `Ultra` at execution,
-  the audit stops with proof before substantive work and the controller re-proves the host effort vocabulary;
-  `Ultra` is never silently translated to an API effort value such as `max`, nor the reverse. Effort is never
-  correctness proof.
+- `SOL_AUDIT_EFFORT_POLICY` — every GPT-6.1 Sol audit or re-audit requires `MODEL_ID_REQUIRED=gpt-6.1-sol` and
+  thinking `ENABLED` under `FAIL_CLOSED_RUNTIME_PROOF` above; effort is recorded literally (24.3), is never
+  correctness proof, and no host label is ever mapped onto another (`Ultra`, `max` and `xhigh` are never
+  translated into one another).
+  - Protected audit or re-audit (any protected trigger of 24.4, including protected T4 `CLASS_C_CROSS_CONTRACT`):
+    `PROTECTED_AUDIT_EFFORT_REQUESTED=Ultra`, the exact current host literal. When the protected execution's
+    selector does not expose `Ultra`, the audit stops with proof before substantive work and returns to the
+    controller to re-prove the host effort vocabulary; it never runs at another label, is never normalized to
+    `max`, and no other model substitutes (`GPT61_SOL_T4_EXCLUSIVE`, 24.3).
+  - Non-protected audit or re-audit: `Ultra` is the default request; when the selector does not expose it, the
+    controller supplies another available literal label appropriate to that bounded audit, recorded literally. The
+    protected-only `Ultra` availability stop does not apply, while identity, required thinking and a known
+    prohibited fallback still stop exactly as in the table above, and `MODEL_EFFORT_ACTUAL` may stay `UNKNOWN` only
+    as stated above.
 - `SOL_SPEED_MODE_POLICY` — `SPEED_MODE_DEFAULT=STANDARD` for every GPT-6.1 Sol audit. Fast is never the default
   and never a correctness upgrade; it runs only on an explicit controller or human time-critical authorization
   recorded for that task. The audit reports `SPEED_MODE_REQUESTED` and `SPEED_MODE_ACTUAL`; missing speed
@@ -1429,7 +1444,7 @@ to the controller. Independence is now also decided by executing model id, so a 
 `gpt-6.1-sol` that implemented or repaired a candidate disqualifies GPT-6.1 Sol from auditing it. Added
 `SOL_AUDIT_USAGE_EFFICIENCY_V1` (the controller's preflight packet, changed-files-outward read scope, evidence
 reuse, and the delta-aware whole-contract re-audit), `PROMPT_COMPACTION_V1` and `COMPACT_AUDIT_HANDOFF` (24.6),
-and the Sol effort (`Ultra`, mandatory for protected audits, stop when the selector does not expose it),
+and the Sol effort (`Ultra`, mandatory for protected audits, which stop when the selector does not expose it),
 `STANDARD` speed, subagent and usage-telemetry policies (24.12). No price, credit amount, quota size or prompt
 count is doctrine. Unchanged: `COMPLETE_BLOCKER_COLLECTION`, `AUDIT_MATERIALITY_BOUNDARY_V1`, `FINITE_AUDIT_RULE`,
 the whole-contract audit and re-audit, the protected T4 requirement, exact-head binding, runtime identity and
@@ -1441,3 +1456,16 @@ its acceptance audit is the final legacy GPT-6 Astra audit, and GPT-6.1 Sol beco
 acceptance, human exact-head authorization, merge, post-merge verification, the external ChatGPT Project
 instruction update and fresh-chat acceptance. Docs/setup only: no product code, tests, scripts, workflows or
 dependencies touched.*
+
+*v6.3 same-PR consolidated repair (2026-10-02): the one consolidated repair closed the two P2 blockers of the final
+legacy GPT-6 Astra audit by one root cause — efficiency rules may optimize within canonical contracts, never
+reorder, replace or broaden them. (1) `PROMPT_COMPACTION_REQUIRED_FIELD_ORDER_CONFLICT`: `PROMPT_COMPACTION_V1`
+no longer places dynamic state in a late suffix; the twelve `SERIOUS_PROMPT_COMPILER` fields keep their canonical
+order, required dynamic values stay inside their own fields (`STATE_PIN`, `MODEL_RUNTIME_PROOF`,
+`BLOCKER_INVENTORY`), the Sol preflight packet travels inside those fields, and cache friendliness comes from
+stable doctrine and template references only. The prompting-guide skeletons and the Opus repair template now
+follow the canonical field order. (2) `PROTECTED_ULTRA_STOP_LEAKS_TO_NONPROTECTED_AUDIT`: the stop on an unexposed
+`Ultra` applies to protected audits only; a non-protected Sol audit keeps `Ultra` as its default and otherwise
+uses the available literal label the controller supplies, while identity, thinking and prohibited-fallback stops
+are unchanged. The speed and usage telemetry rules are unchanged, and no gate, lane or lifecycle rule changed.
+Docs/setup only.*

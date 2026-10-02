@@ -36,10 +36,12 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 - Carry the domain profile (`CRYPTO_CORE_DOMAIN_OPERATING_PROFILE`, section 24.2) and every standing rail;
   shortening a prompt never drops a stop condition, invariant, permission boundary or validation gate.
 - Compact by reference (`PROMPT_COMPACTION_V1`, section 24.6): cite the repository doctrine instead of pasting
-  it; keep the stable, reusable instructions first and byte-stable rather than reworded, and put the dynamic state
-  — SHAs, PR, changed files, blocker identities, check and thread snapshots — last; never replay conversation
-  history; failure tails only, no giant logs. This keeps shared prefixes cache-friendly, but no prompt or report
-  claims a cache hit or a measured saving.
+  it; keep the twelve top-level fields in their canonical order, with every required dynamic value inside its own
+  field (state in `STATE_PIN`, runtime requests in `MODEL_RUNTIME_PROOF`, blocker identities in
+  `BLOCKER_INVENTORY`); keep each field to the task-specific material it needs — no history replay, no giant logs
+  (failure tails only), no redundant prose. Cache friendliness comes from stable doctrine and template references
+  and minimal repeated prose, never from moving a required field; no prompt or report claims a cache hit or a
+  measured saving.
 
 ## 2. Lane-by-lane rules
 
@@ -107,15 +109,17 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 - **Bad tasks:** implementation, repair, routine GitHub status, CI polling, thread enumeration, repository
   archaeology and mechanical work — they belong to Claude or the controller and spend the allowance that buys
   independent judgment.
-- **Rules:** `MODEL_ID_REQUIRED=gpt-6.1-sol` and thinking `ENABLED`; host label `Ultra` written literally and
-  mandatory for protected audits — when the selector does not expose `Ultra` the audit stops for the controller to
-  re-prove the host vocabulary, and `Ultra` is never written as `max`; `SPEED_MODE_DEFAULT=STANDARD`, Fast only on
+- **Rules:** `MODEL_ID_REQUIRED=gpt-6.1-sol` and thinking `ENABLED`; host labels written literally and never mapped
+  (`Ultra` is never written as `max`). A protected audit requires `Ultra`, and an unexposed `Ultra` stops it for the
+  controller to re-prove the host vocabulary; a non-protected audit requests `Ultra` by default and otherwise the
+  available literal label the controller supplies, without that stop; `SPEED_MODE_DEFAULT=STANDARD`, Fast only on
   a recorded time-critical authorization and never as a correctness upgrade; `SOL_SUBAGENTS_DEFAULT=0`; runtime
   proof before substantive audit; never mutates; independence by lane and executing model id; complete material
   P1/P2 collection under `AUDIT_MATERIALITY_BOUNDARY_V1` and `FINITE_AUDIT_RULE`. A first-audit P1/P2 opens the one
   consolidated repair; a genuine P1/P2 remaining after the one re-audit rejects the candidate. Unavailability makes
   a protected gate wait on the frozen exact head; it never reassigns T4.
-- **Efficiency (`SOL_AUDIT_USAGE_EFFICIENCY_V1`):** the prompt carries the controller's preflight packet; the
+- **Efficiency (`SOL_AUDIT_USAGE_EFFICIENCY_V1`):** the prompt carries the controller's preflight packet inside its
+  canonical fields; the
   auditor re-proves its head once, reads from the changed files outward, reuses green exact-head evidence instead
   of rerunning the full suite for duplication, runs the one re-audit delta-aware but whole-contract, and returns
   the `COMPACT_AUDIT_HANDOFF` with speed and usage telemetry when the host exposes them (`UNKNOWN` otherwise).
@@ -130,6 +134,11 @@ is written.
 
 ## 3. Lifecycle prompt skeletons
 
+The specialist skeletons (IMPLEMENTATION, AUDIT, REPAIR, REAUDIT) show only the fields that carry task-specific
+content: every serious prompt keeps all twelve top-level fields of section 24.6 in canonical order, and an
+abbreviated skeleton never reorders them. The ARCHITECTURE skeleton records a controller decision, not a specialist
+prompt.
+
 ```text
 TASK_INTENT: IMPLEMENTATION
 SEMANTIC_BOUNDARY: <one coherent contract closed as the largest safe semantic closure>
@@ -142,33 +151,38 @@ HANDOFF: AGENT_OS_HANDOFF_V1; MEANINGFUL_PROMPT_COUNT_THIS_PR: 1
 ```
 
 ```text
-TASK_INTENT: AUDIT (GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1; exhaustive, fresh context, READ_ONLY) — GPT-6.1 Sol
-  (gpt-6.1-sol), effort Ultra, speed STANDARD; for non-protected work only, the section 24.4 controller fallback
-  with FALLBACK_REASON recorded
+TASK_INTENT: AUDIT (GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1; exhaustive, fresh context, READ_ONLY)
 SEMANTIC_BOUNDARY: <the declared contract of PR #<n>>; judge it, do not expand it (FINITE_AUDIT_RULE)
-STATE_PIN (SOL_AUDIT_PREFLIGHT_PACKET): PR #<n>; base <sha>; head <sha>; tree <sha|UNKNOWN>; changed files;
-  required-check snapshot; review-thread snapshot; known P1/P2 identities; PROTECTED yes/no with the trigger
-OUTPUT (COMPACT_AUDIT_HANDOFF): the COMPLETE current material P1/P2 set in one pass, each with invariant,
+STATE_PIN: PR #<n>; base <sha>; head <sha>; tree <sha|UNKNOWN>; changed files; required-check snapshot;
+  review-thread snapshot; PROTECTED yes/no with the trigger (the SOL_AUDIT_PREFLIGHT_PACKET state)
+MODEL_RUNTIME_PROOF: GPT-6.1 Sol | MODEL_ID_REQUIRED gpt-6.1-sol | THINKING ENABLED | effort Ultra (mandatory when
+  PROTECTED; otherwise Ultra by default or the controller-supplied available literal) | speed STANDARD; for
+  non-protected work only, the section 24.4 controller fallback with FALLBACK_REASON recorded
+BLOCKER_INVENTORY: <known P1/P2 identities, including review-thread ids, or NONE>
+HANDOFF: COMPACT_AUDIT_HANDOFF — the COMPLETE current material P1/P2 set in one pass, each with invariant,
   file:line evidence, supported entry/consumer path, effect, materiality and minimum regression proof
   (AUDIT_MATERIALITY_BOUNDARY_V1); P3 separately; for protected work this one audit is also the protected Class-C
   verdict. Zero mutation.
 ```
 
 ```text
-TASK_INTENT: REPAIR (the ONE consolidated repair) — Claude Opus 5.5
-BLOCKER_INVENTORY: <the complete audited P1/P2 set, verbatim, with identities>
+TASK_INTENT: REPAIR (the ONE consolidated repair)
 SEMANTIC_BOUNDARY: repair the complete set by root cause in one change on the same branch; no new scope
+MODEL_RUNTIME_PROOF: Claude Opus 5.5 | MODEL_ID_REQUIRED claude-opus-5-5 | section 24.12 fields
+BLOCKER_INVENTORY: <the complete audited P1/P2 set, verbatim, with identities>
 STOP_CONDITIONS: a blocker cannot be reproduced; the repair needs files or authority outside the prompt
 HANDOFF: AGENT_OS_HANDOFF_V1; this is the candidate's only repair
 ```
 
 ```text
-TASK_INTENT: REAUDIT (the ONE whole-contract re-audit) — GPT-6.1 Sol, effort Ultra, speed STANDARD; for
-  non-protected work only, the section 24.4 controller fallback with FALLBACK_REASON recorded
-STATE_PIN (SOL_AUDIT_PREFLIGHT_PACKET): old head <sha>; repaired head <sha>; tree <sha|UNKNOWN>; the previous
-  audit's blocker identities; BLOCKER_INVENTORY: <the repaired set>
-OUTPUT (COMPACT_AUDIT_HANDOFF): delta-aware but whole-contract — OLD_HEAD..REPAIRED_HEAD first, then the whole
-  contract — the COMPLETE current material P1/P2 set, not only the repaired lines. Any genuine material P1/P2 ->
+TASK_INTENT: REAUDIT (the ONE whole-contract re-audit; READ_ONLY)
+SEMANTIC_BOUNDARY: <the same declared contract>; the whole contract, never only the repaired lines
+STATE_PIN: old head <sha>; repaired head <sha>; tree <sha|UNKNOWN>; changed files; required-check snapshot;
+  review-thread snapshot; PROTECTED yes/no with the trigger (the SOL_AUDIT_PREFLIGHT_PACKET state)
+MODEL_RUNTIME_PROOF: <as AUDIT>
+BLOCKER_INVENTORY: <the previous audit's complete P1/P2 set with identities — the repaired set>
+HANDOFF: COMPACT_AUDIT_HANDOFF — delta-aware but whole-contract (OLD_HEAD..REPAIRED_HEAD first, then the whole
+  contract): the COMPLETE current material P1/P2 set, not only the repaired lines. Any genuine material P1/P2 ->
   FIXED_POINT_STOP after controller severity adjudication; P3 never blocks.
 ```
 

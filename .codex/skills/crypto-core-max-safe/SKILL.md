@@ -43,9 +43,12 @@ evidence; `UNKNOWN`, a mismatch, disabled thinking, a known prohibited fallback,
 default, cache or request text alone stops before any audit and delivers no verdict. Only effort and speed
 telemetry may stay `UNKNOWN`. Never claim unavailable-model quality.
 
-- Effort: host label `Ultra`, recorded literally and mandatory for protected audits. When the selector does not
-  expose `Ultra`, stop with proof before substantive work so the controller can re-prove the host vocabulary.
-  `Ultra` is never translated to an API value such as `max`, nor the reverse. Effort is never correctness proof.
+- Effort: recorded literally and never mapped (`Ultra`, `max` and `xhigh` are never translated into one another);
+  effort is never correctness proof. A protected audit requires `Ultra` — when a protected audit's selector does not
+  expose `Ultra`, stop with proof before substantive work so the controller can re-prove the host vocabulary; never
+  run it at another label and never substitute another model. A non-protected audit requests `Ultra` by default;
+  when it is not exposed, use the available literal label the controller supplies — the protected-only stop does
+  not apply, while the identity, thinking and prohibited-fallback stops still do.
 - Speed: `STANDARD` by default. Fast only on an explicit controller or human time-critical authorization recorded
   for that task; never a correctness upgrade.
 - Subagents: 0 by default; at most a bounded read-only subagent for a genuinely separate material audit track.
@@ -57,8 +60,10 @@ telemetry may stay `UNKNOWN`. Never claim unavailable-model quality.
 Each audit starts from the controller's serious prompt (`SERIOUS_PROMPT_COMPILER` and `PROMPT_COMPACTION_V1`,
 section 24.6) and its preflight packet: PR number, base SHA, head SHA, head tree when known, changed files,
 semantic boundary, required-check snapshot, review-thread snapshot, known P1/P2 identities and, for a re-audit,
-the old head and the previous audit's blocker identities. Re-prove the exact head, changed scope and required
-checks once. Do not poll CI, rediscover the PR, enumerate unrelated history, replay chat history or reread every
+the old head and the previous audit's blocker identities. The packet travels inside the canonical prompt fields —
+state in `STATE_PIN`, the boundary in `SEMANTIC_BOUNDARY`, blocker identities in `BLOCKER_INVENTORY` — and the
+twelve top-level fields keep their canonical order. Re-prove the exact head, changed scope and required checks
+once. Do not poll CI, rediscover the PR, enumerate unrelated history, replay chat history or reread every
 repository document. Implementer conclusions are never audit premises.
 
 ## Audit contract (section 24.4)
