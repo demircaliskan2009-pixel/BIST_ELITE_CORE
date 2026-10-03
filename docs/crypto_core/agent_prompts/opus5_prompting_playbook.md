@@ -1,7 +1,8 @@
 # Claude Opus 5.5 Prompting Playbook (crypto_core, v4 — Opus 5.5 lane edition)
 
 How to prompt the one active Claude lane under `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by
-`ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1` and `CLAUDE_OPUS_5_5_CONTROL_PLANE_UPGRADE_V1`. The file name is kept
+`ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`, `CLAUDE_OPUS_5_5_CONTROL_PLANE_UPGRADE_V1` and
+`GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1`. The file name is kept
 for path stability; the active lane is the one named below. Authority:
 `docs/crypto_core/agent_workflow.md` section 24 — council 24.3, audit 24.4, prompt shape 24.6, lifecycle and
 budget 24.8, runtime proof 24.12. This playbook never overrides it; on any conflict, section 24 and the
@@ -87,8 +88,10 @@ follows the section 24.6 serious prompt shape:
   parallelizable investigation; only one agent mutates a branch, and the primary agent validates every
   subagent conclusion.
 - **Independence:** a same-model self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`; the independent audit is
-  GPT-6 Astra as PRIMARY, which for protected work is also the protected audit (section 24.4); Codex GPT-5.6 Sol
-  and then the ChatGPT controller are recorded fallbacks for non-protected work only.
+  GPT-6.1 Sol as PRIMARY, which for protected work is also the protected audit (section 24.4); the ChatGPT
+  controller is the recorded last-resort fallback for non-protected work only. GPT-6 Astra and Codex GPT-5.6 Sol
+  are superseded and are no fallback. The repo-native work that needs no independence stays inside the Claude
+  task and is never handed to the Sol audit lane.
 
 ---
 
@@ -131,16 +134,18 @@ Never for a candidate under `FIXED_POINT_STOP`, never for a second repair, never
 
 ```text
 TASK_INTENT: REPAIR (the ONE consolidated repair of this candidate)
-BLOCKER_INVENTORY: <the COMPLETE audited P1/P2 set, verbatim, with blocker identities and evidence>
 SEMANTIC_BOUNDARY: repair the complete set by root cause in one change on branch <branch> at head <sha>;
   the original contract is unchanged except for the defects; no opportunistic cleanup
 STATE_PIN: PR <n> OPEN; head <sha> == local == origin; base <sha>
 MODEL_RUNTIME_PROOF: <as 3.1>
 ALLOWED_FILES: <exact files>; no new files unless named
+INVARIANTS: <as 3.1; the original contract's invariants are unchanged by the repair>
+BLOCKER_INVENTORY: <the COMPLETE audited P1/P2 set, verbatim, with blocker identities and evidence>
 VALIDATION_MATRIX: a regression proof for every blocker that fails before and passes after; then the full
   ladder of 3.1
 GITHUB_AUTHORIZATION: one normal same-branch commit and push AUTHORIZED; new PR FORBIDDEN; amend/force
   FORBIDDEN; merge NOT AUTHORIZED; resolving review threads FORBIDDEN
+FORBIDDEN: <as 3.1>; any change beyond the blocker set
 STOP_CONDITIONS: a blocker cannot be reproduced; the repair needs files or authority outside the prompt; the
   finding disputes accepted design; head moved
 HANDOFF: AGENT_OS_HANDOFF_V1 with before/after evidence per blocker; MEANINGFUL_PROMPT_COUNT_THIS_PR: 3;
@@ -177,12 +182,12 @@ evidence invalidated it.
 This playbook changes prompt construction only. It does not weaken any gate: one repository writer and one
 open PR at a time; no direct `main` push; standard merge only; no self-approval and no auto-merge; explicit
 per-PR, exact-head human merge authorization; pending CI is `NOT_READY`; current valid material P1/P2 threads
-block; protected work always gets the GPT-6 Astra audit, which no Claude lane, Sol review, controller review or
-self-review satisfies; post-merge verification precedes the next action; crypto_core scope only — no BIST, live or private
-API, credentials, orders, scheduler/auto-loop, shadow/live execution, or capital mutation.
+block; protected work always gets the GPT-6.1 Sol audit, which no Claude lane, controller review, superseded lane
+or self-review satisfies; post-merge verification precedes the next action; crypto_core scope only — no BIST, live
+or private API, credentials, orders, scheduler/auto-loop, shadow/live execution, or capital mutation.
 
 **Temporary availability is never durable routing.** Model quota, rate limits or short-term unavailability are
-transient operational facts: record them in the controller handoff for that one task, where a GPT-6 Astra
+transient operational facts: record them in the controller handoff for that one task, where a GPT-6.1 Sol
 outage may justify the section 24.4 non-protected audit fallback for that task only. Never write a temporary
 availability state into this playbook or into `agent_workflow.md`, and never infer from a quota event that a
-lane has been retired. When GPT-6 Astra is unavailable, the protected gate waits.
+lane has been retired. When GPT-6.1 Sol is unavailable, the protected gate waits.
