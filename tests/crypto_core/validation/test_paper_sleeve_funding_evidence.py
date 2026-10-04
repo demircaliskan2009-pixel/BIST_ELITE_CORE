@@ -246,7 +246,8 @@ def test_parser_refuses_states_the_builder_cannot_produce(path: tuple[object, ..
 
 def test_structural_non_claims_are_defaults_no_builder_parameter_can_set() -> None:
     flags = dict(PAPER_SLEEVE_FUNDING_EVIDENCE_NON_CLAIM_FLAGS)
-    assert flags.pop("paper_only") is True
+    paper_only = flags.pop("paper_only")  # outside the assert, so no check depends on an assert side effect
+    assert paper_only is True
     assert set(flags.values()) == {False}
     origin_flags = {"funding_amount_origin_proven", "settlement_time_origin_proven", "venue_funding_rate_consumed"}
     assert origin_flags <= set(flags)
