@@ -202,10 +202,13 @@ def test_public_api_exact() -> None:
 
 
 def test_no_equivalent_artifact_exists() -> None:
-    # No other paper Sharpe builder in the validation package (this is the first Sharpe artifact).
+    # No other paper Sharpe builder in the validation package. Anchor on a builder DEFINITION so a consumer that
+    # re-proves Sharpe evidence through the accepted builder (RG-3 sleeve performance) is not counted as a duplicate.
     validation_dir = Path(series_module.__file__).parent
     sharpe_builders = sorted(
-        path.name for path in validation_dir.glob("*.py") if "build_paper_sharpe" in path.read_text(encoding="utf-8")
+        path.name
+        for path in validation_dir.glob("*.py")
+        if "def build_paper_sharpe" in path.read_text(encoding="utf-8")
     )
     assert sharpe_builders == ["paper_sharpe_evidence.py"]
 
