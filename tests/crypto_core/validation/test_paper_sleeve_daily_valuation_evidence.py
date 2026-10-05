@@ -25,7 +25,7 @@ from pathlib import Path
 import pytest
 
 import crypto_core.validation.paper_sleeve_daily_valuation_evidence as valuation_module
-from crypto_core.strategy.spec import strategy_spec_digest
+from crypto_core.strategy.spec import StrategySpec, strategy_spec_digest
 from crypto_core.validation.edge_artifact_core import edge_canonical_json
 from crypto_core.validation.paper_allocator_intent_draft import (
     PaperAllocatorIntentDraft,
@@ -39,7 +39,7 @@ from crypto_core.validation.paper_capacity_gate import (
     paper_capacity_gate_decision_digest,
 )
 from crypto_core.validation.paper_daily_return_series_evidence import PaperDailyReturnBucket
-from crypto_core.validation.paper_end_to_end_episode import build_paper_end_to_end_episode
+from crypto_core.validation.paper_end_to_end_episode import PaperEndToEndEpisodeStatus, build_paper_end_to_end_episode
 from crypto_core.validation.paper_episode_runner import run_paper_episode
 from crypto_core.validation.paper_fill_simulator import (
     build_paper_fill_market_snapshot,
@@ -90,7 +90,14 @@ from crypto_core.validation.paper_sleeve_funding_evidence import (
     PaperSleeveFundingEvidence,
     build_paper_sleeve_funding_evidence,
 )
-from crypto_core.validation.strategy_signal_to_paper_intent import build_strategy_signal_to_paper_intent
+from crypto_core.validation.strategy_signal_to_paper_intent import (
+    StrategySignalToPaperIntent,
+    StrategySignalToPaperIntentError,
+    StrategySignalToPaperIntentStatus,
+    build_strategy_signal_to_paper_intent,
+    strategy_signal_to_paper_intent_digest,
+    strategy_signal_to_paper_intent_to_dict,
+)
 from tests.crypto_core.validation import test_historical_pit_dataset as pit
 from tests.crypto_core.validation import test_paper_deterministic_time_window_adapter as window_support
 
@@ -310,6 +317,7 @@ def build_episode(
         order_intent_request=request,
         admission_decision=admission,
         order_intent=intent,
+        strategy_spec=spec,
         signal_bridge=bridge,
         prior_position_state=prior,
         fill_market_snapshot=snapshot,
@@ -1044,6 +1052,199 @@ def test_funding_at_a_fill_instant_applies_to_the_position_before_that_fill() ->
         )
 
 
+# --- signal-bridge producer reconstruction (RG3_UPSTREAM_PRODUCER_RECONSTRUCTION_GAPS_V1) ---------------------------
+
+FOREIGN_STRATEGY_ID = "beta-basis-carry"
+
+
+def foreign_spec() -> StrategySpec:
+    """A valid StrategySpec of another strategy (SYNTHETIC)."""
+
+    return replace(window_support._spec(), strategy_id=FOREIGN_STRATEGY_ID)  # noqa: SLF001
+
+
+def bist_spec() -> StrategySpec:
+    """A StrategySpec with BIST scope only inside a nested mapping the bridge never shows (accepted test idiom)."""
+
+    return replace(window_support._spec(), data_requirements={"bist_feed": "1h"})  # noqa: SLF001
+
+
+def bridge_for(spec: StrategySpec, bridge: StrategySignalToPaperIntent) -> StrategySignalToPaperIntent:
+    """The accepted producer's own bridge over ``spec`` for ``bridge``'s exact signal descriptor."""
+
+    return build_strategy_signal_to_paper_intent(
+        spec,
+        expected_spec_digest=strategy_spec_digest(spec),
+        signal_id=bridge.signal_id,
+        run_id=bridge.run_id,
+        correlation_id=bridge.correlation_id,
+        market_symbol=bridge.market_symbol,
+        side=PaperOrderSide(bridge.side),
+        intent_type=PaperOrderIntentType(bridge.intent_type),
+        requested_units=bridge.requested_units,
+        requested_notional=bridge.requested_notional,
+        capacity_decision_digest=bridge.capacity_decision_digest,
+        limit_price=bridge.limit_price,
+        metadata=dict(bridge.metadata),
+    )
+
+
+def resealed_bridge(bridge: StrategySignalToPaperIntent, **changes: object) -> StrategySignalToPaperIntent:
+    changed = replace(bridge, **changes)
+    return replace(changed, bridge_digest=strategy_signal_to_paper_intent_digest(changed))
+
+
+def episode_with_bridge(
+    episode: PaperSleeveEpisodeEvidence,
+    bridge: StrategySignalToPaperIntent,
+    *,
+    strategy_spec: StrategySpec | None = None,
+) -> PaperSleeveEpisodeEvidence:
+    """``episode`` re-bound to ``bridge`` through the accepted end-to-end contract alone: the pre-repair trust path.
+
+    The end-to-end episode comes out READY, which proves that the accepted binding by itself accepts ``bridge``: only
+    the bridge producer's reconstruction can reject it.
+    """
+
+    end_to_end = episode.end_to_end_episode
+    rebound = build_paper_end_to_end_episode(
+        bridge,
+        episode.order_intent,
+        episode.episode_run,
+        episode.realized_pnl_event,
+        expected_bridge_digest=bridge.bridge_digest,
+        expected_order_intent_digest=episode.order_intent.intent_digest,
+        expected_episode_run_digest=episode.episode_run.episode_run_digest,
+        expected_realized_pnl_event_digest=episode.realized_pnl_event.realized_pnl_event_digest,
+        episode_id=end_to_end.episode_id,
+        run_id=end_to_end.run_id,
+        correlation_id=end_to_end.correlation_id,
+    )
+    assert rebound.status is PaperEndToEndEpisodeStatus.READY, rebound
+    spec = episode.strategy_spec if strategy_spec is None else strategy_spec
+    return replace(episode, strategy_spec=spec, signal_bridge=bridge, end_to_end_episode=rebound)
+
+
+def _forge_wrong_spec_anchor(episode: PaperSleeveEpisodeEvidence) -> PaperSleeveEpisodeEvidence:
+    # Audited manifestation A: the bridge's spec anchor is resealed to another spec's digest.
+    anchor = strategy_spec_digest(foreign_spec())
+    return episode_with_bridge(
+        episode, resealed_bridge(episode.signal_bridge, expected_spec_digest=anchor, spec_digest=anchor)
+    )
+
+
+def _forge_foreign_strategy(episode: PaperSleeveEpisodeEvidence) -> PaperSleeveEpisodeEvidence:
+    # Audited manifestation B: a genuine bridge of another strategy against the supplied authoritative spec.
+    return episode_with_bridge(episode, bridge_for(foreign_spec(), episode.signal_bridge))
+
+
+def _forge_bist_strategy(episode: PaperSleeveEpisodeEvidence) -> PaperSleeveEpisodeEvidence:
+    # Audited manifestation C: the producer rejects the BIST-scoped spec; the bridge is resealed READY anyway.
+    rejected = bridge_for(bist_spec(), episode.signal_bridge)
+    assert rejected.status is StrategySignalToPaperIntentStatus.REJECTED
+    forged = resealed_bridge(
+        rejected,
+        status=StrategySignalToPaperIntentStatus.READY,
+        ready=True,
+        rejection_reasons=(),
+        paper_order_intent_request_digest=episode.signal_bridge.paper_order_intent_request_digest,
+    )
+    return episode_with_bridge(episode, forged, strategy_spec=bist_spec())
+
+
+def _forge_ready_with_rejection_reason(episode: PaperSleeveEpisodeEvidence) -> PaperSleeveEpisodeEvidence:
+    # Audited manifestation D: a READY bridge that carries a rejection reason, a state the producer never emits.
+    reasons = ("strategy_signal_to_paper_intent:spec_scope_violation",)
+    return episode_with_bridge(episode, resealed_bridge(episode.signal_bridge, rejection_reasons=reasons))
+
+
+SIGNAL_BRIDGE_FORGERIES: dict[str, Callable[[PaperSleeveEpisodeEvidence], PaperSleeveEpisodeEvidence]] = {
+    "wrong-spec-anchor": _forge_wrong_spec_anchor,
+    "foreign-strategy": _forge_foreign_strategy,
+    "bist-strategy": _forge_bist_strategy,
+    "ready-with-rejection-reason": _forge_ready_with_rejection_reason,
+}
+
+
+@functools.lru_cache(maxsize=None)
+def forged_bridge_inputs(case: str) -> PaperSleeveValuationInputs:
+    """The world valuation inputs with the first episode's signal origin forged as ``case``."""
+
+    episodes = world_episodes()
+    return valuation_inputs(episodes=(SIGNAL_BRIDGE_FORGERIES[case](episodes[0]),) + episodes[1:])
+
+
+def test_each_signal_bridge_is_its_producer_reconstruction() -> None:
+    for episode in world_episodes():
+        rebuilt = bridge_for(episode.strategy_spec, episode.signal_bridge)
+        assert rebuilt.status is StrategySignalToPaperIntentStatus.READY
+        assert rebuilt.rejection_reasons == ()
+        assert strategy_signal_to_paper_intent_to_dict(rebuilt) == strategy_signal_to_paper_intent_to_dict(
+            episode.signal_bridge
+        )
+        assert episode.signal_bridge.spec_digest == strategy_spec_digest(episode.strategy_spec)
+
+
+@pytest.mark.parametrize("case", sorted(SIGNAL_BRIDGE_FORGERIES))
+def test_a_forged_signal_bridge_is_never_valued(case: str) -> None:
+    with _raises("signal_bridge_not_reconstructed"):
+        build(forged_bridge_inputs(case))
+
+
+@pytest.mark.parametrize("case", sorted(SIGNAL_BRIDGE_FORGERIES))
+def test_no_valuation_verifies_against_a_forged_signal_bridge(case: str) -> None:
+    forged_inputs = forged_bridge_inputs(case)
+    genuine = world_valuation()
+    verification = verify_paper_sleeve_daily_valuation_evidence(genuine, forged_inputs)
+    assert (verification.intact, verification.reason_codes) == (False, (_code("evidence_reconstruction_failed"),))
+    forged_digest = forged_inputs.episodes[0].end_to_end_episode.episode_digest
+    downstream = _reseal(
+        genuine, episodes=(replace(genuine.episodes[0], episode_digest=forged_digest),) + genuine.episodes[1:]
+    )
+    against_forged = verify_paper_sleeve_daily_valuation_evidence(downstream, forged_inputs)
+    assert (against_forged.intact, against_forged.reason_codes) == (False, (_code("evidence_reconstruction_failed"),))
+    against_genuine = verify_paper_sleeve_daily_valuation_evidence(downstream, valuation_inputs())
+    assert against_genuine.intact is False
+    assert set(against_genuine.reason_codes) == {
+        _code("field_mismatch:episodes"),
+        _code("field_mismatch:valuation_digest"),
+    }
+
+
+def test_a_genuine_rejected_bridge_is_never_valued() -> None:
+    episode = world_episodes()[0]
+    rejected = bridge_for(bist_spec(), episode.signal_bridge)
+    assert rejected.status is StrategySignalToPaperIntentStatus.REJECTED
+    assert "strategy_signal_to_paper_intent:spec_scope_violation" in rejected.rejection_reasons
+    unready = replace(episode, strategy_spec=bist_spec(), signal_bridge=rejected)
+    with _raises("signal_bridge_not_ready"):
+        build(valuation_inputs(episodes=(unready,) + world_episodes()[1:]))
+
+
+@pytest.mark.parametrize(
+    ("changes", "code"),
+    [
+        ({"side": "SIDEWAYS"}, "signal_bridge_reconstruction_failed"),
+        ({"signal_id": "bist-signal"}, "signal_bridge_reconstruction_failed"),
+    ],
+    ids=["unknown-side", "bist-signal-identity"],
+)
+def test_an_unreadable_signal_descriptor_fails_closed(changes: dict[str, object], code: str) -> None:
+    episode = world_episodes()[0]
+    forged = replace(episode, signal_bridge=resealed_bridge(episode.signal_bridge, **changes))
+    with _raises(code):
+        build(valuation_inputs(episodes=(forged,) + world_episodes()[1:]))
+
+
+def test_a_bridge_the_public_digest_cannot_seal_still_fails_closed() -> None:
+    episode = world_episodes()[0]
+    unsealable = replace(episode.signal_bridge, metadata=(("orphan",),))
+    with pytest.raises(StrategySignalToPaperIntentError):
+        strategy_signal_to_paper_intent_digest(unsealable)
+    with _raises("signal_bridge_metadata_malformed"):
+        build(valuation_inputs(episodes=(replace(episode, signal_bridge=unsealable),) + world_episodes()[1:]))
+
+
 # --- day closes, marks and time -------------------------------------------------------------------------------------
 
 
@@ -1474,6 +1675,7 @@ def test_the_module_is_pure_and_consumes_only_the_accepted_paper_substrate() -> 
     assert_paper_consumer_is_pure(
         valuation_module,
         {
+            "crypto_core.strategy.spec",
             "crypto_core.validation.edge_artifact_core",
             "crypto_core.validation.paper_allocator_intent_draft",
             "crypto_core.validation.paper_capacity_gate",

@@ -14,6 +14,11 @@ Binding, every element re-proven:
   binding and the verified ``PaperSleeveEquityBasisPolicy``;
 * methodology: the series' methodology must declare exactly the policy identifiers derived from that basis policy,
   so the generic series is bound to this exact basis;
+* time window: the ``PaperDeterministicTimeWindowEvidence`` is REBUILT by its accepted producer from the supplied
+  source ``PaperSessionMetricsSummary``, the producer input the window itself only references by digest. The summary
+  anchor is that summary's recomputed public digest, never a digest the window carries. The injected window (bounds,
+  ids, sample count) is re-validated by the producer against the summary, and the supplied window must equal the
+  reconstruction canonically. Only that reconstruction reaches the series builder;
 * series: the ``PaperDailyReturnSeriesEvidence`` is REBUILT by the accepted public builder over the exact buckets the
   valuation emits, and must equal the supplied series. Its correlation and market must equal the valuation's;
 * Sharpe: the ``PaperSharpeEvidence`` is REBUILT by the accepted public builder over that series, and must equal the
@@ -36,9 +41,10 @@ total.
 Non-overclaim. A READY snapshot decides NO promotion or demotion, NO allocation and NO portfolio stop. It selects no
 governance threshold and claims no profitability, edge, statistical significance or readiness. The generic series'
 time-window / metrics-summary session context is not claimed to be sleeve-scoped: only the values and the window are,
-through the rebuilt buckets. Mark, instant and funding origins and the completeness of the sleeve's episode set stay
-unproven, and no current lifecycle head is consumed. Exact arithmetic, no float, no ``decimal`` context, and no IO,
-clock, randomness, network or environment access.
+through the rebuilt buckets. That context must still be its accepted producer's exact output. Mark, instant and
+funding origins and the completeness of the sleeve's episode set stay unproven, and no current lifecycle head is
+consumed. Exact arithmetic, no float, no ``decimal`` context, and no IO, clock, randomness, network or environment
+access.
 """
 
 from __future__ import annotations
@@ -61,13 +67,21 @@ from crypto_core.validation.paper_daily_return_series_evidence import (
     build_paper_daily_return_series_evidence,
     paper_daily_return_series_evidence_to_dict,
 )
-from crypto_core.validation.paper_deterministic_time_window_adapter import PaperDeterministicTimeWindowEvidence
+from crypto_core.validation.paper_deterministic_time_window_adapter import (
+    PaperDeterministicTimeWindowEvidence,
+    build_paper_deterministic_time_window_evidence,
+    paper_deterministic_time_window_evidence_to_dict,
+)
 from crypto_core.validation.paper_portfolio_risk_envelope import (
     PaperPortfolioRiskEnvelope,
     paper_portfolio_risk_envelope_rule_set,
     verify_paper_portfolio_risk_envelope,
 )
 from crypto_core.validation.paper_return_series_methodology import PaperReturnSeriesMethodology
+from crypto_core.validation.paper_session_metrics_summary import (
+    PaperSessionMetricsSummary,
+    paper_session_metrics_summary_digest,
+)
 from crypto_core.validation.paper_sharpe_evidence import (
     PaperSharpeEvidence,
     PaperSharpeEvidenceStatus,
@@ -120,6 +134,7 @@ class PaperSleevePerformanceInputs:
     valuation_inputs: PaperSleeveValuationInputs
     valuation: PaperSleeveDailyValuationEvidence
     methodology: PaperReturnSeriesMethodology | None
+    metrics_summary: PaperSessionMetricsSummary | None
     time_window: PaperDeterministicTimeWindowEvidence | None
     daily_return_series: PaperDailyReturnSeriesEvidence | None
     sharpe_evidence: PaperSharpeEvidence | None
@@ -280,6 +295,37 @@ def _metadata(artifact: object, code: str) -> dict[str, str]:
         raise _fail(f"{code}_metadata_malformed") from exc
 
 
+def _rebuild_time_window(
+    summary: PaperSessionMetricsSummary, window: PaperDeterministicTimeWindowEvidence
+) -> PaperDeterministicTimeWindowEvidence:
+    """Re-run the accepted time-window producer over the supplied source summary and the window's injected values.
+
+    The summary anchor is the recomputed public digest of that summary, never a digest the window carries. The
+    injected values (bounds, ids, sample count, metadata) are re-validated by the producer against the summary.
+    """
+
+    metadata = _metadata(window, "time_window")
+    try:
+        expected_summary_digest = paper_session_metrics_summary_digest(summary)
+    except Exception as exc:  # noqa: BLE001 - an unreadable producer input fails closed at this boundary
+        raise _fail("time_window_reconstruction_failed") from exc
+    return _rebuild(
+        "time_window",
+        build_paper_deterministic_time_window_evidence,
+        summary,
+        expected_metrics_summary_digest=expected_summary_digest,
+        started_at_ns=window.started_at_ns,
+        stopped_at_ns=window.stopped_at_ns,
+        window_id=window.window_id,
+        methodology_id=window.methodology_id,
+        run_id=window.run_id,
+        aggregate_id=window.aggregate_id,
+        correlation_id=window.correlation_id,
+        sample_observation_count=window.sample_observation_count,
+        metadata=metadata,
+    )
+
+
 def _serialize(value: object) -> object:
     if type(value) is tuple:
         return [_serialize(item) for item in value]
@@ -330,17 +376,25 @@ def _bind_series(
 ) -> _SeriesBinding | None:
     """Rebuild the generic series and Sharpe over the valuation buckets; ``None`` when none is supplied."""
 
-    supplied = (inputs.methodology, inputs.time_window, inputs.daily_return_series, inputs.sharpe_evidence)
+    supplied = (
+        inputs.methodology,
+        inputs.metrics_summary,
+        inputs.time_window,
+        inputs.daily_return_series,
+        inputs.sharpe_evidence,
+    )
     if all(item is None for item in supplied):
         return None
     if any(item is None for item in supplied):
         raise _fail("series_inputs_incomplete")
     _require_exact(inputs.methodology, PaperReturnSeriesMethodology, "methodology")
+    _require_exact(inputs.metrics_summary, PaperSessionMetricsSummary, "metrics_summary")
     _require_exact(inputs.time_window, PaperDeterministicTimeWindowEvidence, "time_window")
     _require_exact(inputs.daily_return_series, PaperDailyReturnSeriesEvidence, "daily_return_series")
     _require_exact(inputs.sharpe_evidence, PaperSharpeEvidence, "sharpe_evidence")
     methodology = cast(PaperReturnSeriesMethodology, inputs.methodology)
-    time_window = cast(PaperDeterministicTimeWindowEvidence, inputs.time_window)
+    summary = cast(PaperSessionMetricsSummary, inputs.metrics_summary)
+    supplied_window = cast(PaperDeterministicTimeWindowEvidence, inputs.time_window)
     series = cast(PaperDailyReturnSeriesEvidence, inputs.daily_return_series)
     sharpe = cast(PaperSharpeEvidence, inputs.sharpe_evidence)
 
@@ -348,6 +402,11 @@ def _bind_series(
     for name, expected in expected_ids.items():
         if getattr(methodology, name) != expected:
             raise _fail("methodology_not_bound_to_equity_basis_policy")
+
+    # Only the producer's reconstruction over the supplied metrics summary reaches the series builder.
+    time_window = _rebuild_time_window(summary, supplied_window)
+    if not _canonically_equal(supplied_window, time_window, paper_deterministic_time_window_evidence_to_dict):
+        raise _fail("time_window_not_reconstructed")
 
     rebuilt_series = _rebuild(
         "daily_return_series",
@@ -461,7 +520,13 @@ def build_paper_sleeve_performance_evidence(inputs: PaperSleevePerformanceInputs
     else:
         if any(
             item is not None
-            for item in (inputs.methodology, inputs.time_window, inputs.daily_return_series, inputs.sharpe_evidence)
+            for item in (
+                inputs.methodology,
+                inputs.metrics_summary,
+                inputs.time_window,
+                inputs.daily_return_series,
+                inputs.sharpe_evidence,
+            )
         ):
             raise _fail("series_inputs_supplied_for_uncomputed_valuation")
         reasons.append(_reason("valuation_not_computed"))

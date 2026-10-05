@@ -28,6 +28,8 @@ from crypto_core.validation.paper_daily_return_series_evidence import (
 from crypto_core.validation.paper_deterministic_time_window_adapter import (
     PaperDeterministicTimeWindowEvidence,
     build_paper_deterministic_time_window_evidence,
+    paper_deterministic_time_window_evidence_digest,
+    paper_deterministic_time_window_evidence_to_dict,
 )
 from crypto_core.validation.paper_portfolio_risk_envelope import (
     PaperPortfolioRiskEnvelope,
@@ -36,6 +38,10 @@ from crypto_core.validation.paper_portfolio_risk_envelope import (
 from crypto_core.validation.paper_return_series_methodology import (
     PaperReturnSeriesMethodology,
     build_paper_return_series_methodology,
+)
+from crypto_core.validation.paper_session_metrics_summary import (
+    PaperSessionMetricsSummary,
+    paper_session_metrics_summary_digest,
 )
 from crypto_core.validation.paper_sharpe_evidence import (
     PaperSharpeEvidence,
@@ -79,7 +85,7 @@ _NOT_COMPUTABLE = PaperSleevePerformanceStatus.NOT_COMPUTABLE
 _NEEDS_GOVERNANCE = PaperSleevePerformanceStatus.NEEDS_GOVERNANCE_APPROVAL
 METHODOLOGY_ID = "sleeve-method-1"
 RISK_FREE_POLICY_ID = "constant_zero_daily_review_only.v1"
-SERIES_INPUT_NAMES = ("methodology", "time_window", "daily_return_series", "sharpe_evidence")
+SERIES_INPUT_NAMES = ("methodology", "metrics_summary", "time_window", "daily_return_series", "sharpe_evidence")
 NO_SERIES: dict[str, object] = dict.fromkeys(SERIES_INPUT_NAMES)
 
 
@@ -111,8 +117,17 @@ def methodology_for(policy: PaperSleeveEquityBasisPolicy, **overrides: object) -
     return build_paper_return_series_methodology(**values)  # type: ignore[arg-type]
 
 
-def time_window_for(start_ns: int, end_ns: int) -> PaperDeterministicTimeWindowEvidence:
-    summary = world.window_support._summary()  # noqa: SLF001 - the accepted metrics-summary fixture of the window chain
+@functools.lru_cache(maxsize=None)
+def world_summary() -> PaperSessionMetricsSummary:
+    """The accepted metrics-summary fixture of the time-window chain: the time-window producer's input."""
+
+    return world.window_support._summary()  # noqa: SLF001
+
+
+def time_window_for(
+    start_ns: int, end_ns: int, summary: PaperSessionMetricsSummary | None = None
+) -> PaperDeterministicTimeWindowEvidence:
+    summary = world_summary() if summary is None else summary
     return build_paper_deterministic_time_window_evidence(
         summary,
         expected_metrics_summary_digest=summary.summary_digest,
@@ -159,6 +174,7 @@ def sharpe_for(series: PaperDailyReturnSeriesEvidence) -> PaperSharpeEvidence:
 @dataclass(frozen=True)
 class SeriesWorld:
     methodology: PaperReturnSeriesMethodology
+    summary: PaperSessionMetricsSummary
     time_window: PaperDeterministicTimeWindowEvidence
     series: PaperDailyReturnSeriesEvidence
     sharpe: PaperSharpeEvidence
@@ -166,6 +182,7 @@ class SeriesWorld:
     def inputs(self) -> dict[str, object]:
         return {
             "methodology": self.methodology,
+            "metrics_summary": self.summary,
             "time_window": self.time_window,
             "daily_return_series": self.series,
             "sharpe_evidence": self.sharpe,
@@ -176,9 +193,10 @@ def series_world(
     valuation: PaperSleeveDailyValuationEvidence, policy: PaperSleeveEquityBasisPolicy, start_ns: int, end_ns: int
 ) -> SeriesWorld:
     methodology = methodology_for(policy)
-    time_window = time_window_for(start_ns, end_ns)
+    summary = world_summary()
+    time_window = time_window_for(start_ns, end_ns, summary)
     series = series_for(valuation, methodology, time_window)
-    return SeriesWorld(methodology, time_window, series, sharpe_for(series))
+    return SeriesWorld(methodology, summary, time_window, series, sharpe_for(series))
 
 
 @functools.lru_cache(maxsize=None)
@@ -568,6 +586,152 @@ def test_inputs_of_another_type_raise() -> None:
         build(world.valuation_inputs())
 
 
+# --- producer reconstruction (RG3_UPSTREAM_PRODUCER_RECONSTRUCTION_GAPS_V1) -----------------------------------------
+
+
+def resealed_window(
+    window: PaperDeterministicTimeWindowEvidence, **changes: object
+) -> PaperDeterministicTimeWindowEvidence:
+    changed = replace(window, **changes)
+    return replace(changed, time_window_digest=paper_deterministic_time_window_evidence_digest(changed))
+
+
+def resealed_summary(summary: PaperSessionMetricsSummary, **changes: object) -> PaperSessionMetricsSummary:
+    changed = replace(summary, **changes)
+    return replace(changed, summary_digest=paper_session_metrics_summary_digest(changed))
+
+
+@functools.lru_cache(maxsize=None)
+def empty_summary() -> PaperSessionMetricsSummary:
+    """A digest-valid metrics summary with coherent but empty event and source counts (SYNTHETIC)."""
+
+    return resealed_summary(
+        world_summary(), event_count=0, computed_event_count=0, no_realized_event_count=0, source_event_digest_count=0
+    )
+
+
+def world_over(summary: PaperSessionMetricsSummary, window: PaperDeterministicTimeWindowEvidence) -> SeriesWorld:
+    """The accepted series and Sharpe built straight over ``window``: the pre-repair trust path."""
+
+    methodology = world_series().methodology
+    series = series_for(world.world_valuation(), methodology, window)
+    return SeriesWorld(methodology, summary, window, series, sharpe_for(series))
+
+
+def _forge_resealed_summary_anchor() -> SeriesWorld:
+    # Audited manifestation E: the window's summary anchors are resealed to another summary's digest.
+    anchor = empty_summary().summary_digest
+    window = resealed_window(
+        world_series().time_window, expected_metrics_summary_digest=anchor, metrics_summary_digest=anchor
+    )
+    return world_over(world_summary(), window)
+
+
+def _forge_foreign_summary() -> SeriesWorld:
+    # Audited manifestation E: a genuine window supplied against a summary that is not its producer input.
+    return world_over(empty_summary(), world_series().time_window)
+
+
+def _forge_bist_session_identity() -> SeriesWorld:
+    # Audited manifestation F: the window's session identity is resealed into BIST scope.
+    return world_over(world_summary(), resealed_window(world_series().time_window, run_id="bist-session-run"))
+
+
+def _forge_empty_counts_sample_eligible() -> SeriesWorld:
+    # Audited manifestation G: a window over empty event and source counts, resealed as sample-eligible.
+    genuine = time_window_for(world.WINDOW_START, world.WINDOW_END, empty_summary())
+    assert (genuine.ready, genuine.sample_eligible) == (True, False)
+    return world_over(empty_summary(), resealed_window(genuine, sample_eligible=True, reason_codes=()))
+
+
+TIME_WINDOW_FORGERIES: dict[str, tuple[Callable[[], SeriesWorld], str]] = {
+    "resealed-summary-anchor": (_forge_resealed_summary_anchor, "time_window_not_reconstructed"),
+    "foreign-summary": (_forge_foreign_summary, "time_window_not_reconstructed"),
+    "bist-session-identity": (_forge_bist_session_identity, "time_window_reconstruction_failed"),
+    "empty-counts-sample-eligible": (_forge_empty_counts_sample_eligible, "time_window_not_reconstructed"),
+}
+FORGED_WINDOW_CASES = ("bist-session-identity", "empty-counts-sample-eligible", "resealed-summary-anchor")
+
+
+@functools.lru_cache(maxsize=None)
+def forged_window_world(case: str) -> SeriesWorld:
+    return TIME_WINDOW_FORGERIES[case][0]()
+
+
+def test_the_time_window_is_its_producer_reconstruction() -> None:
+    series = world_series()
+    window = series.time_window
+    rebuilt = build_paper_deterministic_time_window_evidence(
+        series.summary,
+        expected_metrics_summary_digest=paper_session_metrics_summary_digest(series.summary),
+        started_at_ns=window.started_at_ns,
+        stopped_at_ns=window.stopped_at_ns,
+        window_id=window.window_id,
+        methodology_id=window.methodology_id,
+        run_id=window.run_id,
+        aggregate_id=window.aggregate_id,
+        correlation_id=window.correlation_id,
+        sample_observation_count=window.sample_observation_count,
+    )
+    assert paper_deterministic_time_window_evidence_to_dict(rebuilt) == (
+        paper_deterministic_time_window_evidence_to_dict(window)
+    )
+    assert (window.ready, window.sample_eligible) == (True, True)
+    assert window.metrics_summary_digest == paper_session_metrics_summary_digest(series.summary)
+
+
+@pytest.mark.parametrize("case", sorted(TIME_WINDOW_FORGERIES))
+def test_a_forged_time_window_never_reaches_a_ready_snapshot(case: str) -> None:
+    forged = forged_window_world(case)
+    # The accepted series and Sharpe builders alone accept the window: the pre-repair trust path.
+    assert forged.series.status is PaperDailyReturnSeriesEvidenceStatus.READY, forged.series.reason_codes
+    assert forged.sharpe.status is PaperSharpeEvidenceStatus.READY
+    with _raises(TIME_WINDOW_FORGERIES[case][1]):
+        build(performance_inputs(**forged.inputs()))
+
+
+@pytest.mark.parametrize("case", sorted(TIME_WINDOW_FORGERIES))
+def test_no_snapshot_verifies_against_a_forged_time_window(case: str) -> None:
+    forged_inputs = performance_inputs(**forged_window_world(case).inputs())
+    verification = verify_paper_sleeve_performance_evidence(world_performance(), forged_inputs)
+    assert (verification.intact, verification.reason_codes) == (False, (_code("evidence_reconstruction_failed"),))
+
+
+@pytest.mark.parametrize("case", FORGED_WINDOW_CASES)
+def test_a_resealed_ready_snapshot_over_a_forged_window_never_verifies(case: str) -> None:
+    forged = forged_window_world(case)
+    downstream = _reseal(
+        world_performance(),
+        time_window_digest=forged.time_window.time_window_digest,
+        daily_return_series_digest=forged.series.series_digest,
+        sharpe_evidence_digest=forged.sharpe.sharpe_evidence_digest,
+    )
+    assert downstream.status is _READY
+    against_forged = verify_paper_sleeve_performance_evidence(downstream, performance_inputs(**forged.inputs()))
+    assert (against_forged.intact, against_forged.reason_codes) == (False, (_code("evidence_reconstruction_failed"),))
+    against_genuine = verify_paper_sleeve_performance_evidence(downstream, performance_inputs())
+    assert against_genuine.intact is False
+    assert _code("field_mismatch:time_window_digest") in against_genuine.reason_codes
+
+
+def test_a_genuine_window_over_an_empty_summary_is_not_computable() -> None:
+    genuine = time_window_for(world.WINDOW_START, world.WINDOW_END, empty_summary())
+    assert "paper_deterministic_time_window_evidence:sample_not_eligible_empty_summary" in genuine.reason_codes
+    snapshot = build(performance_inputs(**world_over(empty_summary(), genuine).inputs()))
+    assert snapshot.status is _NOT_COMPUTABLE
+    assert "paper_daily_return_series_evidence:time_window_not_sample_eligible" in snapshot.reason_codes
+    assert (snapshot.daily_returns, snapshot.paper_sharpe_annualized) == ((), "")
+
+
+@pytest.mark.parametrize("case", sorted(world.SIGNAL_BRIDGE_FORGERIES))
+def test_a_forged_signal_bridge_never_reaches_rg3(case: str) -> None:
+    forged_inputs = performance_inputs(valuation_inputs=world.forged_bridge_inputs(case))
+    with _raises("valuation_reconstruction_failed"):
+        build(forged_inputs)
+    verification = verify_paper_sleeve_performance_evidence(world_performance(), forged_inputs)
+    assert (verification.intact, verification.reason_codes) == (False, (_code("evidence_reconstruction_failed"),))
+
+
 # --- serialization and verification ---------------------------------------------------------------------------------
 
 
@@ -697,6 +861,7 @@ def test_inputs_carry_no_sleeve_label_threshold_or_decision() -> None:
         "valuation_inputs",
         "valuation",
         "methodology",
+        "metrics_summary",
         "time_window",
         "daily_return_series",
         "sharpe_evidence",
@@ -730,6 +895,7 @@ def test_the_module_is_pure_and_consumes_only_the_accepted_substrate() -> None:
             "crypto_core.validation.paper_deterministic_time_window_adapter",
             "crypto_core.validation.paper_portfolio_risk_envelope",
             "crypto_core.validation.paper_return_series_methodology",
+            "crypto_core.validation.paper_session_metrics_summary",
             "crypto_core.validation.paper_sharpe_evidence",
             "crypto_core.validation.paper_sleeve_daily_valuation_evidence",
             "crypto_core.validation.paper_sleeve_equity_basis_policy",

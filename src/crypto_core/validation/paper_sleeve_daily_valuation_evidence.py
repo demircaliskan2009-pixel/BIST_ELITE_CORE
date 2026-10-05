@@ -15,8 +15,13 @@ self-sealed artifact never passes. The chain per episode is:
 * the order intent is rebuilt from the admission;
 * the fill, the position transition, the new position state and the episode PnL report are rebuilt exactly as the
   runner builds them. The episode run is rebuilt, must be ``COMPUTED``, and must bind every child digest;
-* the realized-PnL event is rebuilt, and the end-to-end episode is rebuilt over the signal bridge, the intent, the
-  run and the event. It must be ``READY``, which binds bridge request lineage and capacity lineage.
+* the realized-PnL event is rebuilt;
+* signal origin: the signal bridge is rebuilt by its accepted producer from the supplied source ``StrategySpec``, the
+  producer input the bridge itself only references by digest. The spec anchor is that spec's recomputed public
+  digest, never a digest the bridge carries. The bridge's signal descriptor is re-validated by the producer, the
+  supplied bridge must equal the reconstruction canonically, and it must be ``READY``;
+* the end-to-end episode is rebuilt over that reconstructed bridge, the intent, the run and the event. It must be
+  ``READY``, which binds the bridge's request lineage and capacity lineage to the rebuilt intent.
 
 Cross-episode rules:
 
@@ -59,7 +64,8 @@ Any provenance defect raises ``PaperSleeveDailyValuationError`` instead.
 Non-overclaim: the index is a synthetic paper-performance normalization, never account equity, capital, margin, a
 balance or allocation authority. It claims no profitability, edge, readiness or venue truth. Marks, instants and
 funding origins are not proven, the completeness of the supplied episode set is not proven, and the fee and slippage
-rates of each episode's accepted fill policy are that episode's paper assumptions, not governed values. Exact
+rates of each episode's accepted fill policy are that episode's paper assumptions, not governed values. Each episode's
+``StrategySpec`` is its bridge producer's input; which strategy a sleeve may trade is not governed here. Exact
 ``Fraction`` arithmetic, no float, no ``decimal`` context, and no IO, clock, randomness, network or environment access.
 """
 
@@ -71,6 +77,7 @@ from enum import Enum
 from fractions import Fraction
 from typing import TypeVar, cast
 
+from crypto_core.strategy.spec import StrategySpec, strategy_spec_digest
 from crypto_core.validation.edge_artifact_core import (
     EdgeArtifactError,
     EdgeEvidenceVerification,
@@ -117,6 +124,8 @@ from crypto_core.validation.paper_order_intent_admission import (
     PaperOrderIntentAdmissionDecision,
     PaperOrderIntentAdmissionStatus,
     PaperOrderIntentRequest,
+    PaperOrderIntentType,
+    PaperOrderSide,
     build_paper_order_intent_request,
     evaluate_paper_order_intent_admission,
     paper_order_intent_admission_decision_to_dict,
@@ -157,7 +166,12 @@ from crypto_core.validation.paper_sleeve_funding_evidence import (
     PaperSleeveFundingEvidence,
     verify_paper_sleeve_funding_evidence,
 )
-from crypto_core.validation.strategy_signal_to_paper_intent import StrategySignalToPaperIntent
+from crypto_core.validation.strategy_signal_to_paper_intent import (
+    StrategySignalToPaperIntent,
+    StrategySignalToPaperIntentStatus,
+    build_strategy_signal_to_paper_intent,
+    strategy_signal_to_paper_intent_to_dict,
+)
 
 _SCHEMA_VERSION = "paper-sleeve-daily-valuation-evidence.v1"
 _REASON_PREFIX = "paper_sleeve_daily_valuation_evidence"
@@ -197,6 +211,7 @@ class PaperSleeveEpisodeEvidence:
     order_intent_request: PaperOrderIntentRequest
     admission_decision: PaperOrderIntentAdmissionDecision
     order_intent: PaperOrderIntent
+    strategy_spec: StrategySpec
     signal_bridge: StrategySignalToPaperIntent
     prior_position_state: PaperPositionState
     fill_market_snapshot: PaperFillMarketSnapshot
@@ -525,6 +540,40 @@ def _require_exact(value: object, cls: type, code: str) -> None:
         raise _fail(f"{code}_malformed")
 
 
+def _rebuild_signal_bridge(spec: StrategySpec, bridge: StrategySignalToPaperIntent) -> StrategySignalToPaperIntent:
+    """Re-run the accepted bridge producer over the supplied source spec and the bridge's own signal descriptor.
+
+    The spec anchor is the recomputed public digest of that spec, never a digest the bridge carries. The descriptor
+    (ids, market, side, intent type, units, notional, limit price, capacity decision digest, metadata) is
+    re-validated by the producer and bound to the rebuilt order intent by the end-to-end episode.
+    """
+
+    metadata = _metadata(bridge, "signal_bridge")
+    try:
+        expected_spec_digest = strategy_spec_digest(spec)
+        side = PaperOrderSide(bridge.side)
+        intent_type = PaperOrderIntentType(bridge.intent_type)
+    except Exception as exc:  # noqa: BLE001 - an unreadable producer input fails closed at this boundary
+        raise _fail("signal_bridge_reconstruction_failed") from exc
+    return _rebuild(
+        "signal_bridge",
+        build_strategy_signal_to_paper_intent,
+        spec,
+        expected_spec_digest=expected_spec_digest,
+        signal_id=bridge.signal_id,
+        run_id=bridge.run_id,
+        correlation_id=bridge.correlation_id,
+        market_symbol=bridge.market_symbol,
+        side=side,
+        intent_type=intent_type,
+        requested_units=bridge.requested_units,
+        requested_notional=bridge.requested_notional,
+        capacity_decision_digest=bridge.capacity_decision_digest,
+        limit_price=bridge.limit_price,
+        metadata=metadata,
+    )
+
+
 def _bucket_digest(bucket_id: str, start_ns: int, end_ns: int, index_start: str, index_end: str) -> str:
     """The accepted daily-return bucket digest contract, replayed exactly over its five committed fields."""
 
@@ -564,6 +613,7 @@ _EPISODE_PART_TYPES: tuple[tuple[str, type], ...] = (
     ("order_intent_request", PaperOrderIntentRequest),
     ("admission_decision", PaperOrderIntentAdmissionDecision),
     ("order_intent", PaperOrderIntent),
+    ("strategy_spec", StrategySpec),
     ("signal_bridge", StrategySignalToPaperIntent),
     ("prior_position_state", PaperPositionState),
     ("fill_market_snapshot", PaperFillMarketSnapshot),
@@ -738,16 +788,23 @@ def _prove_episode(evidence: object, *, window_start_ns: int, window_end_ns: int
     if rebuilt_event.status not in (PaperRealizedPnlStatus.COMPUTED, PaperRealizedPnlStatus.NO_REALIZED_PNL):
         raise _fail("realized_pnl_event_not_computed")
 
-    end_to_end = episode.end_to_end_episode
+    # Signal origin: only the producer's reconstruction over the supplied StrategySpec is trusted downstream.
     bridge = episode.signal_bridge
+    rebuilt_bridge = _rebuild_signal_bridge(episode.strategy_spec, bridge)
+    if not _canonically_equal(bridge, rebuilt_bridge, strategy_signal_to_paper_intent_to_dict):
+        raise _fail("signal_bridge_not_reconstructed")
+    if rebuilt_bridge.status is not StrategySignalToPaperIntentStatus.READY:
+        raise _fail("signal_bridge_not_ready")
+
+    end_to_end = episode.end_to_end_episode
     rebuilt_end_to_end = _rebuild(
         "end_to_end_episode",
         build_paper_end_to_end_episode,
-        bridge,
+        rebuilt_bridge,
         rebuilt_intent,
         rebuilt_run,
         rebuilt_event,
-        expected_bridge_digest=bridge.bridge_digest,
+        expected_bridge_digest=rebuilt_bridge.bridge_digest,
         expected_order_intent_digest=rebuilt_intent.intent_digest,
         expected_episode_run_digest=rebuilt_run.episode_run_digest,
         expected_realized_pnl_event_digest=rebuilt_event.realized_pnl_event_digest,
@@ -791,7 +848,7 @@ def _prove_episode(evidence: object, *, window_start_ns: int, window_end_ns: int
         rebuilt_request.request_digest,
         rebuilt_admission.decision_digest,
         rebuilt_intent.intent_digest,
-        bridge.bridge_digest,
+        rebuilt_bridge.bridge_digest,
         rebuilt_run.episode_run_digest,
         rebuilt_run.fill_simulation_result_digest,
         rebuilt_run.position_transition_digest,
