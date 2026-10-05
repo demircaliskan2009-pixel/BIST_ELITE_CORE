@@ -47,6 +47,7 @@ precedent, not advice.
 | correlation cap | With unknown-correlation=1.0 fail-closed, a tight cap effectively forces evidence production before diversification credit is granted — that is intended |
 | ladder thresholds + probation windows | Fast promotion = capital efficiency vs regime-luck promotion; slow demotion = stability vs bleed |
 | portfolio-stop levels | Hard stops protect capital but crystallize drawdowns; levels must be pre-committed to avoid discretionary panic/greed |
+| portfolio performance weights (consumer: `paper_portfolio_performance_path_policy.py`) | They fix the one synthetic path RG-4 measures portfolio drawdown on: concentrated weight makes portfolio drawdown track one sleeve, while spread weight can hide one sleeve's drawdown inside the blend. They are synthetic performance weights only, never derived from or read as budgets, caps, reference notionals, capital or RG-7 allocation. One strictly positive weight per declared sleeve, exact sum one, fixed for the evidence window |
 
 ## 6. RF — regime filter (consumer: `regime_feature_policy.py`)
 
