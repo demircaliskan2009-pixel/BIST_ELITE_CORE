@@ -36,11 +36,13 @@ Methodology ``RG5_PEARSON_CORRELATION_METHODOLOGY_V1`` (code-defined rule set
   ``rho = Sxy / sqrt(Sxx*Syy)``. The moments are exact ``Fraction`` values, and the sample-versus-population
   denominator cancels, so it is no choice. A zero ``Sxx`` or ``Syy`` leaves the correlation undefined: a worst-case
   unknown. An exact algebraic ``+1`` or ``-1`` is preserved exactly;
-* decimal policy ``decimal_quantized_scale_18_round_half_even_internal_precision_80.v1``: the exact moments leave
-  ``Fraction`` arithmetic only for the irrational square root and the final division, evaluated in ``Decimal``
-  through one fresh, fully specified context (precision 80, ``ROUND_HALF_EVEN``, fixed exponent limits and traps)
-  passed to every operation. The thread's ambient context is never read or set. A public value has exactly 18
-  fractional digits, rounded half-even, with signed zero normalized to positive zero, and lies in ``[-1, 1]``;
+* decimal policy ``decimal_quantized_scale_18_round_half_even_internal_precision_80.v1``: the public value is
+  ``rho`` rounded half-even to exactly 18 fractional digits. A ``Decimal`` evaluation of the irrational square root and
+  the final division at precision 80, through one fresh, fully specified context (``ROUND_HALF_EVEN``, fixed exponent
+  limits and traps) passed to every operation, only proposes a candidate unit. The published unit is decided by exact
+  rational comparisons of ``(2 * 10**18 * Sxy)**2`` with ``Sxx*Syy`` times the squared half-unit boundaries, so no
+  input digit beyond any fixed precision is lost and there is no second rounding. The thread's ambient context is
+  never read or set. Signed zero is normalized to positive zero, and the value lies in ``[-1, 1]``;
 * unknown: a missing sleeve, a sleeve whose RG-3 evidence is not READY or not current, insufficient overlap, or an
   undefined estimator makes the pair ``WORST_CASE_UNKNOWN``. Its effective correlation is exactly
   ``1.000000000000000000``: never zero, never dropped, never the governed cap.
@@ -115,6 +117,9 @@ _RULE_SET_V1: dict[str, object] = {
     "perfect_correlation_rule_id": "exact_algebraic_plus_or_minus_one_preserved_exactly.v1",
     "decimal_policy_id": "decimal_quantized_scale_18_round_half_even_internal_precision_80.v1",
     "decimal_context_rule_id": "one_fresh_fully_specified_context_passed_to_every_operation_ambient_never_used.v1",
+    "rounding_adjudication_rule_id": (
+        "exact_squared_half_unit_boundary_comparisons_decide_the_half_even_unit_the_decimal_value_is_a_candidate.v1"
+    ),
     "decimal_scale": 18,
     "decimal_internal_precision": 80,
     "decimal_rounding": "ROUND_HALF_EVEN",
@@ -469,31 +474,72 @@ def _decimal_units(context: Context, value: Fraction) -> Decimal:
     return context.divide(Decimal(value.numerator, context), Decimal(value.denominator, context))
 
 
-def _render_correlation(sxy: Fraction, product: Fraction) -> str:
-    """``Sxy / sqrt(product)`` quantized half-even to the public scale; an exact algebraic +1 or -1 stays exact.
+def _candidate_units(sxy: Fraction, product: Fraction) -> int:
+    """A precision-80 ``Decimal`` approximation of ``|Sxy| / sqrt(product)`` in ``10**-_SCALE`` units: a candidate only.
 
-    Every ``Decimal`` operation receives the one explicit context, and the quantized value is read back through
-    ``as_tuple``, so no step reads or sets the thread's ambient context.
+    Every operation receives the one explicit context and the quantized value is read back through ``as_tuple``, so no
+    step reads or sets the thread's ambient context. The candidate never decides the published unit by itself.
     """
 
-    if sxy * sxy == product:
-        return _render_units(_UNITS if sxy > 0 else -_UNITS)
     context = _decimal_context()
     try:
-        numerator = _decimal_units(context, sxy)
+        numerator = _decimal_units(context, abs(sxy))
         denominator = context.sqrt(_decimal_units(context, product))
         quantum = Decimal((0, (1,), -_SCALE), context)
-        sign, digits, exponent = context.quantize(context.divide(numerator, denominator), quantum).as_tuple()
+        _, digits, exponent = context.quantize(context.divide(numerator, denominator), quantum).as_tuple()
     except (ArithmeticError, TypeError, ValueError) as exc:
         raise _fail("correlation_decimal_evaluation_failed") from exc
     if exponent != -_SCALE:
         raise _fail("correlation_decimal_evaluation_failed")
-    magnitude = 0
+    candidate = 0
     for digit in digits:
-        magnitude = magnitude * 10 + digit
-    if magnitude > _UNITS:
-        raise _fail("correlation_out_of_bounds")
-    return _render_units(-magnitude if sign else magnitude)
+        candidate = candidate * 10 + digit
+    return candidate
+
+
+def _rounds_half_even_to(units: int, doubled_square: Fraction) -> bool:
+    """Whether ``units`` is the half-even rounding of ``t >= 0``, given exactly ``doubled_square == (2 * t) ** 2``.
+
+    ``t`` must lie strictly inside ``(units - 1/2, units + 1/2)``, or on one of those boundaries with ``units`` even.
+    Both sides of every boundary comparison are non-negative, so squaring them keeps it exact: ``t < units + 1/2`` iff
+    ``doubled_square < (2 * units + 1) ** 2``, and ``t > units - 1/2`` iff ``doubled_square > (2 * units - 1) ** 2``.
+    """
+
+    upper = (2 * units + 1) ** 2
+    if doubled_square > upper or (doubled_square == upper and units % 2 == 1):
+        return False
+    if units == 0:
+        return True
+    lower = (2 * units - 1) ** 2
+    return doubled_square > lower or (doubled_square == lower and units % 2 == 0)
+
+
+def _correlation_units(sxy: Fraction, product: Fraction) -> int:
+    """The signed scale-18 half-even unit of ``Sxy / sqrt(product)``, decided by exact rational comparisons.
+
+    ``doubled_square = (2 * 10**18 * |rho|) ** 2`` is exact, so no input digit is lost before the decision. The
+    precision-80 candidate is within one unit of the exact rounding: each of its four ``Decimal`` steps is correctly
+    rounded to 80 significant digits, inside an exponent range the accepted input bounds never leave, so its relative
+    error stays below ``10**-78``. As ``10**18 * |rho| <= 10**18``, the candidate before its own rounding is within
+    ``10**-60`` units of ``10**18 * |rho|``, and two reals closer than one unit round to integers at most one apart.
+    Exactly one integer passes the exact half-even boundary test; it is published, with no second rounding. Should no
+    integer of that one-unit neighbourhood pass, the evaluation fails closed instead of publishing.
+    """
+
+    doubled_square = 4 * _UNITS * _UNITS * sxy * sxy / product
+    candidate = _candidate_units(sxy, product)
+    for units in (candidate, candidate - 1, candidate + 1):
+        if 0 <= units <= _UNITS and _rounds_half_even_to(units, doubled_square):
+            return -units if sxy < 0 else units
+    raise _fail("correlation_rounding_not_adjudicated")
+
+
+def _render_correlation(sxy: Fraction, product: Fraction) -> str:
+    """``Sxy / sqrt(product)`` at the public scale, rounded half-even by exact adjudication; +1 and -1 stay exact."""
+
+    if sxy * sxy == product:
+        return _render_units(_UNITS if sxy > 0 else -_UNITS)
+    return _render_units(_correlation_units(sxy, product))
 
 
 def _pearson(xs: tuple[Fraction, ...], ys: tuple[Fraction, ...]) -> PaperPearsonCorrelationMeasurement:

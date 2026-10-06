@@ -799,6 +799,184 @@ def test_invalid_estimator_input_is_refused(x: object, y: object, code: str) -> 
         measure_paper_pearson_correlation(x, y)  # type: ignore[arg-type]
 
 
+# --- exact scale-18 rounding adjudication (RG5_PUBLIC_PEARSON_ROUNDING_BOUNDARY_LOSS_V1) -----------------------------
+
+# Two SYNTHETIC exact-tie families: y permutes x, so Syy == Sxx and rho == Sxy / Sxx is an odd multiple of 2**-19,
+# exactly on a scale-18 half-unit boundary; each carries its lower and upper neighbouring public value.
+TIE_FAMILIES: dict[str, tuple[tuple[str, ...], tuple[str, ...], tuple[str, str]]] = {
+    "negative_even_floor": (
+        ("-0.083", "-0.051", "0.095", "0.522", "-0.483"),
+        ("-0.083", "-0.051", "0.095", "-0.483", "0.522"),
+        ("-0.926469802856445312", "-0.926469802856445313"),
+    ),
+    "positive_odd_floor": (
+        ("-0.317", "0.223", "-0.337", "0.505", "-0.074"),
+        ("-0.074", "0.223", "-0.337", "0.505", "-0.317"),
+        ("0.887372970581054687", "0.887372970581054688"),
+    ),
+}
+# The audited public input: the negative tie family with -0.083 moved by +10**-100 (103 characters).
+AUDIT_X = list(TIE_FAMILIES["negative_even_floor"][0])
+AUDIT_Y = ["-0." + str(83 * 10**97 - 1).zfill(100), "-0.051", "0.095", "-0.483", "0.522"]
+AUDIT_EXPECTED = "-0.926469802856445313"
+
+
+def oracle_by_bisection(xs: Sequence[Fraction], ys: Sequence[Fraction]) -> str | None:
+    """A second, independently structured exact oracle: raw-sum moments and an integer bisection over the units.
+
+    With ``a = n*sum(x*x) - sum(x)**2``, ``b`` likewise and ``c = n*sum(x*y) - sum(x)*sum(y)``, ``t = 10**18 * |rho|``
+    satisfies ``(2*t)**2 == 4 * 10**36 * c**2 / (a*b)``. The half-even unit is the largest ``m`` with ``m - 1/2 <= t``,
+    moved down to the even neighbour when ``t`` sits exactly on ``m - 1/2``.
+    """
+
+    count = len(xs)
+    a = count * sum(v * v for v in xs) - sum(xs) ** 2
+    b = count * sum(v * v for v in ys) - sum(ys) ** 2
+    c = count * sum(u * v for u, v in zip(xs, ys, strict=True)) - sum(xs) * sum(ys)
+    if a == 0 or b == 0:
+        return None
+    doubled = 4 * 10**36 * c * c / (a * b)
+    numerator, denominator = doubled.numerator, doubled.denominator
+    low, high = 0, 10**18 + 1  # m == low always satisfies m - 1/2 <= t; m == high never does
+    while high - low > 1:
+        middle = (low + high) // 2
+        if (2 * middle - 1) ** 2 * denominator <= numerator:
+            low = middle
+        else:
+            high = middle
+    if low > 0 and (2 * low - 1) ** 2 * denominator == numerator and low % 2 == 1:
+        low -= 1
+    sign = "-" if c < 0 and low else ""
+    return f"{sign}{low // 10**18}.{low % 10**18:018d}"
+
+
+def exact_text(value: Fraction) -> str:
+    """Canonical plain decimal text of a terminating SYNTHETIC test value, by exact integer arithmetic."""
+
+    rest, twos, fives = value.denominator, 0, 0
+    while rest % 2 == 0:
+        rest, twos = rest // 2, twos + 1
+    while rest % 5 == 0:
+        rest, fives = rest // 5, fives + 1
+    assert rest == 1
+    scale = max(twos, fives)
+    whole, fraction = divmod(abs(value.numerator) * 10**scale // value.denominator, 10**scale)
+    rendered = f"{whole}.{fraction:0{scale}d}".rstrip("0").rstrip(".") if scale else str(whole)
+    return f"-{rendered}" if value < 0 else rendered
+
+
+def moved(text: str, exponent: int, sign: int) -> str:
+    return exact_text(Fraction(text) + sign * Fraction(1, 10**exponent))
+
+
+def decimal_rounding(x: Sequence[str], y: Sequence[str], *, precision: int) -> str:
+    """What a one-shot ``Decimal`` evaluation at ``precision`` rounds to, recomputed independently of the module."""
+
+    xs, ys = [Fraction(v) for v in x], [Fraction(v) for v in y]
+    mean_x, mean_y = sum(xs, Fraction(0)) / len(xs), sum(ys, Fraction(0)) / len(ys)
+    sxy = sum(((u - mean_x) * (v - mean_y) for u, v in zip(xs, ys, strict=True)), Fraction(0))
+    product = sum(((u - mean_x) ** 2 for u in xs), Fraction(0)) * sum(((v - mean_y) ** 2 for v in ys), Fraction(0))
+    context = decimal.Context(
+        prec=precision,
+        rounding=decimal.ROUND_HALF_EVEN,
+        Emin=-999999,
+        Emax=999999,
+        traps=[decimal.InvalidOperation, decimal.DivisionByZero, decimal.Overflow],
+    )
+    numerator = context.divide(Decimal(sxy.numerator), Decimal(sxy.denominator))
+    root = context.sqrt(context.divide(Decimal(product.numerator), Decimal(product.denominator)))
+    return format(context.quantize(context.divide(numerator, root), Decimal("1e-18")), "f")
+
+
+def test_the_audited_beyond_half_input_publishes_the_exact_half_even_unit() -> None:
+    assert max(len(text) for text in AUDIT_X + AUDIT_Y) == 103
+    xs, ys = [Fraction(v) for v in AUDIT_X], [Fraction(v) for v in AUDIT_Y]
+    assert oracle_correlation(xs, ys) == oracle_by_bisection(xs, ys) == AUDIT_EXPECTED
+    assert decimal_rounding(AUDIT_X, AUDIT_Y, precision=240) == AUDIT_EXPECTED  # high-precision corroboration
+    assert measured(AUDIT_X, AUDIT_Y) == measured(AUDIT_Y, AUDIT_X) == AUDIT_EXPECTED
+    # The exact value lies strictly beyond the tie; a one-shot precision-80 rounding cannot see the 1e-100 move.
+    assert decimal_rounding(AUDIT_X, AUDIT_Y, precision=80) == "-0.926469802856445312"
+
+
+@pytest.mark.parametrize("family", sorted(TIE_FAMILIES))
+@pytest.mark.parametrize("exponent", [19, 79, 80, 81, 100, 1000])
+def test_near_half_inputs_round_exactly_on_both_sides_of_the_boundary(family: str, exponent: int) -> None:
+    x, y, neighbours = TIE_FAMILIES[family]
+    seen: set[str] = set()
+    for vector in (0, 1):
+        for index in range(5):
+            for sign in (-1, 1):
+                xs, ys = list(x), list(y)
+                target = xs if vector == 0 else ys
+                target[index] = moved(target[index], exponent, sign)
+                exact_x, exact_y = [Fraction(v) for v in xs], [Fraction(v) for v in ys]
+                expected = oracle_correlation(exact_x, exact_y)
+                assert expected == oracle_by_bisection(exact_x, exact_y)
+                assert measured(xs, ys) == expected
+                seen.add(str(expected))
+    assert seen == set(neighbours)  # moves above and below the half boundary give the upper and the lower unit
+
+
+def test_information_beyond_any_fixed_decimal_precision_decides_the_published_unit() -> None:
+    one_shot_wrong = 0
+    for x, y, _ in TIE_FAMILIES.values():
+        for exponent in (100, 1000):
+            for index in range(5):
+                for sign in (-1, 1):
+                    ys = list(y)
+                    ys[index] = moved(ys[index], exponent, sign)
+                    exact = oracle_correlation([Fraction(v) for v in x], [Fraction(v) for v in ys])
+                    assert measured(x, ys) == exact
+                    one_shot_wrong += decimal_rounding(x, ys, precision=80) != exact
+    assert one_shot_wrong > 0  # a one-shot precision-80 rounding loses these digits; the adjudication never does
+
+
+@pytest.mark.parametrize("family", sorted(TIE_FAMILIES))
+def test_a_move_near_the_public_text_bound_still_decides_the_unit(family: str) -> None:
+    x, y, neighbours = TIE_FAMILIES[family]
+    seen: set[str] = set()
+    for sign in (-1, 1):
+        ys = list(y)
+        ys[0] = moved(ys[0], 4000, sign)
+        assert 4000 < len(ys[0]) <= 4096
+        exact_x, exact_y = [Fraction(v) for v in x], [Fraction(v) for v in ys]
+        expected = oracle_correlation(exact_x, exact_y)
+        assert measured(x, ys) == expected == oracle_by_bisection(exact_x, exact_y)
+        seen.add(str(expected))
+    assert seen == set(neighbours)
+
+
+def test_returns_at_the_public_text_bound_are_measured_exactly() -> None:
+    digits = "8203915746"
+    xs = [f"0.{(digits[shift:] + digits[:shift]) * 410}"[:4095] + "7" for shift in range(5)]
+    ys = [f"-0.{(digits[::-1][shift:] + digits[::-1][:shift]) * 410}"[:4095] + "3" for shift in range(5)]
+    assert max(len(text) for text in xs + ys) == 4096
+    exact_x, exact_y = [Fraction(v) for v in xs], [Fraction(v) for v in ys]
+    expected = oracle_correlation(exact_x, exact_y)
+    assert expected is not None
+    assert measured(xs, ys) == expected == oracle_by_bisection(exact_x, exact_y)
+
+
+def test_the_decimal_candidate_never_decides_by_itself(monkeypatch: pytest.MonkeyPatch) -> None:
+    xs, ys = [Fraction(v) for v in AUDIT_X], [Fraction(v) for v in AUDIT_Y]
+    mean_x, mean_y = sum(xs, Fraction(0)) / 5, sum(ys, Fraction(0)) / 5
+    sxy = sum(((u - mean_x) * (v - mean_y) for u, v in zip(xs, ys, strict=True)), Fraction(0))
+    product = sum(((u - mean_x) ** 2 for u in xs), Fraction(0)) * sum(((v - mean_y) ** 2 for v in ys), Fraction(0))
+    exact_units = int(AUDIT_EXPECTED.lstrip("-").replace(".", ""))
+    assert correlation_module._candidate_units(sxy, product) == exact_units - 1  # the precision-80 candidate is off
+    for offset in (-1, 0, 1):
+        monkeypatch.setattr(
+            correlation_module, "_candidate_units", lambda _sxy, _product, units=exact_units + offset: units
+        )
+        assert measured(AUDIT_X, AUDIT_Y) == AUDIT_EXPECTED
+    for offset in (-2, 2):
+        monkeypatch.setattr(
+            correlation_module, "_candidate_units", lambda _sxy, _product, units=exact_units + offset: units
+        )
+        with _raises("correlation_rounding_not_adjudicated"):
+            measured(AUDIT_X, AUDIT_Y)
+
+
 # --- zero variance, lookback, currency and overlap over genuine worlds -----------------------------------------------
 
 
@@ -984,6 +1162,7 @@ _AMBIENT_CASES = (
     (["1", "2", "4"], ["1", "3", "2"]),
     (["-83", "-51", "95", "522", "-483"], ["-83", "-51", "95", "-483", "522"]),
     (["0.012", "-0.003", "0.007"], ["0.4", "0.1", "-0.25"]),
+    (AUDIT_X, AUDIT_Y),
 )
 
 
@@ -1324,7 +1503,7 @@ def test_single_construction_site_serves_builder_and_verifier() -> None:
 def test_no_production_values_or_defaults_exist() -> None:
     integers, decimals = world.module_literals(correlation_module)
     # Character, wire and Decimal representation bounds, the public scale, the pair size, the decimal base and the day.
-    assert integers <= {0, 1, 2, 10, 18, 32, 80, 127, 256, 4096, 999999, world.DAY_NS, INT64_MAX}
+    assert integers <= {0, 1, 2, 4, 10, 18, 32, 80, 127, 256, 4096, 999999, world.DAY_NS, INT64_MAX}
     assert decimals <= {"0", "9", UNKNOWN_EFFECTIVE}
     flags = dict(PAPER_SLEEVE_CORRELATION_NON_CLAIM_FLAGS)
     for record_type in (
@@ -1364,6 +1543,7 @@ def test_rule_set_digest_commits_the_methodology() -> None:
         ("unknown_rule_id", "never_zero_never_dropped_never_the_cap"),
         ("observation_rule_id", "no_positional_zip"),
         ("decision_ownership_rule_id", "rg5_decides_nothing"),
+        ("rounding_adjudication_rule_id", "exact_squared_half_unit_boundary_comparisons_decide"),
         ("regime_rule_id", "pending_until_an_accepted_rf_chain"),
     ):
         assert phrase in str(rule_set[name]), name
@@ -1414,7 +1594,9 @@ def test_design_doc_records_the_rg5_methodology() -> None:
         "sample-versus-population denominator cancels",
         "zero variance in either aligned vector makes the pair unknown",
         "`decimal_quantized_scale_18_round_half_even_internal_precision_80.v1`",
-        "exactly 18 fractional digits, ROUND_HALF_EVEN, an explicit precision-80 context, signed zero normalized",
+        "exactly 18 fractional digits, ROUND_HALF_EVEN, signed zero normalized; an explicit precision-80 context"
+        " only proposes a candidate for the irrational value, and exact rational comparisons against the half-unit"
+        " boundaries decide the published digit, so it is correctly rounded for every accepted input",
         "an unknown pair's effective correlation is exactly `1.000000000000000000`",
         "READY means the complete conservative matrix, never that every pair was observed",
         "RG-5 decides no cap breach, diversification credit or allocation",

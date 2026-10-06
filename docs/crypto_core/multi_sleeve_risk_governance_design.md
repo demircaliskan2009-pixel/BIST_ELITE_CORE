@@ -47,8 +47,10 @@ stay OUT of scope. Everything is paper-only; allocation is evidence output, neve
      sample-versus-population denominator cancels; zero variance in either aligned vector makes
      the pair unknown;
    - public values follow `decimal_quantized_scale_18_round_half_even_internal_precision_80.v1`:
-     exactly 18 fractional digits, ROUND_HALF_EVEN, an explicit precision-80 context, signed zero
-     normalized;
+     exactly 18 fractional digits, ROUND_HALF_EVEN, signed zero normalized; an explicit precision-80
+     context only proposes a candidate for the irrational value, and exact rational comparisons
+     against the half-unit boundaries decide the published digit, so it is correctly rounded for
+     every accepted input;
    - an unknown pair's effective correlation is exactly `1.000000000000000000`; READY means the
      complete conservative matrix, never that every pair was observed.
    RG-5 decides no cap breach, diversification credit or allocation: RG-7 applies worst-case
