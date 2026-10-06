@@ -31,9 +31,30 @@ stay OUT of scope. Everything is paper-only; allocation is evidence output, neve
    - RG-4 outputs both the current (end-of-window) and the maximum peak distance of every
      sleeve and of the portfolio, and decides nothing.
 4. **RG-5 `paper_sleeve_correlation_evidence.py`**: pairwise sleeve return correlations over
-   aligned UTC-day indices. FAIL-CLOSED RULE: insufficient overlap or missing data → correlation
-   is treated as WORST-CASE 1.0 for budget math (never 0, never skipped). Regime-stratified
-   correlation is a pending field until the RF chain merges.
+   aligned UTC-day indices, measurement evidence only (`RG5_PEARSON_CORRELATION_METHODOLOGY_V1`).
+   FAIL-CLOSED RULE: insufficient overlap or missing data → correlation is treated as WORST-CASE
+   1.0 for budget math (never 0, never skipped). Rules:
+   - the complete canonical pair matrix: every unordered pair of envelope-declared sleeves exactly
+     once as `(min, max)`, lexicographically sorted; a one-sleeve envelope has none;
+   - exact UTC-day alignment: RG-3 daily return `i` is the UTC day starting at `window_start_ns`
+     plus `i` days, so pairs align by day identity, never by position, interpolation,
+     carry-forward or backfill;
+   - the governed trailing lookback `[evaluation_end - lookback_window_days, evaluation_end)` and
+     the governed `min_overlap_days`, both only from the re-pinned RG-2 envelope, with an injected
+     UTC-day-aligned evaluation end; a sleeve counts only when its evidence window ends exactly at
+     the evaluation end, so no later observation, and no readiness that depends on one, takes part;
+   - Pearson product-moment `rho = Sxy / sqrt(Sxx * Syy)` over exact `Fraction` moments, so the
+     sample-versus-population denominator cancels; zero variance in either aligned vector makes
+     the pair unknown;
+   - public values follow `decimal_quantized_scale_18_round_half_even_internal_precision_80.v1`:
+     exactly 18 fractional digits, ROUND_HALF_EVEN, signed zero normalized; an explicit precision-80
+     context only proposes a candidate for the irrational value, and exact rational comparisons
+     against the half-unit boundaries decide the published digit, so it is correctly rounded for
+     every accepted input;
+   - an unknown pair's effective correlation is exactly `1.000000000000000000`; READY means the
+     complete conservative matrix, never that every pair was observed.
+   RG-5 decides no cap breach, diversification credit or allocation: RG-7 applies worst-case
+   correlation. Regime-stratified correlation is a pending field until the RF chain merges.
 5. **RG-6 `paper_sleeve_promotion_demotion_decision.py`**: ladder transitions
    (PROBATION → STANDARD → EXPANDED, and demotions) from RG-3/4/5 evidence against envelope
    thresholds; single-stratum-concentrated returns (via RF conditioned performance, when
