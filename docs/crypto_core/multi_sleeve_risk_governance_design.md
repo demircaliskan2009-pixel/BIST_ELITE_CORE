@@ -94,7 +94,37 @@ stay OUT of scope. Everything is paper-only; allocation is evidence output, neve
    (a) kill/quarantine override FIRST (killed sleeve → allocation 0 BEFORE any arithmetic);
    (b) worst-case correlation applied to combined exposure; (c) envelope check — ANY breach →
    `ALLOCATION_REJECTED` for the whole proposal (NO silent scaling, no partial fits);
-   (d) only then per-sleeve arithmetic. Output is digest-bound allocation EVIDENCE.
+   (d) only then per-sleeve arithmetic. Output is digest-bound allocation EVIDENCE. Rules, under the
+   controller structural authority `RG7_ALLOCATION_AUTHORITY_AND_MATH_POLICY_V1`:
+   - current lifecycle authority (`RG7_HUMAN_GOVERNANCE_PAPER_CURRENT_HEAD_ATTESTATION_V1`): EF-8 stays
+     historical only and is not changed. A `PaperLifecycleHeadAuthority` is the bounded paper-only claim
+     that, at one exact evaluation end, HUMAN_GOVERNANCE attests one re-proven, advancing EF-8 receipt as
+     the current lifecycle head of one allocation subject. The approval supplies the "no later successor"
+     fact, which is never inferred from the lifecycle sequence, an effective time, the newest object, a
+     state, a digest or caller ordering; `TEST_ONLY_SYNTHETIC` never establishes it, and no global or live
+     currentness is claimed;
+   - exactly one allocation subject per envelope-declared sleeve
+     (`RG7_ONE_ALLOCATION_SUBJECT_PER_SLEEVE_V1`): one re-proven EF-7 PASS admission that opened the
+     governed head's current cycle, one lifecycle-head authority and one intra-sleeve risk-budget source;
+     no duplicate, missing or extra sleeve;
+   - a sleeve's pre-kill proposal is exactly its re-proven intra-sleeve `total_reserved_budget`: no
+     performance, Sharpe, Kelly, volatility, risk-parity or tier sizing. RG-6 has no numeric effect,
+     because RG-2 defines no tier-to-budget multiplier;
+   - (a) a DISABLED or QUARANTINE governed head zeroes the sleeve and every record, and no numeric field
+     of it enters the total, a sleeve or market sum, the positive-sleeve count or a correlation pair; an
+     unproven head is never ACTIVE and leaves the decision NEEDS_GOVERNANCE_APPROVAL with no exposure
+     evaluated;
+   - (b) `RG7_CORRELATION_ACTIVE_PAIR_CAP_RULE_V1`: a pair is exposed only when both of its sleeves carry a
+     positive post-kill budget, and its RG-5 effective correlation (exactly 1 for WORST_CASE_UNKNOWN) must
+     not exceed the envelope's pairwise cap. No covariance, square-root portfolio risk,
+     correlation-weighted scaling, diversification credit, averaging or matrix inversion;
+   - (c) every positive post-kill record's instrument must equal an envelope market inside the EF-7 pinned
+     universe, a market's exposure is the exact sum across sleeves, and the total, sleeve, market,
+     positive-sleeve-count and exposed-pair caps are inclusive. A rejected proposal allocates zero
+     everywhere and keeps its requests and exact breach reasons as evidence;
+   - (d) READY sets every final allocation to its exact post-kill reservation. READY is accepted paper
+     allocation evidence, never capital allocated, an order or execution permitted, or live, shadow or
+     operational readiness.
 7. **RG-8 `paper_portfolio_governance_decision.py`**: the terminal governance record — binds
    envelope + all evidence + allocation into one decision; portfolio-stop conditions evaluated
    from envelope rules only (advisory regime-drift warnings never trigger stops by themselves).
