@@ -14,6 +14,7 @@ import functools
 import inspect
 import json
 import re
+import sys
 from dataclasses import FrozenInstanceError, fields, replace
 from fractions import Fraction
 from pathlib import Path
@@ -1116,6 +1117,186 @@ def test_an_older_prior_is_another_history_never_a_current_head() -> None:
     _assert_intact(fork)
 
 
+# --- C2. the non-recursive lineage re-proof (RG6_RECURSIVE_LINEAGE_REPROOF_DEPTH_EXHAUSTION_V1) ----------------------
+
+
+def _frames() -> int:
+    """The number of Python frames on the stack of this function's caller."""
+
+    frame, depth = sys._getframe(1), 0
+    while frame is not None:
+        depth += 1
+        frame = frame.f_back
+    return depth
+
+
+def _verify_within(built: Decided, headroom: int, wrappers: int = 0) -> EdgeEvidenceVerification | None:
+    """Verify ``built`` through ``wrappers`` extra caller frames with the interpreter limited to ``headroom`` frames
+    above this helper; ``None`` when the stack runs out before the total verifier is reached.
+
+    TEST-ONLY: the recursion limit is lowered for this one call and always restored.
+    """
+
+    def through(remaining: int) -> EdgeEvidenceVerification:
+        return verify(built.decision, built.inputs) if remaining == 0 else through(remaining - 1)
+
+    default = sys.getrecursionlimit()
+    sys.setrecursionlimit(_frames() + headroom)
+    try:
+        return through(wrappers)
+    except RecursionError:
+        return None
+    finally:
+        sys.setrecursionlimit(default)
+
+
+def _intact_within(built: Decided, headroom: int, wrappers: int = 0) -> bool:
+    verification = _verify_within(built, headroom, wrappers)
+    return verification is not None and verification.intact is True
+
+
+@functools.lru_cache(maxsize=None)
+def _two_link_headroom() -> int:
+    """The minimal stack headroom that verifying the two-link lineage needs, by binary search."""
+
+    low, high = 5, 128
+    assert _intact_within(chain_link(1), high)
+    while low < high:
+        middle = (low + high) // 2
+        if _intact_within(chain_link(1), middle):
+            high = middle
+        else:
+            low = middle + 1
+    return low
+
+
+def test_the_stack_a_lineage_needs_does_not_grow_with_its_length() -> None:
+    headroom = _two_link_headroom()
+    # A recursive re-proof needs several more frames per extra link; this one needs exactly the same headroom.
+    assert _intact_within(chain_link(4), headroom)
+    assert not _intact_within(chain_link(4), headroom - 1)
+
+
+def test_a_lineage_verifies_identically_at_any_caller_depth() -> None:
+    built, headroom = chain_link(2), _two_link_headroom()
+    # One absolute recursion limit for every caller: behind eight wrappers the verifier keeps exactly the headroom a
+    # two-link lineage needs, so a result that depended on caller depth or on lineage length would differ.
+    results = [_verify_within(built, headroom + 8, wrappers) for wrappers in (0, 1, 8)]
+    assert results[0] is not None and results[0].intact is True
+    assert results[0].recomputed_digest == built.decision.decision_digest
+    assert results == [results[0]] * 3
+
+
+def test_a_replay_rebuilds_each_ancestor_once_at_one_stack_depth(monkeypatch: pytest.MonkeyPatch) -> None:
+    built = chain_link(4)
+    real = decision_module._build_decision_from_proven_lineage
+    calls: list[tuple[str, int]] = []
+
+    def counted(
+        inputs: PaperSleevePromotionDemotionInputs, predecessor: object
+    ) -> PaperSleevePromotionDemotionDecision:
+        calls.append((inputs.decision_id, _frames()))
+        return real(inputs, predecessor)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(decision_module, "_build_decision_from_proven_lineage", counted)
+    assert verify(built.decision, built.inputs).intact is True
+    # N nodes are assembled exactly N times, oldest first, never N + (N - 1) + ... prefix replays.
+    assert [name for name, _ in calls] == [f"rg6-chain-{index}" for index in range(len(CHAIN_WINDOWS))]
+    ancestor_depths = {depth for _, depth in calls[:-1]}
+    assert ancestor_depths == {calls[-1][1] + 1}
+
+
+def _rechained(*pairs: tuple[PaperSleevePromotionDemotionInputs, PaperSleevePromotionDemotionDecision]) -> object:
+    """Nest ``(inputs, decision)`` pairs, oldest first, on the chain seed, re-pointing each inputs at its predecessor."""
+
+    state: object = governed_seed(ladder_envelope(*CHAIN_LADDER))
+    for inputs, decision in pairs:
+        state = PaperSleeveLadderPriorDecision(replace(inputs, ladder_state=state), decision)
+    return state
+
+
+def _pair(index: int) -> tuple[PaperSleevePromotionDemotionInputs, PaperSleevePromotionDemotionDecision]:
+    return chain_link(index).inputs, chain_link(index).decision
+
+
+def _resealed(
+    index: int, **changes: object
+) -> tuple[PaperSleevePromotionDemotionInputs, PaperSleevePromotionDemotionDecision]:
+    inputs, decision = _pair(index)
+    return inputs, _reseal(decision, **changes)
+
+
+def test_an_authentic_rechained_lineage_rebuilds_the_same_decision() -> None:
+    top = replace(chain_link(4).inputs, ladder_state=_rechained(*(_pair(index) for index in range(4))))
+    assert decide(top) == chain_link(4).decision
+
+
+@pytest.mark.parametrize(
+    "pairs",
+    # Each defect sits at the earliest ancestor that exhibits it, with the rest of the chain authentic above it.
+    [
+        lambda: (_pair(0), _pair(2), _pair(3)),
+        lambda: (_pair(1), _pair(0), _pair(2), _pair(3)),
+        lambda: (_pair(0), _pair(0), _pair(1), _pair(2), _pair(3)),
+        lambda: ((_pair(0)[0], _pair(1)[1]), _pair(1), _pair(2), _pair(3)),
+        lambda: (_pair(0), (drawdown_link(0).inputs, drawdown_link(0).decision), _pair(2), _pair(3)),
+        lambda: (_pair(0), _resealed(1, prior_decision_digest="0" * 64), _pair(2), _pair(3)),
+        lambda: (_pair(0), _resealed(1, lineage_sequence=7), _pair(2), _pair(3)),
+        lambda: (_pair(0), _resealed(1, evaluation_end_ns=W0 + 31 * DAY), _pair(2), _pair(3)),
+        lambda: (_pair(0), _resealed(1, resulting_tier=STANDARD), _pair(2), _pair(3)),
+        lambda: (_pair(0), (_pair(1)[0], replace(_pair(1)[1], decision_digest="0" * 64)), _pair(2), _pair(3)),
+        lambda: (_pair(0), (replace(_pair(1)[0], evaluation_end_ns=W0 + 31 * DAY), _pair(1)[1]), _pair(2), _pair(3)),
+    ],
+    ids=[
+        "skipped_ancestor",
+        "reordered_ancestors",
+        "duplicated_ancestor",
+        "decision_with_foreign_inputs",
+        "ancestor_of_another_envelope",
+        "forged_prior_digest",
+        "forged_sequence",
+        "forged_evaluation_coordinate",
+        "resealed_resulting_tier",
+        "tampered_self_digest",
+        "inputs_off_their_evidence_end",
+    ],
+)
+def test_a_spliced_or_forged_ancestor_fails_closed(pairs) -> None:
+    top = replace(chain_link(4).inputs, ladder_state=_rechained(*pairs()))
+    with _raises("prior_decision_not_reproven"):
+        decide(top)
+
+
+def test_a_cyclic_lineage_object_graph_fails_closed() -> None:
+    later = evidence_for(ladder_envelope(*CHAIN_LADDER), CHAIN_WINDOWS[2])
+    looped = replace(chain_link(1).inputs)
+    node = PaperSleeveLadderPriorDecision(looped, chain_link(1).decision)
+    object.__setattr__(looped, "ladder_state", node)  # hostile graph: the inputs lead back to their own node
+    first_inputs, second_inputs = replace(chain_link(0).inputs), replace(chain_link(1).inputs)
+    first = PaperSleeveLadderPriorDecision(first_inputs, chain_link(0).decision)
+    second = PaperSleeveLadderPriorDecision(second_inputs, chain_link(1).decision)
+    object.__setattr__(first_inputs, "ladder_state", second)
+    object.__setattr__(second_inputs, "ladder_state", first)
+    for state in (node, second):
+        inputs = decision_inputs(state, later)
+        with _raises("ladder_state_cycle"):
+            decide(inputs)
+        verification = verify(chain_link(2).decision, inputs)
+        assert (verification.intact, verification.reason_codes) == (False, codes("evidence_reconstruction_failed"))
+
+
+def test_non_advancing_state_propagates_through_every_reconstructed_ancestor() -> None:
+    first = decided(decision_inputs(ungoverned_genesis().prior(), later_world_evidence()))
+    second = decided(
+        decision_inputs(first.prior(), evidence_for(rg3t.world_envelope(), (10, 40)), decision_id="rg6-decision-2")
+    )
+    decision = second.decision
+    assert (decision.status, decision.advances, decision.lineage_sequence) == (NEEDS_GOVERNANCE, False, 2)
+    assert decision.reason_codes == codes("prior_decision_not_advancing")
+    assert decision.prior_decision_digest == first.decision.decision_digest
+    assert (decision.current_tier, decision.transition, decision.ladder_seed_advances) == (None, None, False)
+
+
 # --- D. the RG-2 envelope -------------------------------------------------------------------------------------------
 
 
@@ -1974,16 +2155,16 @@ def test_consumed_metric_texts_read_exactly() -> None:
 def test_defense_in_depth_guards_fail_closed_on_a_forged_state(
     monkeypatch: pytest.MonkeyPatch, guard: str, forge, code: str
 ) -> None:
-    intact = EdgeEvidenceVerification(True, (), "", "")
     if guard == "seed":
+        intact = EdgeEvidenceVerification(True, (), "", "")
         monkeypatch.setattr(decision_module, "verify_paper_sleeve_ladder_seed", lambda seed: intact)
         inputs = decision_inputs(forge(governed_seed()), world_evidence())
     else:
-        monkeypatch.setattr(decision_module, "verify_paper_sleeve_promotion_demotion_decision", lambda *args: intact)
-        link = world_genesis()
-        inputs = decision_inputs(
-            PaperSleeveLadderPriorDecision(link.inputs, forge(link.decision)), later_world_evidence()
-        )
+        # A forged lineage proof hands the assembly a predecessor no reconstruction could produce.
+        link, later = world_genesis(), later_world_evidence()
+        forged = forge(link.decision)
+        monkeypatch.setattr(decision_module, "_proven_predecessor", lambda state: forged)
+        inputs = decision_inputs(link.prior(), later)
     with _raises(code):
         decide(inputs)
 
@@ -2044,25 +2225,65 @@ def test_module_is_pure_and_consumes_only_its_reproven_inputs() -> None:
     )
 
 
+def _call_graph() -> dict[str, list[str]]:
+    """Every module-level function of the decision module and the plain names it calls, in source order."""
+
+    tree = ast.parse(Path(decision_module.__file__).read_text(encoding="utf-8"))
+    return {
+        function.name: [
+            node.func.id
+            for node in ast.walk(function)
+            if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+        ]
+        for function in tree.body
+        if isinstance(function, ast.FunctionDef)
+    }
+
+
+def _callers(graph: dict[str, list[str]], name: str) -> list[str]:
+    return sorted(caller for caller, called in graph.items() for _ in range(called.count(name)))
+
+
 def test_single_assembly_and_construction_sites() -> None:
     pit.assert_single_assembly_path(
         decision_module, "PaperSleeveLadderSeed", "_assemble_seed", "build_paper_sleeve_ladder_seed", "_reassemble_seed"
     )
-    world.assert_single_construction_site(
-        decision_module,
-        "PaperSleevePromotionDemotionDecision",
-        "build_paper_sleeve_promotion_demotion_decision",
-        "verify_paper_sleeve_promotion_demotion_decision",
-    )
-    tree = ast.parse(Path(decision_module.__file__).read_text(encoding="utf-8"))
-    callers = [
-        function.name
-        for function in ast.walk(tree)
-        if isinstance(function, ast.FunctionDef)
-        for node in ast.walk(function)
-        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "_evaluate_transition"
+    graph = _call_graph()
+    assembly = "_build_decision_from_proven_lineage"
+    # One construction and one transition site; the public builder and the ancestor reconstruction share that path.
+    assert _callers(graph, "PaperSleevePromotionDemotionDecision") == [assembly]
+    assert _callers(graph, "_evaluate_transition") == [assembly]
+    assert _callers(graph, assembly) == ["_proven_predecessor", "build_paper_sleeve_promotion_demotion_decision"]
+    assert _callers(graph, "build_paper_sleeve_promotion_demotion_decision") == [
+        "verify_paper_sleeve_promotion_demotion_decision"
     ]
-    assert callers == ["build_paper_sleeve_promotion_demotion_decision"]
+    # No prefix is ever re-verified from inside the module: the public decision verifier has no internal caller.
+    assert _callers(graph, "verify_paper_sleeve_promotion_demotion_decision") == []
+
+
+def test_the_lineage_proof_has_no_recursive_call_path() -> None:
+    graph = _call_graph()
+    # Payload serialization recurses only into the fixed one-level record shape (approval and ladder boundaries).
+    bounded = {"_serialize", "_to_payload"}
+    edges = {
+        name: {called for called in calls if called in graph and called not in bounded}
+        for name, calls in graph.items()
+        if name not in bounded
+    }
+    finished: set[str] = set()
+    for start in edges:
+        # Iterative depth-first search with an explicit path, so this check holds for any module size.
+        path, stack = [start], [iter(sorted(edges[start]))]
+        while stack:
+            following = next(stack[-1], None)
+            if following is None:
+                finished.add(path.pop())
+                stack.pop()
+                continue
+            assert following not in path, path + [following]
+            if following not in finished:
+                path.append(following)
+                stack.append(iter(sorted(edges[following])))
 
 
 def test_no_production_values_or_defaults_exist() -> None:

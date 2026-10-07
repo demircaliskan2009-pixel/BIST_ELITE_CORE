@@ -13,10 +13,14 @@ Ladder-state lineage:
   state fact. Only an exact ``HUMAN_GOVERNANCE`` approval of the seed id, version, seed policy digest and RG-6 rule-set
   digest advances it; a ``TEST_ONLY_SYNTHETIC`` approval never does;
 * every later decision takes the current tier and its entry ONLY from exactly one prior RG-6 decision of the same
-  lineage, re-proven by rebuilding it from its exact inputs (recursively down to the seed). The caller never supplies a
-  current tier, a tier-entry time or a previous transition. The prior must bind the same sleeve and the same envelope,
-  and the evaluation end must strictly increase. An authentic prior that does not advance propagates its status: only
-  a READY decision is a valid predecessor;
+  lineage. The caller never supplies a current tier, a tier-entry time or a previous transition. The prior must bind
+  the same sleeve and the same envelope, and the evaluation end must strictly increase. An authentic prior that does
+  not advance propagates its status: only a READY decision is a valid predecessor;
+* the lineage is re-proven without recursion. An iterative walk follows the nested priors back to the seed (exact
+  types, and an in-memory guard against a cyclic object graph), the seed is re-proven, and every ancestor is then
+  rebuilt exactly once, oldest first, through the one decision assembly path, from its own exact inputs and the
+  predecessor just rebuilt. Each rebuild must equal its carried decision canonically under an intact self-digest
+  before it becomes predecessor state, so re-proof depends neither on the lineage length nor on the caller's stack;
 * history, never current authority: a decision proves only that its exact transition, from its exact authenticated
   state, met every committed rule at its coordinate. No registry, head or latest-decision lookup exists, so
   ``current_ladder_head_proven`` is structurally False.
@@ -876,10 +880,11 @@ class _LineageState:
     unavailable: tuple[str, ...]
 
 
-def _seed_lineage(value: object, envelope: PaperPortfolioRiskEnvelope, evaluation_end: int) -> _LineageState:
-    if not verify_paper_sleeve_ladder_seed(value).intact:
-        raise _fail("ladder_seed_not_intact")
-    seed = cast(PaperSleeveLadderSeed, value)
+def _seed_lineage(
+    seed: PaperSleeveLadderSeed, envelope: PaperPortfolioRiskEnvelope, evaluation_end: int
+) -> _LineageState:
+    """The genesis state of an already re-proven seed, bound to this decision's envelope and coordinate."""
+
     if seed.rule_set_digest != PAPER_SLEEVE_PROMOTION_DEMOTION_RULE_SET_DIGEST:
         raise _fail("ladder_seed_rule_set_unsupported")
     if (seed.envelope_id, seed.envelope_version, seed.envelope_digest) != (
@@ -908,13 +913,11 @@ def _seed_lineage(value: object, envelope: PaperPortfolioRiskEnvelope, evaluatio
     )
 
 
-def _prior_lineage(value: object, envelope: PaperPortfolioRiskEnvelope, evaluation_end: int) -> _LineageState:
-    prior = cast(PaperSleeveLadderPriorDecision, value)
-    _require_exact(getattr(prior, "decision_inputs", None), PaperSleevePromotionDemotionInputs, "prior_decision_inputs")
-    _require_exact(getattr(prior, "decision", None), PaperSleevePromotionDemotionDecision, "prior_decision")
-    if not verify_paper_sleeve_promotion_demotion_decision(prior.decision, prior.decision_inputs).intact:
-        raise _fail("prior_decision_not_reproven")
-    decision = prior.decision
+def _prior_lineage(
+    decision: PaperSleevePromotionDemotionDecision, envelope: PaperPortfolioRiskEnvelope, evaluation_end: int
+) -> _LineageState:
+    """The state an already reconstructed prior decision carries forward to this decision."""
+
     if decision.rule_set_digest != PAPER_SLEEVE_PROMOTION_DEMOTION_RULE_SET_DIGEST:
         raise _fail("prior_decision_rule_set_unsupported")
     if (decision.envelope_id, decision.envelope_version, decision.envelope_digest) != (
@@ -950,12 +953,14 @@ def _prior_lineage(value: object, envelope: PaperPortfolioRiskEnvelope, evaluati
     )
 
 
-def _lineage(value: object, envelope: PaperPortfolioRiskEnvelope, evaluation_end: int) -> _LineageState:
-    if type(value) is PaperSleeveLadderSeed:
-        return _seed_lineage(value, envelope, evaluation_end)
-    if type(value) is PaperSleeveLadderPriorDecision:
-        return _prior_lineage(value, envelope, evaluation_end)
-    raise _fail("ladder_state_malformed")
+def _lineage_state(
+    predecessor: PaperSleeveLadderSeed | PaperSleevePromotionDemotionDecision,
+    envelope: PaperPortfolioRiskEnvelope,
+    evaluation_end: int,
+) -> _LineageState:
+    if type(predecessor) is PaperSleeveLadderSeed:
+        return _seed_lineage(predecessor, envelope, evaluation_end)
+    return _prior_lineage(cast(PaperSleevePromotionDemotionDecision, predecessor), envelope, evaluation_end)
 
 
 # --- evidence re-proof ----------------------------------------------------------------------------------------------
@@ -1154,23 +1159,23 @@ def _evaluate_transition(
 # --- the decision ---------------------------------------------------------------------------------------------------
 
 
-def build_paper_sleeve_promotion_demotion_decision(
+def _build_decision_from_proven_lineage(
     inputs: PaperSleevePromotionDemotionInputs,
+    predecessor: PaperSleeveLadderSeed | PaperSleevePromotionDemotionDecision,
 ) -> PaperSleevePromotionDemotionDecision:
-    """Decide one sleeve's ladder movement at ``evaluation_end_ns`` from its lineage state and re-proven evidence.
+    """The one decision assembly path, shared by the public builder and the reconstruction of every ancestor.
 
-    Malformed input and every provenance, lineage or binding defect raise ``PaperSleeveLadderError``. Missing governance
-    yields ``NEEDS_GOVERNANCE_APPROVAL``; an unavailable target measurement yields ``NOT_COMPUTABLE``; otherwise exactly
-    one HOLD, PROMOTE or DEMOTE is evaluated. Inputs are read once and never mutated.
+    ``predecessor`` is already proven by the caller: the re-proven seed, or the decision this same path has just
+    rebuilt for ``inputs.ladder_state``. Every lineage check binds this decision to it; the carried lineage is never
+    read here.
     """
 
-    _require_exact(inputs, PaperSleevePromotionDemotionInputs, "inputs")
     decision_id = _require_text(inputs.decision_id, "decision_id")
     correlation_id = _require_text(inputs.correlation_id, "correlation_id")
     evaluation_end = _require_day_coordinate(inputs.evaluation_end_ns, "evaluation_end_ns")
     envelope = _require_envelope(inputs.portfolio_risk_envelope)
     lower, upper = _require_consistent_ladder(envelope.ladder_boundaries)
-    lineage = _lineage(inputs.ladder_state, envelope, evaluation_end)
+    lineage = _lineage_state(predecessor, envelope, evaluation_end)
 
     performance = _prove_performance(inputs, envelope, evaluation_end)
     if performance.sleeve_id != lineage.sleeve_id:
@@ -1272,6 +1277,90 @@ def build_paper_sleeve_promotion_demotion_decision(
     return replace(seed, decision_digest=edge_payload_digest(_to_payload(seed), _DECISION_DIGEST_FIELD))
 
 
+# --- the non-recursive lineage proof --------------------------------------------------------------------------------
+
+
+def _lineage_nodes(state: object) -> tuple[PaperSleeveLadderSeed, tuple[PaperSleeveLadderPriorDecision, ...]]:
+    """Walk the nested priors back to the seed iteratively, newest first, reading each node only after its exact type.
+
+    Object identity is an in-memory guard against a malformed cyclic object graph only: it never enters an artifact or
+    a digest and outlives no call.
+    """
+
+    nodes: list[PaperSleeveLadderPriorDecision] = []
+    visited: set[int] = set()
+    while type(state) is not PaperSleeveLadderSeed:
+        if type(state) is not PaperSleeveLadderPriorDecision:
+            raise _fail("ladder_state_malformed")
+        node = cast(PaperSleeveLadderPriorDecision, state)
+        node_inputs = getattr(node, "decision_inputs", None)
+        _require_exact(node_inputs, PaperSleevePromotionDemotionInputs, "prior_decision_inputs")
+        _require_exact(getattr(node, "decision", None), PaperSleevePromotionDemotionDecision, "prior_decision")
+        if id(node) in visited or id(node_inputs) in visited:
+            raise _fail("ladder_state_cycle")
+        visited.update((id(node), id(node_inputs)))
+        nodes.append(node)
+        state = cast(PaperSleevePromotionDemotionInputs, node_inputs).ladder_state
+    return cast(PaperSleeveLadderSeed, state), tuple(nodes)
+
+
+def _proven_seed(seed: PaperSleeveLadderSeed) -> PaperSleeveLadderSeed:
+    if not verify_paper_sleeve_ladder_seed(seed).intact:
+        raise _fail("ladder_seed_not_intact")
+    return seed
+
+
+def _is_reconstruction(
+    carried: PaperSleevePromotionDemotionDecision, rebuilt: PaperSleevePromotionDemotionDecision
+) -> bool:
+    """The carried decision is exactly the reconstruction: an intact self-digest and canonical equality."""
+
+    payload = _to_payload(carried)
+    if payload[_DECISION_DIGEST_FIELD] != edge_payload_digest(payload, _DECISION_DIGEST_FIELD):
+        return False
+    return edge_canonical_json(payload) == edge_canonical_json(_to_payload(rebuilt))
+
+
+def _proven_predecessor(state: object) -> PaperSleeveLadderSeed | PaperSleevePromotionDemotionDecision:
+    """The proven predecessor of a decision whose ``ladder_state`` is ``state``, re-proven without recursion.
+
+    The walked lineage's seed is re-proven first. Every ancestor is then rebuilt exactly once, oldest first, through
+    ``_build_decision_from_proven_lineage`` from its own exact inputs and the predecessor just rebuilt, and it must equal
+    its carried decision before the rebuild becomes the next predecessor. The stack depth is independent of the lineage
+    length, and no prefix is re-proven twice.
+    """
+
+    seed, nodes = _lineage_nodes(state)
+    if not nodes:
+        return _proven_seed(seed)
+    predecessor: PaperSleeveLadderSeed | PaperSleevePromotionDemotionDecision
+    try:
+        predecessor = _proven_seed(seed)
+        for node in reversed(nodes):
+            rebuilt = _build_decision_from_proven_lineage(node.decision_inputs, predecessor)
+            if not _is_reconstruction(node.decision, rebuilt):
+                raise _fail("prior_decision_not_reconstructed")
+            predecessor = rebuilt
+    except Exception as exc:  # noqa: BLE001 - a lineage that cannot be re-proven completely fails closed
+        raise _fail("prior_decision_not_reproven") from exc
+    return predecessor
+
+
+def build_paper_sleeve_promotion_demotion_decision(
+    inputs: PaperSleevePromotionDemotionInputs,
+) -> PaperSleevePromotionDemotionDecision:
+    """Decide one sleeve's ladder movement at ``evaluation_end_ns`` from its lineage state and re-proven evidence.
+
+    The lineage is re-proven first, without recursion, then this decision is assembled on the same path as every
+    ancestor. Malformed input and every provenance, lineage or binding defect raise ``PaperSleeveLadderError``. Missing
+    governance yields ``NEEDS_GOVERNANCE_APPROVAL``; an unavailable target measurement yields ``NOT_COMPUTABLE``;
+    otherwise exactly one HOLD, PROMOTE or DEMOTE is evaluated. Inputs are never mutated.
+    """
+
+    _require_exact(inputs, PaperSleevePromotionDemotionInputs, "inputs")
+    return _build_decision_from_proven_lineage(inputs, _proven_predecessor(inputs.ladder_state))
+
+
 def paper_sleeve_promotion_demotion_decision_to_dict(
     decision: PaperSleevePromotionDemotionDecision,
 ) -> dict[str, object]:
@@ -1289,7 +1378,7 @@ def paper_sleeve_promotion_demotion_decision_digest(decision: PaperSleevePromoti
 def verify_paper_sleeve_promotion_demotion_decision(
     decision: object, inputs: PaperSleevePromotionDemotionInputs
 ) -> EdgeEvidenceVerification:
-    """Re-prove a decision by rebuilding it from its exact inputs, its lineage included. Total: never raises."""
+    """Re-prove a decision by rebuilding it from its exact inputs, its whole lineage included. Total: never raises."""
 
     stage = "evidence_type_invalid"
     try:
