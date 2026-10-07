@@ -1016,14 +1016,16 @@ def test_a_5000_node_lineage_is_walked_without_recursion() -> None:
         decide(top)
     assert str(failure.value.__cause__) == code("evaluation_end_not_after_the_prior_decision")
     assert verify(carried, top).reason_codes == codes("evidence_reconstruction_failed")
-    # Generic equality, hashing and repr stay flat: a node compares by identity, and inputs leave the lineage out.
-    assert (
-        top == top
-        and node == node
-        and hash(node) == hash(node)
-        and node != PaperSleeveLadderPriorDecision(base, carried)
-    )
+    # Generic equality, hashing and repr stay flat. A separately built twin lineage of identical content compares unequal
+    # at once by node identity (value equality would descend 5000 levels), nodes hash by identity, and repr renders one
+    # node and leaves the lineage out.
+    twin = PaperSleeveLadderPriorDecision(base, carried)
+    for _ in range(4999):
+        twin = PaperSleeveLadderPriorDecision(replace(base, ladder_state=twin), carried)
+    assert (top == replace(base, ladder_state=twin)) is False
+    assert hash(node) != hash(twin)
     assert "ladder_state" not in repr(top)
+    assert repr(node).count("PaperSleeveLadderPriorDecision") == 1
 
 
 def test_a_cyclic_lineage_object_graph_fails_closed() -> None:
