@@ -56,10 +56,39 @@ stay OUT of scope. Everything is paper-only; allocation is evidence output, neve
    RG-5 decides no cap breach, diversification credit or allocation: RG-7 applies worst-case
    correlation. Regime-stratified correlation is a pending field until the RF chain merges.
 5. **RG-6 `paper_sleeve_promotion_demotion_decision.py`**: ladder transitions
-   (PROBATION → STANDARD → EXPANDED, and demotions) from RG-3/4/5 evidence against envelope
-   thresholds; single-stratum-concentrated returns (via RF conditioned performance, when
-   available) is a valid demotion reason. RG-6 owns how ladder thresholds consume RG-4 sleeve
-   drawdown evidence (current or maximum peak distance).
+   (PROBATION → STANDARD → EXPANDED, and demotions) of one sleeve from re-proven RG-3/4/5
+   evidence against the re-pinned envelope thresholds
+   (`RG6_LADDER_STATE_LINEAGE_AND_DRAWDOWN_CONSUMPTION_POLICY_V1`). Rules:
+   - genesis is a governed ladder seed whose tier is always PROBATION, entered at an explicit
+     UTC-day-aligned coordinate; only an exact HUMAN_GOVERNANCE approval of the seed policy and
+     the RG-6 rule set lets it advance;
+   - a later decision takes its current tier and tier entry only from its prior RG-6 decision of
+     the same sleeve, envelope and seed, rebuilt from that prior's exact inputs, at a strictly later
+     evaluation end; only a READY prior carries state, and any other prior propagates its status;
+   - the lineage is re-proven without recursion
+     (`RG6_ROOT_CAUSE_ESCAPE_ITERATIVE_LINEAGE_PORTABLE_VALIDATION_V1`): the nested priors are
+     walked back to the seed iteratively, the seed is re-proven, and each ancestor is rebuilt once,
+     oldest first, on the same assembly path as the current decision, so supported history of any
+     length verifies; there is no depth cap, checkpoint or trusted prefix;
+   - no registry, head or latest lookup exists: `current_ladder_head_proven` is structurally
+     False, and a decision is history, never the current ladder state;
+   - tenure is the exact number of UTC days from the current tier entry to the evaluation end;
+     performance is the RG-3 `paper_sharpe_annualized`. RG-6 owns how ladder thresholds consume
+     RG-4 sleeve drawdown evidence: the target sleeve's RG-4 `max_peak_distance` for promotion
+     and demotion alike (`MAX_PEAK_DISTANCE`), never the current peak distance and never
+     portfolio drawdown; RG-3 and RG-4 end exactly at the evaluation end;
+   - RG-5 at the same evaluation end is re-proven provenance only: its cap is never evaluated and
+     no worst-case pair moves a sleeve;
+   - promotion needs tenure `>= min_probation_days`, Sharpe `>=` its floor and maximum drawdown
+     `<=` its ceiling; demotion needs Sharpe `<` its floor or maximum drawdown `>` its ceiling.
+     STANDARD evaluates demotion first and evaluates promotion only when no demotion breach
+     applies; a ladder that contradicts the RG-2 consistency invariant fails closed;
+   - at most one adjacent transition per record: HOLD keeps the tier and its entry, while PROMOTE
+     or DEMOTE moves one tier and enters it at the evaluation end;
+   - single-stratum-concentrated returns (via RF conditioned performance) remain a demotion
+     reason that stays pending and unevaluated until the RF chain merges.
+   RG-6 decides no allocation, cap breach, diversification credit, kill or quarantine, portfolio
+   stop or execution, and chooses no production number: every threshold is GOVERNANCE_REQUIRED.
 6. **RG-7 `paper_portfolio_allocation_decision.py`**: the allocator — inputs: envelope + per-sleeve
    evidence + EF-7 admissions + kill states. ORDER OF OPERATIONS IS THE P1 INVARIANT:
    (a) kill/quarantine override FIRST (killed sleeve → allocation 0 BEFORE any arithmetic);
