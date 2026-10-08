@@ -128,7 +128,40 @@ stay OUT of scope. Everything is paper-only; allocation is evidence output, neve
 7. **RG-8 `paper_portfolio_governance_decision.py`**: the terminal governance record — binds
    envelope + all evidence + allocation into one decision; portfolio-stop conditions evaluated
    from envelope rules only (advisory regime-drift warnings never trigger stops by themselves).
-   RG-8 owns how portfolio-stop levels consume RG-4 portfolio drawdown evidence.
+   RG-8 owns how portfolio-stop levels consume RG-4 portfolio drawdown evidence. Rules, under the
+   controller structural authority `RG8_TERMINAL_GOVERNANCE_AND_PORTFOLIO_STOP_POLICY_V1`:
+   - inputs: the RG-2 envelope, the RG-4 drawdown evidence, exactly one RG-6 decision per
+     envelope-declared sleeve and the RG-7 allocation decision, each rebuilt from its exact inputs
+     and canonically equal. They form one evaluation world:
+     - one envelope digest throughout;
+     - RG-4 ending at one UTC-day evaluation end, with every RG-6 and RG-7 evaluated there;
+     - every RG-6 bound to the supplied RG-4, to the RG-5 that RG-7 re-proved and to its sleeve's
+       RG-3 digest.
+     Any contradiction fails closed;
+   - RG-6 is bound as historical provenance only. Its status gates terminal completeness, its
+     tier and transition never reach the stop or the allocation, and `current_ladder_head_proven`
+     stays False;
+   - portfolio stop (`RG8_PORTFOLIO_STOP_MAX_PEAK_DISTANCE_V1`):
+     - only the RG-4 portfolio `max_peak_distance` is consumed, because a governed maximum allowed
+       portfolio drawdown limits the largest drawdown the evidence window ever reached. The
+       current peak distance is evidence only;
+     - a level is breached iff the maximum is strictly greater than its threshold; equality does
+       not breach. Every breached level and the highest one are recorded;
+     - the stop is evaluated only with a governed envelope and a READY RG-4 portfolio measurement,
+       never from a fabricated zero;
+     - no correlation, tier, allocation amount, Sharpe, lifecycle state or regime marker creates
+       or suppresses it;
+   - terminal status, first match wins:
+     1. NEEDS_GOVERNANCE_APPROVAL without stop authority;
+     2. NOT_COMPUTABLE without a portfolio measurement;
+     3. PORTFOLIO_STOP_TRIGGERED for a valid stop, whatever RG-6 or RG-7 say;
+     4. NEEDS_GOVERNANCE_APPROVAL, NOT_COMPUTABLE and ALLOCATION_REJECTED from RG-6 and RG-7, in
+        that order;
+     5. READY only with every RG-6 and RG-7 READY;
+   - READY carries every RG-7 final allocation exactly (`paper_allocation_governance_accepted`).
+     Every other status governs zero for every sleeve while keeping the RG-7 proposal as evidence.
+     There is no sizing, scaling or partial fit. This is paper governance only: never capital, an
+     order, execution or readiness.
 
 ## 2. Cross-cutting invariants
 
