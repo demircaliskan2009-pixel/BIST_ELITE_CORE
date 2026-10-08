@@ -30,6 +30,7 @@ import ast
 import dataclasses
 import functools
 import json
+import math
 import re
 from dataclasses import fields, is_dataclass, replace
 from enum import Enum
@@ -145,7 +146,7 @@ def exact_key(value: object) -> object:
     kind = type(value)
     if kind in (str, int, bool, type(None)) or isinstance(value, Enum):
         return kind, value
-    if kind is float and value == value:  # a NaN has no exact key
+    if kind is float and not math.isnan(value):  # type: ignore[arg-type]  # a NaN has no exact key
         return kind, value.hex()  # type: ignore[attr-defined]
     if kind in (tuple, list):
         return kind, tuple(exact_key(item) for item in value)  # type: ignore[attr-defined]
