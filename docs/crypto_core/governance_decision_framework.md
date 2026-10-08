@@ -58,6 +58,9 @@ precedent, not advice.
 | min-observation per stratum | Below it, stratum stats are decoration — `insufficient_sample` exists so nobody trades decoration |
 | UNLABELED cap | High cap tolerates data gaps but a mostly-UNLABELED series labels nothing meaningful |
 | drift cap (RF-5) | Tight = rejects regime-definition instability early; loose = accepts drifting definitions that repaint slowly |
+| feature definitions (V1: F1 realized vol, F2 drawdown state) | Each binds an EF-3 series, an instrument, a lookback and its formula id; more features = richer labels but more ways to overfit the label set |
+| label rule thresholds and priorities | Pinned before any label exists; the first matching rule wins, so priority order is part of the methodology and re-ordering is a new policy version |
+| stability minimum overlap days / minimum as-of gap days (RF-5) | A short overlap or a small gap proves little about repaint; long ones delay stability evidence |
 
 ## 7. Pilot — funding/basis/carry (values post-DR, PRM-16)
 

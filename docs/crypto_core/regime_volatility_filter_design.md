@@ -1,6 +1,7 @@
 # Regime / Volatility Filter Evidence (RF) — Design Contract (Fable-authored, 2026-07-08)
 
-Status: DESIGN ONLY. Purpose: deterministic, PIT-grade regime LABELS as digest-bound evidence.
+Status: RF-2..RF-5 IMPLEMENTED (V1 closure, section 7); RF-6/RF-7 DESIGN ONLY. Purpose: deterministic,
+PIT-grade regime LABELS as digest-bound evidence.
 A regime filter is NOT an edge — it labels market state so strategies can be gated and performance
 stratified; it never produces direction/profit signals. The existing `regime/tracker.py`
 (`MarketRegimeTracker`: stateful deque, `update()` mutation, wall-clock ns, float scores) is
@@ -71,3 +72,36 @@ sample stratum trust (RF-7); `crypto_core.regime` import attempt (AST); structur
 
 Any import of the runtime regime package; any threshold/label-set invention; any silent UNLABELED
 fill; any admission without ledger membership proof; scope beyond the named slice.
+
+## 7. V1 closure — `RF2_RF5_CORE_PIT_REGIME_EVIDENCE_SPINE_V1`
+
+Implemented under the controller structural authority `RF_CORE_FORMULA_LABEL_AND_STABILITY_POLICY_V1` in
+`validation/regime_feature_policy.py`, `regime_feature_series_evidence.py`, `regime_label_evidence.py` and
+`regime_stability_evidence.py`. RF-6 admission, RF-7 conditioned performance and every EF/RG consumer integration
+remain the next protected closure; the accepted EF/RG regime fields stay pending/unavailable.
+
+- **RF-2**: only `F1_REALIZED_VOL` (`RF_F1_SIMPLE_RETURN_SAMPLE_STDDEV_V1`, lookback >= 3) and `F2_DRAWDOWN_STATE`
+  (`RF_F2_ROLLING_PEAK_DISTANCE_V1`, lookback >= 2); `F3`-`F6` are refused explicitly, never stubbed. Each feature
+  binds an EF-3 series, an instrument, a lookback and its formula id. Label rules have contiguous priorities from 1
+  and conjunctive `LT`/`LTE`/`GT`/`GTE` predicates on canonical scale-18 thresholds; the first matching rule wins and
+  no match is the reserved `UNLABELED`, never a label-set member. Every number is a governance value with no
+  default; only an exact `HUMAN_GOVERNANCE` approval advances. Verdicts use the shared kernel: `PASS` or
+  `NEEDS_GOVERNANCE_APPROVAL`, and malformed or inconsistent input raises (the `POLICY_REJECTED` of section 1).
+- **RF-3**: the exact EF-3 manifest is re-proven (intact, READY, anchor-equal), and each feature series must be
+  finalized-only, point-in-time revision-safe, rights-usable, feature-input eligible, a price series and cover the
+  instrument. Feature day D reads only the closes of days D-w..D-1, each available and finalized at or before
+  start(D). The boundary is INCLUSIVE, the accepted PIT convention (`available_at_ns <= t`, `finalized_at_ns <= t`);
+  one nanosecond later is excluded, and day D or later is never read. A missing or late day makes the feature
+  unavailable: no interpolation, carry forward or backfill. Values follow `RF_FIXED_SCALE18_DECIMAL_HALF_EVEN_P80_V1`
+  (exact half-even scale 18; the F1 square root is a precision-80 candidate adjudicated exactly), and every claimed
+  value is recomputed: a mismatch raises `feature_recompute_mismatch`, so no artifact carries it.
+- **RF-4**: label(D) reads only D's RF-3 records, and any unavailable policy feature makes D `UNLABELED`. Every window
+  day stays in the denominator, and `unlabeled_days / label_days <= max_unlabeled_fraction` passes; above the cap
+  the evidence is `FAIL` and never advances.
+- **RF-5**: two RF-4 evidences of the same exact policy, the earlier as-of strictly before the later by at least the
+  governed day gap. Every overlapping day's label must be identical (one mismatch is `STABILITY_REJECTED`), the
+  overlap must reach the governed minimum (else `INSUFFICIENT_OVERLAP`), and the exact total variation distance of
+  the full-window label distributions over the label set plus `UNLABELED`
+  (`RF5_TOTAL_VARIATION_LABEL_DISTRIBUTION_DRIFT_V1`) must be at most the governed cap. A label evidence that fails
+  its own UNLABELED cap also makes the status `STABILITY_REJECTED`. A policy without exact human governance is
+  `NEEDS_GOVERNANCE_APPROVAL`, never `STABILITY_PROVEN`, and only `STABILITY_PROVEN` advances.
