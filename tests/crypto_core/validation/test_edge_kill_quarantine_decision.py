@@ -2107,28 +2107,47 @@ def test_module_consumes_only_public_authenticated_substrate() -> None:
     }
 
 
+# EF-5 V2 (EF5_RF6_REGIME_POLICY_PREREGISTRATION_ADMISSION_V1) re-proves every registered regime filter policy through the
+# public RF-2 verifier, so exactly that policy-only preregistration authority joins this closure. The exemption is ONE
+# exact module name, compared by equality: RF-3..RF-6 regime evidence and decisions, the runtime ``crypto_core.regime``
+# package, every other regime-named module, and every prefix, suffix or near-miss of the exact name stay forbidden, as
+# does every other surface token.
+_RF2_POLICY_AUTHORITY = "crypto_core.validation.regime_feature_policy"
+_SURFACE_TOKENS = (
+    "portfolio",
+    "allocat",
+    "regime",
+    "service",
+    "venue",
+    "execution.",
+    "live",
+    "order",
+    "connector",
+    "scheduler",
+    "strategy_signal",
+)
+
+
+def _forbidden_surface(closure: frozenset[str]) -> list[str]:
+    """Every closure member naming a forbidden surface, except exactly the RF-2 policy authority."""
+
+    return sorted(
+        name for name in closure if name != _RF2_POLICY_AUTHORITY and any(token in name for token in _SURFACE_TOKENS)
+    )
+
+
 def test_no_rg_allocator_regime_service_venue_live_order_or_capital_surface() -> None:
-    offending = [
-        name
-        for name in _import_closure()
-        if any(
-            token in name
-            for token in (
-                "portfolio",
-                "allocat",
-                "regime",
-                "service",
-                "venue",
-                "execution.",
-                "live",
-                "order",
-                "connector",
-                "scheduler",
-                "strategy_signal",
-            )
-        )
-    ]
-    assert offending == []
+    closure = _import_closure()
+    assert _forbidden_surface(closure) == []
+    # The exemption is in use, and the exempt module stays a policy-only authority reaching no other module.
+    assert _RF2_POLICY_AUTHORITY in closure
+    rf2_source = Path(importlib.import_module(_RF2_POLICY_AUTHORITY).__file__).read_text(encoding="utf-8")  # type: ignore[arg-type]
+    rf2_imports = {
+        node.module
+        for node in ast.walk(ast.parse(rf2_source))
+        if isinstance(node, ast.ImportFrom) and node.module and node.module.startswith("crypto_core")
+    }
+    assert rf2_imports == {"crypto_core.validation.edge_artifact_core"}
     names = {field.name for field in fields(EdgeKillQuarantineDecision)} - dict(
         EDGE_KILL_QUARANTINE_NON_CLAIM_FLAGS
     ).keys()
@@ -2152,6 +2171,33 @@ def test_no_rg_allocator_regime_service_venue_live_order_or_capital_surface() ->
         "winner",
     )
     assert not [name for name in names if any(token in name for token in forbidden)]
+
+
+@pytest.mark.parametrize(
+    "name",
+    [
+        "crypto_core.validation.regime_feature_series_evidence",
+        "crypto_core.validation.regime_label_evidence",
+        "crypto_core.validation.regime_stability_evidence",
+        "crypto_core.validation.regime_filter_admission_decision",
+        "crypto_core.regime",
+        "crypto_core.regime.tracker",
+        "crypto_core.execution.regime_contracts",
+        "crypto_core.service.external_regime",
+        "crypto_core.validation.regime_feature_policy_v2",
+        "crypto_core.validation.regime_feature_policy.extension",
+        "crypto_core.validation.regime_feature_polic",
+        "tests.crypto_core.validation.regime_feature_policy",
+        "crypto_core.validation.paper_portfolio_performance_path_policy",
+        "crypto_core.service.anything",
+        "crypto_core.execution.order_router",
+    ],
+)
+def test_the_closure_guard_exempts_only_the_exact_rf2_policy_authority(name: str) -> None:
+    """EF-8: any other regime, runtime or surface module, or any variant of the exempt name, is still flagged."""
+
+    assert _forbidden_surface(frozenset({_RF2_POLICY_AUTHORITY})) == []
+    assert _forbidden_surface(frozenset({_RF2_POLICY_AUTHORITY, name})) == [name]
 
 
 def test_single_assembly_path_serves_every_builder_and_verifier() -> None:

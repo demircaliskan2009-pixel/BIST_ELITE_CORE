@@ -43,6 +43,20 @@ Trust model (shared kernel ``edge_artifact_core``):
   explicit limitations, while a cross-sectional claim needs point-in-time universe membership that no authenticated
   authority holds (NEEDS_EXTERNAL_FACTS). A check failing on authenticated evidence is FAIL. No proof outcome exceeds
   its evidence.
+* Regime filter ledger (V2). A preregistration may also register regime filter policies, the only way an RF-2
+  policy ever becomes a member of a sealed preregistration. Each declaration binds the exact ``RegimeFeaturePolicy``
+  snapshot and the caller's anchor of its self-digest, re-proven through ``verify_regime_feature_policy``: an
+  integrity failure or anchor mismatch is REJECTED, and a duplicate declaration raises. Each ledger entry is derived,
+  never supplied: the RF-2 self-digest (the exact anchor RF-3..RF-6 pin), the policy id and version, the content and
+  rule-set digests, the feature ids, the label set and whether the policy is governed. A registered policy without
+  exact HUMAN_GOVERNANCE RF-2 approval is NEEDS_GOVERNANCE_APPROVAL, so a synthetic, stale or missing RF-2 approval
+  never seals; two entries sharing one policy id and version FAIL. A non-empty ledger makes the artifact
+  ``edge-leakage-bias-evidence.v2`` and its ``regime_filter_set_digest`` joins the decision structure, so the
+  preregistration approval commits it: attaching, removing or changing a filter after an approval leaves that approval
+  stale. Without regime filters the artifact is ``edge-leakage-bias-evidence.v1`` and its payload, and so every V1
+  digest, is byte-identical to the accepted V1 representation; a V1 artifact can carry no regime filter field, so an
+  existing V1 record can never acquire one. Membership is a digest commitment fixed when the preregistration is sealed:
+  it never proves a real-world chronological ordering, and it admits nothing (RF-6 alone decides admission).
 * Governance. ``EdgePreregistrationApproval`` commits to the root, predecessor, spec, binding, profile semantics,
   feature set, parameter bounds, variant ledger, decision structure and bias-proof set digests; a missing or
   non-matching approval is NEEDS_GOVERNANCE_APPROVAL.
@@ -98,6 +112,13 @@ from crypto_core.validation.edge_strategy_spec_admission import (
     edge_strategy_spec_admission_to_dict,
     verify_edge_strategy_spec_admission,
 )
+from crypto_core.validation.regime_feature_policy import (
+    RegimeFeaturePolicy,
+    regime_feature_policy_from_payload,
+    regime_feature_policy_payload_is_well_formed,
+    regime_feature_policy_to_dict,
+    verify_regime_feature_policy,
+)
 from crypto_core.validation.strategy_executable_binding import (
     StrategyExecutableBinding,
     StrategySpecElementKind,
@@ -119,6 +140,16 @@ from crypto_core.validation.strategy_executable_profiles import (
 )
 
 _SCHEMA_VERSION = "edge-leakage-bias-evidence.v1"
+# A preregistration with a non-empty regime filter ledger. Its four regime filter fields exist only in this version: a
+# V1 payload omits them, so the accepted V1 representation and every V1 digest stay byte-identical.
+_REGIME_FILTER_SCHEMA_VERSION = "edge-leakage-bias-evidence.v2"
+_REGIME_FILTER_FIELDS = (
+    "regime_filter_bindings",
+    "registered_regime_filters",
+    "registered_regime_policy_digests",
+    "regime_filter_set_digest",
+)
+_V1_REGIME_FILTER_STATE: tuple[object, ...] = ((), (), (), "")
 _GATE_ID = "EF-5"
 _PREDECESSOR_GATE_ID = "EF-4"
 _REASON_PREFIX = "edge_leakage_bias_evidence"
@@ -212,6 +243,28 @@ class EdgeRegisteredVariant:
     variant_id: str
     parameter_assignment: tuple[ProfileParameterAssignment, ...]
     parameter_assignment_digest: str
+
+
+@dataclass(frozen=True)
+class EdgeInputRegimeFilter:
+    """Caller declaration of one regime filter to preregister: the exact RF-2 policy and its self-digest anchor."""
+
+    policy: RegimeFeaturePolicy
+    expected_policy_digest: str
+
+
+@dataclass(frozen=True)
+class EdgeRegisteredRegimeFilter:
+    """One regime filter ledger entry, derived from the re-proven RF-2 policy and never supplied by the caller."""
+
+    regime_feature_policy_digest: str
+    policy_id: str
+    policy_version: str
+    policy_digest: str
+    rule_set_digest: str
+    feature_ids: tuple[str, ...]
+    label_set: tuple[str, ...]
+    policy_governed: bool
 
 
 @dataclass(frozen=True)
@@ -316,6 +369,10 @@ class EdgeLeakageBiasEvidence:
     survivorship_claim_scope: EdgeSurvivorshipClaimScope
     bias_proofs: tuple[EdgeBiasProof, ...]
     bias_proof_set_digest: str
+    regime_filter_bindings: tuple[EdgeAuthorityBinding, ...]
+    registered_regime_filters: tuple[EdgeRegisteredRegimeFilter, ...]
+    registered_regime_policy_digests: tuple[str, ...]
+    regime_filter_set_digest: str
     approval: EdgePreregistrationApproval | None
     integrity_reason_codes: tuple[str, ...]
     verdict_reason_codes: tuple[str, ...]
@@ -454,12 +511,22 @@ def _serialize(value: object) -> object:
 
 
 def _to_payload(artifact: object) -> dict[str, object]:
-    """Serialize a record; an enum-typed field must hold the exact enum member, never an equal plain string."""
+    """Serialize a record; an enum-typed field must hold the exact enum member, never an equal plain string.
+
+    A V1 evidence serializes WITHOUT the regime filter fields, exactly as the accepted V1 representation, and refuses to
+    serialize when any of them is not empty: a V1 artifact can never carry a regime filter.
+    """
 
     for name, enum_cls in _ENUM_FIELDS.get(type(artifact), ()):
         if type(getattr(artifact, name)) is not enum_cls:
             raise _fail("payload_enum_field_not_exact_member")
-    return {field.name: _serialize(getattr(artifact, field.name)) for field in fields(artifact)}  # type: ignore[arg-type]
+    payload = {field.name: _serialize(getattr(artifact, field.name)) for field in fields(artifact)}  # type: ignore[arg-type]
+    if type(artifact) is EdgeLeakageBiasEvidence and artifact.schema_version == _SCHEMA_VERSION:  # type: ignore[attr-defined]
+        if tuple(getattr(artifact, name) for name in _REGIME_FILTER_FIELDS) != _V1_REGIME_FILTER_STATE:
+            raise _fail("payload_v1_carries_regime_filter_fields")
+        for name in _REGIME_FILTER_FIELDS:
+            del payload[name]
+    return payload
 
 
 _RECORD_TYPES = frozenset(
@@ -470,6 +537,7 @@ _RECORD_TYPES = frozenset(
         EdgeBiasCheck,
         EdgeBiasProof,
         EdgePreregistrationApproval,
+        EdgeRegisteredRegimeFilter,
     }
 )
 _ENUM_FIELDS: dict[type, tuple[tuple[str, type[Enum]], ...]] = {
@@ -571,6 +639,55 @@ def _canonical_variants(values: object) -> tuple[EdgeRegisteredVariant, ...]:
         canonical[variant_id] = EdgeRegisteredVariant(
             variant_id=variant_id, parameter_assignment=assignment, parameter_assignment_digest=digest
         )
+    return tuple(canonical[key] for key in sorted(canonical))
+
+
+def _declared_regime_filter_bindings(values: object) -> tuple[EdgeAuthorityBinding, ...]:
+    """A binding per caller regime filter declaration; a malformed declaration is a construction error."""
+
+    if type(values) not in (tuple, list):
+        raise _fail("regime_filters_malformed")
+    bindings: list[EdgeAuthorityBinding] = []
+    for item in values:  # type: ignore[union-attr]
+        if type(item) is not EdgeInputRegimeFilter:
+            raise _fail("regime_filter_malformed")
+        policy = getattr(item, "policy", None)
+        if type(policy) is not RegimeFeaturePolicy:
+            raise _fail("regime_filter_policy_malformed")
+        try:
+            snapshot_payload = regime_feature_policy_to_dict(policy)
+        except Exception as exc:  # noqa: BLE001 - a hollow policy object is a construction error, never a receipt
+            raise _fail("regime_filter_policy_not_serializable") from exc
+        bindings.append(
+            build_edge_authority_binding(
+                snapshot_payload=snapshot_payload,
+                expected_digest=getattr(item, "expected_policy_digest", None),
+                shape=regime_feature_policy_payload_is_well_formed,
+                error=EdgeLeakageBiasEvidenceError,
+                code=_reason("regime_filter"),
+            )
+        )
+    return tuple(bindings)
+
+
+def _canonical_regime_filter_bindings(values: object) -> tuple[EdgeAuthorityBinding, ...]:
+    """The ledger's RF-2 policy bindings in anchor order; a non-canonical binding or a repeated anchor raises."""
+
+    if type(values) not in (tuple, list):
+        raise _fail("regime_filters_malformed")
+    canonical: dict[str, EdgeAuthorityBinding] = {}
+    for item in values:  # type: ignore[union-attr]
+        binding = require_edge_authority_binding(
+            item,
+            shape=regime_feature_policy_payload_is_well_formed,
+            error=EdgeLeakageBiasEvidenceError,
+            code=_reason("regime_filter"),
+            optional=False,
+        )
+        anchor = binding.expected_digest  # type: ignore[union-attr]
+        if anchor in canonical:
+            raise _fail("regime_filter_duplicate")
+        canonical[anchor] = binding  # type: ignore[assignment]
     return tuple(canonical[key] for key in sorted(canonical))
 
 
@@ -680,6 +797,39 @@ def _executable_authority(
 
 
 # --- bias proofs -------------------------------------------------------------------------------------------------------
+
+
+def _regime_filter_authority(
+    bindings: Sequence[EdgeAuthorityBinding],
+) -> tuple[list[str], tuple[EdgeRegisteredRegimeFilter, ...]]:
+    """Re-prove each registered RF-2 policy through its public verifier against its anchor and derive its entry.
+
+    Any failure is an integrity code, and then no entry is derived at all.
+    """
+
+    codes: list[str] = []
+    registered: list[EdgeRegisteredRegimeFilter] = []
+    for binding in bindings:
+        policy = regime_feature_policy_from_payload(edge_authority_binding_snapshot(binding))
+        verification = verify_regime_feature_policy(policy)
+        if not verification.intact:
+            codes.extend(_reason(f"regime_filter_integrity_failure:{code}") for code in verification.reason_codes)
+        elif verification.recomputed_digest != binding.expected_digest:
+            codes.append(_reason(f"regime_filter_digest_mismatch:{binding.expected_digest}"))
+        else:
+            registered.append(
+                EdgeRegisteredRegimeFilter(
+                    regime_feature_policy_digest=verification.recomputed_digest,
+                    policy_id=policy.policy_id,
+                    policy_version=policy.policy_version,
+                    policy_digest=policy.policy_digest,
+                    rule_set_digest=policy.rule_set_digest,
+                    feature_ids=tuple(item.feature_id for item in policy.features),
+                    label_set=policy.label_set,
+                    policy_governed=policy.gate_verdict is EdgeGateVerdict.PASS and policy.advances is True,
+                )
+            )
+    return codes, (() if codes else tuple(registered))
 
 
 def _check(check_id: str, subject: str, proven: bool) -> EdgeBiasCheck:
@@ -990,6 +1140,26 @@ def _proof_reasons(proofs: Sequence[EdgeBiasProof]) -> tuple[list[str], list[str
     return fail, needs_external
 
 
+def _regime_filter_reasons(registered: Sequence[EdgeRegisteredRegimeFilter]) -> tuple[list[str], list[str]]:
+    """``(fail, needs_governance)``: one policy id and version registered twice FAILs; an ungoverned policy is pending."""
+
+    identities: dict[tuple[str, str], int] = {}
+    for item in registered:
+        identity = (item.policy_id, item.policy_version)
+        identities[identity] = identities.get(identity, 0) + 1
+    fail = [
+        _reason(f"regime_filter_policy_identity_ambiguous:{policy_id}:{policy_version}")
+        for (policy_id, policy_version), count in sorted(identities.items())
+        if count > 1
+    ]
+    needs_governance = [
+        _reason(f"regime_filter_policy_not_governed:{item.regime_feature_policy_digest}")
+        for item in registered
+        if not item.policy_governed
+    ]
+    return fail, needs_governance
+
+
 def _approval_reasons(approval: EdgePreregistrationApproval | None, committed: Mapping[str, str]) -> list[str]:
     if approval is None:
         return [_reason("preregistration_approval_missing")]
@@ -1015,6 +1185,7 @@ def _assemble_evidence(
     variants: object,
     survivorship_claim_scope: object,
     approval: object,
+    regime_filters: object,
 ) -> EdgeLeakageBiasEvidence:
     """The one EF-5 assembly path, shared by the builder and verifier reassembly."""
 
@@ -1040,6 +1211,7 @@ def _assemble_evidence(
     registered = _canonical_variants(variants)
     scope = _require_member(survivorship_claim_scope, EdgeSurvivorshipClaimScope, "survivorship_claim_scope")
     approval_record = _canonical_approval(approval)
+    regime_refs = _canonical_regime_filter_bindings(regime_filters)
 
     chain_codes, chain = _chain_authority(
         chain_binding,  # type: ignore[arg-type]
@@ -1052,7 +1224,8 @@ def _assemble_evidence(
         predecessor_digest=chain_binding.expected_digest,  # type: ignore[union-attr]
         admission=None if chain is None else chain[0],
     )
-    integrity = _sorted_unique([*chain_codes, *executable_codes])
+    regime_codes, registered_filters = _regime_filter_authority(regime_refs)
+    integrity = _sorted_unique([*chain_codes, *executable_codes, *regime_codes])
 
     derived = _DerivedFacts()
     if not integrity and chain is not None and executable is not None and profile is not None:
@@ -1066,6 +1239,21 @@ def _assemble_evidence(
             profile=profile,
             scope=scope,  # type: ignore[arg-type]
         )
+    regime_filter_set_digest = _digest_of([_to_payload(item) for item in registered_filters]) if regime_refs else ""
+    decision_structure: dict[str, object] = {
+        "profile_id": derived.profile_id,
+        "profile_version": derived.profile_version,
+        "profile_semantics_digest": derived.profile_semantics_digest,
+        "decision_schedule_id": derived.decision_schedule_id,
+        "state_rule_id": derived.state_rule_id,
+        "decision_labels": list(derived.decision_labels),
+        "decision_element_refs": list(derived.decision_element_refs),
+        "parameter_schema_refs": list(derived.parameter_schema_refs),
+        "parameter_constraints": list(derived.parameter_constraints),
+        "binding_coverage_digest": derived.binding_coverage_digest,
+    }
+    if regime_refs:  # V2 only: the approval's decision-structure commitment covers the regime filter ledger
+        decision_structure["regime_filter_set_digest"] = regime_filter_set_digest
     committed = {
         "root_intake_digest": root_anchor,
         "predecessor_digest": chain_binding.expected_digest,  # type: ignore[union-attr]
@@ -1080,20 +1268,7 @@ def _assemble_evidence(
         ),
         "parameter_bounds_digest": _digest_of([_to_payload(bound) for bound in bounds]),
         "variant_ledger_digest": _digest_of([_to_payload(variant) for variant in registered]),
-        "decision_structure_digest": _digest_of(
-            {
-                "profile_id": derived.profile_id,
-                "profile_version": derived.profile_version,
-                "profile_semantics_digest": derived.profile_semantics_digest,
-                "decision_schedule_id": derived.decision_schedule_id,
-                "state_rule_id": derived.state_rule_id,
-                "decision_labels": list(derived.decision_labels),
-                "decision_element_refs": list(derived.decision_element_refs),
-                "parameter_schema_refs": list(derived.parameter_schema_refs),
-                "parameter_constraints": list(derived.parameter_constraints),
-                "binding_coverage_digest": derived.binding_coverage_digest,
-            }
-        ),
+        "decision_structure_digest": _digest_of(decision_structure),
         "bias_proof_set_digest": _digest_of([_to_payload(proof) for proof in derived.bias_proofs]),
     }
 
@@ -1114,6 +1289,9 @@ def _assemble_evidence(
         proof_fail, proof_needs = _proof_reasons(derived.bias_proofs)
         fail.extend(proof_fail)
         needs_external.extend(proof_needs)
+        regime_fail, regime_needs = _regime_filter_reasons(registered_filters)
+        fail.extend(regime_fail)
+        needs_governance.extend(regime_needs)
         needs_governance.extend(_approval_reasons(approval_record, committed))
         status = EdgeEvidenceStatus.READY
         verdict = resolve_edge_gate_verdict(fail, needs_external, needs_governance)
@@ -1121,7 +1299,7 @@ def _assemble_evidence(
 
     advances = status is EdgeEvidenceStatus.READY and verdict is EdgeGateVerdict.PASS
     seed = EdgeLeakageBiasEvidence(
-        schema_version=_SCHEMA_VERSION,
+        schema_version=_REGIME_FILTER_SCHEMA_VERSION if regime_refs else _SCHEMA_VERSION,
         gate_id=_GATE_ID,
         status=status,
         gate_verdict=verdict,
@@ -1166,6 +1344,10 @@ def _assemble_evidence(
         survivorship_claim_scope=scope,  # type: ignore[arg-type]
         bias_proofs=derived.bias_proofs,
         bias_proof_set_digest=committed["bias_proof_set_digest"],
+        regime_filter_bindings=regime_refs,
+        registered_regime_filters=registered_filters,
+        registered_regime_policy_digests=tuple(item.regime_feature_policy_digest for item in registered_filters),
+        regime_filter_set_digest=regime_filter_set_digest,
         approval=approval_record,
         integrity_reason_codes=integrity,
         verdict_reason_codes=verdict_reasons,
@@ -1188,8 +1370,12 @@ def build_edge_leakage_bias_evidence(
     variants: Sequence[EdgeInputVariant],
     survivorship_claim_scope: EdgeSurvivorshipClaimScope | str,
     approval: EdgePreregistrationApproval | None = None,
+    regime_filters: Sequence[EdgeInputRegimeFilter] = (),
 ) -> EdgeLeakageBiasEvidence:
     """Build deterministic EF-5 preregistration evidence over an EF-4 admission, its chain and its executable binding.
+
+    ``regime_filters`` registers RF-2 regime filter policies in the preregistration (a V2 artifact); with none the
+    artifact is V1, byte-identical to the accepted representation.
 
     Malformed caller input or a non-serializable upstream object raises ``EdgeLeakageBiasEvidenceError``. An authentic
     predecessor, chain link or binding that fails re-proof, a chain splice, a correlation splice or a binding of another
@@ -1223,6 +1409,7 @@ def build_edge_leakage_bias_evidence(
         error=EdgeLeakageBiasEvidenceError,
         code=_reason("executable_binding"),
     )
+    regime_refs = _declared_regime_filter_bindings(regime_filters)
     return _assemble_evidence(
         predecessor_binding=chain_binding,
         root_intake_digest=expected_root_intake_digest,
@@ -1234,6 +1421,7 @@ def build_edge_leakage_bias_evidence(
         variants=variants,
         survivorship_claim_scope=survivorship_claim_scope,
         approval=approval,
+        regime_filters=regime_refs,
     )
 
 
@@ -1326,6 +1514,21 @@ def _parse_executable_binding(value: object) -> EdgeAuthorityBinding | None:
     )
 
 
+def _parse_regime_filter_bindings(value: object) -> tuple[EdgeAuthorityBinding | None, ...]:
+    if type(value) is not list:
+        raise _fail("payload_field_malformed")
+    return tuple(
+        parse_edge_authority_binding(
+            item,
+            shape=regime_feature_policy_payload_is_well_formed,
+            error=EdgeLeakageBiasEvidenceError,
+            code=_reason("regime_filter"),
+            optional=False,
+        )
+        for item in value
+    )
+
+
 _ASSIGNMENT_CONVERTERS: dict[str, Callable[[object], object]] = {}
 _BOUND_CONVERTERS: dict[str, Callable[[object], object]] = {
     "treatment": _as_enum(EdgeParameterSearchTreatment),
@@ -1335,6 +1538,11 @@ _VARIANT_CONVERTERS: dict[str, Callable[[object], object]] = {
     "parameter_assignment": _as_records(ProfileParameterAssignment, _ASSIGNMENT_CONVERTERS),
 }
 _CHECK_CONVERTERS: dict[str, Callable[[object], object]] = {"outcome": _as_enum(EdgeBiasProofOutcome)}
+_REGIME_FILTER_CONVERTERS: dict[str, Callable[[object], object]] = {
+    "feature_ids": _as_str_tuple,
+    "label_set": _as_str_tuple,
+    "policy_governed": _as_bool,
+}
 _PROOF_CONVERTERS: dict[str, Callable[[object], object]] = {
     "proof_kind": _as_enum(EdgeBiasProofKind),
     "outcome": _as_enum(EdgeBiasProofOutcome),
@@ -1363,6 +1571,9 @@ _EVIDENCE_CONVERTERS: dict[str, Callable[[object], object]] = {
     "parameter_constraints": _as_str_tuple,
     "survivorship_claim_scope": _as_enum(EdgeSurvivorshipClaimScope),
     "bias_proofs": _as_records(EdgeBiasProof, _PROOF_CONVERTERS),
+    "regime_filter_bindings": _parse_regime_filter_bindings,
+    "registered_regime_filters": _as_records(EdgeRegisteredRegimeFilter, _REGIME_FILTER_CONVERTERS),
+    "registered_regime_policy_digests": _as_str_tuple,
     "approval": _as_approval,
     "integrity_reason_codes": _as_str_tuple,
     "verdict_reason_codes": _as_str_tuple,
@@ -1373,9 +1584,20 @@ _EVIDENCE_CONVERTERS: dict[str, Callable[[object], object]] = {
 def edge_leakage_bias_evidence_from_payload(payload: object) -> EdgeLeakageBiasEvidence:
     """Strictly reconstruct EF-5 evidence from its serialized payload (exact fields, types and bindings).
 
-    Reconstruction is not verification: consumers call ``verify_edge_leakage_bias_evidence`` on the result.
+    A V1 payload carries exactly the V1 fields and parses with an empty regime filter ledger; a V2 payload carries
+    every field; any other schema version is refused. Reconstruction is not verification: consumers call
+    ``verify_edge_leakage_bias_evidence`` on the result.
     """
 
+    if type(payload) is not dict:
+        raise _fail("payload_fields_malformed")
+    schema_version = payload.get("schema_version")
+    if schema_version == _SCHEMA_VERSION:
+        if set(payload) & set(_REGIME_FILTER_FIELDS):
+            raise _fail("payload_fields_malformed")
+        payload = {**payload, **dict(zip(_REGIME_FILTER_FIELDS, ([], [], [], "")))}
+    elif schema_version != _REGIME_FILTER_SCHEMA_VERSION:
+        raise _fail("payload_schema_version_unsupported")
     return _parse_exact(EdgeLeakageBiasEvidence, payload, _EVIDENCE_CONVERTERS)  # type: ignore[return-value]
 
 
@@ -1404,6 +1626,7 @@ def _reassemble_evidence(evidence: object) -> EdgeLeakageBiasEvidence:
         ),
         survivorship_claim_scope=evidence.survivorship_claim_scope,  # type: ignore[attr-defined]
         approval=evidence.approval,  # type: ignore[attr-defined]
+        regime_filters=evidence.regime_filter_bindings,  # type: ignore[attr-defined]
     )
 
 
@@ -1431,12 +1654,14 @@ __all__ = [
     "EdgeBiasProof",
     "EdgeBiasProofKind",
     "EdgeBiasProofOutcome",
+    "EdgeInputRegimeFilter",
     "EdgeInputVariant",
     "EdgeLeakageBiasEvidence",
     "EdgeLeakageBiasEvidenceError",
     "EdgeParameterSearchBound",
     "EdgeParameterSearchTreatment",
     "EdgePreregistrationApproval",
+    "EdgeRegisteredRegimeFilter",
     "EdgeRegisteredVariant",
     "EdgeSurvivorshipClaimScope",
     "build_edge_leakage_bias_evidence",

@@ -1,4 +1,8 @@
-"""Tests for Edge Factory EF-5 preregistration and leakage/bias firewall (EF5_EDGE_LEAKAGE_BIAS_PREREGISTRATION_V1)."""
+"""Tests for Edge Factory EF-5 preregistration and leakage/bias firewall (EF5_EDGE_LEAKAGE_BIAS_PREREGISTRATION_V1).
+
+The V2 regime filter ledger (``EF5_RF6_REGIME_POLICY_PREREGISTRATION_ADMISSION_V1``) registers governed RF-2 policies
+from the RF-2 test module; the accepted V1 identities are pinned as computed on main before the ledger existed.
+"""
 
 from __future__ import annotations
 
@@ -23,8 +27,10 @@ from crypto_core.validation.edge_artifact_core import (
     EdgeEvidenceStatus,
     EdgeEvidenceVerification,
     EdgeGateVerdict,
+    build_edge_authority_binding,
     edge_canonical_json,
     edge_payload_digest,
+    edge_sha256_text,
 )
 from crypto_core.validation.edge_idea_intake_evidence import (
     build_edge_idea_intake_evidence,
@@ -34,12 +40,14 @@ from crypto_core.validation.edge_leakage_bias_evidence import (
     EDGE_LEAKAGE_BIAS_NON_CLAIM_FLAGS,
     EdgeBiasProofKind,
     EdgeBiasProofOutcome,
+    EdgeInputRegimeFilter,
     EdgeInputVariant,
     EdgeLeakageBiasEvidence,
     EdgeLeakageBiasEvidenceError,
     EdgeParameterSearchBound,
     EdgeParameterSearchTreatment,
     EdgePreregistrationApproval,
+    EdgeRegisteredRegimeFilter,
     EdgeRegisteredVariant,
     EdgeSurvivorshipClaimScope,
     build_edge_leakage_bias_evidence,
@@ -56,6 +64,7 @@ from crypto_core.validation.edge_strategy_spec_admission import (
     edge_strategy_spec_admission_digest,
 )
 from crypto_core.validation.historical_walk_forward_metrics import HistoricalWalkForwardMetricsResult
+from crypto_core.validation.regime_feature_policy import RegimeFeaturePolicy, regime_feature_policy_to_dict
 from crypto_core.validation.strategy_executable_binding import (
     StrategyExecutableBinding,
     StrategyExecutableCoverageEntry,
@@ -71,6 +80,11 @@ from crypto_core.validation.strategy_executable_profiles import (
 )
 from tests.crypto_core.validation import test_historical_pit_dataset as support
 from tests.crypto_core.validation import test_strategy_executable_binding as bind
+
+try:  # the module object pytest collects (basename import), so its cached fixtures are shared
+    import test_regime_feature_policy as rf2t
+except ImportError:  # imported outside a pytest session
+    from tests.crypto_core.validation import test_regime_feature_policy as rf2t
 
 _PREFIX = "edge_leakage_bias_evidence"
 _PROFILE_PREFIX = "strategy_executable_profile"
@@ -1645,6 +1659,7 @@ def test_module_consumes_only_public_pre_performance_substrate() -> None:
         "crypto_core.validation.edge_idea_intake_evidence",
         "crypto_core.validation.edge_source_packet_evidence",
         "crypto_core.validation.edge_strategy_spec_admission",
+        "crypto_core.validation.regime_feature_policy",
         "crypto_core.validation.strategy_executable_binding",
         "crypto_core.validation.strategy_executable_profiles",
     }
@@ -1718,3 +1733,314 @@ def test_single_assembly_path_serves_builder_and_verifier() -> None:
     assert "EdgeLeakageBiasEvidence" in calls_by_function["_assemble_evidence"]
     assert "_assemble_evidence" in calls_by_function["build_edge_leakage_bias_evidence"]
     assert "_assemble_evidence" in calls_by_function["_reassemble_evidence"]
+
+
+# --- V2 regime filter ledger (EF5_RF6_REGIME_POLICY_PREREGISTRATION_ADMISSION_V1) --------------------------------------
+
+V1_SCHEMA, V2_SCHEMA = "edge-leakage-bias-evidence.v1", "edge-leakage-bias-evidence.v2"
+REGIME_FILTER_FIELDS = (
+    "regime_filter_bindings",
+    "registered_regime_filters",
+    "registered_regime_policy_digests",
+    "regime_filter_set_digest",
+)
+# The accepted V1 identities of this module's fixtures, computed on main fa730d69 before the regime filter ledger.
+V1_SEALED_DIGEST = "e14d728d8990c1f85635892a517e3a1bcbd6dced82fe4413aeb975f600f4089c"
+V1_DRAFT_DIGEST = "1ebabef55501d471518ac429492598dd73b644a475554efdd9b83bb2baa11c67"
+V1_DECISION_STRUCTURE_DIGEST = "09545a5b2a154ca7ddf3f556901af7fbfc7537a6ed16186682052abc8d9cd51f"
+DECISION_STRUCTURE_MISMATCH = "preregistration_approval_decision_structure_digest_mismatch"
+
+
+@cache
+def regime_policy() -> RegimeFeaturePolicy:
+    """The RF-2 test module's policy under an exact synthetic HUMAN_GOVERNANCE test approval."""
+
+    return rf2t.governed()
+
+
+@cache
+def other_regime_policy() -> RegimeFeaturePolicy:
+    """The same policy id and version with another governed drift cap: another content and self-digest."""
+
+    return rf2t.governed(distribution_drift_cap=rf2t.d("0.3"))
+
+
+def regime_filter(policy: RegimeFeaturePolicy | None = None, anchor: str | None = None) -> EdgeInputRegimeFilter:
+    policy = regime_policy() if policy is None else policy
+    return EdgeInputRegimeFilter(policy, policy.regime_feature_policy_digest if anchor is None else anchor)
+
+
+@cache
+def _sealed_v2() -> EdgeLeakageBiasEvidence:
+    return prereg(regime_filters=(regime_filter(),))
+
+
+def _decision_structure_payload(evidence: EdgeLeakageBiasEvidence) -> dict[str, object]:
+    return {
+        "profile_id": evidence.profile_id,
+        "profile_version": evidence.profile_version,
+        "profile_semantics_digest": evidence.profile_semantics_digest,
+        "decision_schedule_id": evidence.decision_schedule_id,
+        "state_rule_id": evidence.state_rule_id,
+        "decision_labels": list(evidence.decision_labels),
+        "decision_element_refs": list(evidence.decision_element_refs),
+        "parameter_schema_refs": list(evidence.parameter_schema_refs),
+        "parameter_constraints": list(evidence.parameter_constraints),
+        "binding_coverage_digest": evidence.binding_coverage_digest,
+    }
+
+
+def test_v1_representation_and_digests_are_byte_identical_to_the_accepted_v1() -> None:
+    sealed = _sealed()
+    assert sealed.schema_version == V1_SCHEMA
+    assert (
+        sealed.leakage_bias_evidence_digest,
+        prereg(approve=False).leakage_bias_evidence_digest,
+        sealed.decision_structure_digest,
+    ) == (V1_SEALED_DIGEST, V1_DRAFT_DIGEST, V1_DECISION_STRUCTURE_DIGEST)
+    payload = edge_leakage_bias_evidence_to_dict(sealed)
+    assert set(payload) == {field.name for field in fields(EdgeLeakageBiasEvidence)} - set(REGIME_FILTER_FIELDS)
+    assert len(payload) == 74
+    assert tuple(getattr(sealed, name) for name in REGIME_FILTER_FIELDS) == ((), (), (), "")
+    assert prereg(regime_filters=()) == prereg(regime_filters=[]) == sealed
+    assert edge_sha256_text(edge_canonical_json(_decision_structure_payload(sealed))) == V1_DECISION_STRUCTURE_DIGEST
+
+
+def test_a_v2_ledger_registers_the_exact_governed_policy_and_its_approval_commits_it() -> None:
+    policy, sealed = regime_policy(), _sealed_v2()
+    _assert_receipt_invariants(sealed)
+    assert (sealed.schema_version, sealed.status, sealed.gate_verdict, sealed.preregistration_sealed) == (
+        V2_SCHEMA,
+        EdgeEvidenceStatus.READY,
+        EdgeGateVerdict.PASS,
+        True,
+    )
+    (entry,) = sealed.registered_regime_filters
+    assert entry == EdgeRegisteredRegimeFilter(
+        regime_feature_policy_digest=policy.regime_feature_policy_digest,
+        policy_id=policy.policy_id,
+        policy_version=policy.policy_version,
+        policy_digest=policy.policy_digest,
+        rule_set_digest=policy.rule_set_digest,
+        feature_ids=tuple(item.feature_id for item in policy.features),
+        label_set=policy.label_set,
+        policy_governed=True,
+    )
+    assert sealed.registered_regime_policy_digests == (policy.regime_feature_policy_digest,)
+    (binding,) = sealed.regime_filter_bindings
+    assert binding == EdgeAuthorityBinding(
+        edge_canonical_json(regime_feature_policy_to_dict(policy)), policy.regime_feature_policy_digest
+    )
+    entry_payload = {
+        "regime_feature_policy_digest": policy.regime_feature_policy_digest,
+        "policy_id": policy.policy_id,
+        "policy_version": policy.policy_version,
+        "policy_digest": policy.policy_digest,
+        "rule_set_digest": policy.rule_set_digest,
+        "feature_ids": [item.feature_id for item in policy.features],
+        "label_set": list(policy.label_set),
+        "policy_governed": True,
+    }
+    assert sealed.regime_filter_set_digest == edge_sha256_text(edge_canonical_json([entry_payload]))
+    structure = _decision_structure_payload(sealed)
+    assert sealed.decision_structure_digest == edge_sha256_text(
+        edge_canonical_json({**structure, "regime_filter_set_digest": sealed.regime_filter_set_digest})
+    )
+    assert sealed.approval is not None
+    assert sealed.approval.approved_decision_structure_digest == sealed.decision_structure_digest
+    v1 = _sealed()
+    for name in ("feature_set_digest", "parameter_bounds_digest", "variant_ledger_digest", "bias_proof_set_digest"):
+        assert getattr(sealed, name) == getattr(v1, name), name
+    assert len(edge_leakage_bias_evidence_to_dict(sealed)) == 78
+
+
+def test_attaching_removing_or_swapping_a_filter_leaves_every_earlier_approval_stale() -> None:
+    attached = prereg(regime_filters=(regime_filter(),), approval=_sealed().approval)
+    removed = prereg(approval=_sealed_v2().approval)
+    swapped = prereg(regime_filters=(regime_filter(other_regime_policy()),), approval=_sealed_v2().approval)
+    for evidence in (attached, removed, swapped):
+        _assert_receipt_invariants(evidence)
+        assert (evidence.gate_verdict, evidence.preregistration_sealed) == (
+            EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL,
+            False,
+        )
+        assert evidence.verdict_reason_codes == (_code(DECISION_STRUCTURE_MISMATCH),)
+
+
+@pytest.mark.parametrize("governance", ["missing", "synthetic", "stale"])
+def test_a_registered_policy_without_exact_human_governance_never_seals(governance: str) -> None:
+    draft = rf2t.build()
+    policy = {
+        "missing": draft,
+        "synthetic": rf2t.build(approval=rf2t.approval_for(draft, kind=rf2t.SYNTHETIC)),
+        "stale": rf2t.build(approval=rf2t.approval_for(draft, approved_policy_digest="e" * 64)),
+    }[governance]
+    assert policy.advances is False
+    evidence = prereg(regime_filters=(regime_filter(policy),))
+    _assert_receipt_invariants(evidence)
+    assert (evidence.status, evidence.gate_verdict, evidence.preregistration_sealed) == (
+        EdgeEvidenceStatus.READY,
+        EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL,
+        False,
+    )
+    assert evidence.verdict_reason_codes == (
+        _code(f"regime_filter_policy_not_governed:{policy.regime_feature_policy_digest}"),
+    )
+    assert evidence.registered_regime_filters[0].policy_governed is False
+
+
+def test_a_registered_policy_must_reprove_to_its_anchor() -> None:
+    wrong = prereg(regime_filters=(regime_filter(anchor=other_regime_policy().regime_feature_policy_digest),))
+    _assert_receipt_invariants(wrong)
+    assert (wrong.schema_version, wrong.status, wrong.gate_verdict, wrong.preregistration_sealed) == (
+        V2_SCHEMA,
+        EdgeEvidenceStatus.REJECTED,
+        EdgeGateVerdict.NOT_EVALUATED,
+        False,
+    )
+    assert wrong.integrity_reason_codes == (
+        _code(f"regime_filter_digest_mismatch:{other_regime_policy().regime_feature_policy_digest}"),
+    )
+    assert (wrong.registered_regime_filters, wrong.registered_regime_policy_digests) == ((), ())
+    sealed = _sealed_v2()
+    snapshot = json.loads(sealed.regime_filter_bindings[0].snapshot_json)
+    snapshot["max_unlabeled_fraction"] = rf2t.d("0.9")  # edited after capture, anchor retained
+    edited = EdgeAuthorityBinding(edge_canonical_json(snapshot), sealed.regime_filter_bindings[0].expected_digest)
+    _assert_not_intact(_reseal(sealed, regime_filter_bindings=(edited,)), "field_mismatch:status")
+
+
+def test_a_resealed_forgery_claiming_governance_never_registers() -> None:
+    """A self-consistent digest and anchor never stand in for the RF-2 verifier: governance is re-proven, not read."""
+
+    forged = rf2t.reseal(rf2t.build(), gate_verdict=EdgeGateVerdict.PASS, advances=True, verdict_reason_codes=())
+    assert (forged.gate_verdict, forged.advances, forged.approval) == (EdgeGateVerdict.PASS, True, None)
+    evidence = prereg(regime_filters=(regime_filter(forged),))
+    _assert_receipt_invariants(evidence)
+    assert (evidence.status, evidence.gate_verdict, evidence.preregistration_sealed) == (
+        EdgeEvidenceStatus.REJECTED,
+        EdgeGateVerdict.NOT_EVALUATED,
+        False,
+    )
+    assert evidence.integrity_reason_codes
+    assert all(
+        code.startswith(_code("regime_filter_integrity_failure:regime_feature_policy:"))
+        for code in evidence.integrity_reason_codes
+    )
+    assert (evidence.registered_regime_filters, evidence.registered_regime_policy_digests) == ((), ())
+
+
+@pytest.mark.parametrize(
+    ("declarations", "code"),
+    [
+        (lambda: "filters", "regime_filters_malformed"),
+        (lambda: None, "regime_filters_malformed"),
+        (lambda: ("filter",), "regime_filter_malformed"),
+        (lambda: (EdgeInputRegimeFilter("policy", "a" * 64),), "regime_filter_policy_malformed"),  # type: ignore[arg-type]
+        (
+            lambda: (EdgeInputRegimeFilter(replace(regime_policy(), gate_verdict="PASS"), "a" * 64),),
+            "regime_filter_policy_not_serializable",
+        ),
+        (lambda: (regime_filter(anchor="A" * 64),), "regime_filter_expected_digest_invalid"),
+        (lambda: (regime_filter(), regime_filter()), "regime_filter_duplicate"),
+    ],
+)
+def test_malformed_regime_filter_declarations_raise(declarations: object, code: str) -> None:
+    with pytest.raises(EdgeLeakageBiasEvidenceError) as excinfo:
+        prereg(regime_filters=declarations(), approve=False)  # type: ignore[operator]
+    assert str(excinfo.value) == _code(code)
+
+
+def test_one_policy_identity_registered_twice_fails_while_distinct_versions_seal() -> None:
+    first, second = regime_policy(), other_regime_policy()
+    assert (first.policy_id, first.policy_version) == (second.policy_id, second.policy_version)
+    ambiguous = prereg(regime_filters=(regime_filter(first), regime_filter(second)))
+    _assert_receipt_invariants(ambiguous)
+    assert ambiguous.gate_verdict is EdgeGateVerdict.FAIL
+    assert ambiguous.verdict_reason_codes == (
+        _code(f"regime_filter_policy_identity_ambiguous:{first.policy_id}:{first.policy_version}"),
+    )
+    distinct = rf2t.governed(policy_version="synthetic-v2", distribution_drift_cap=rf2t.d("0.3"))
+    both = prereg(regime_filters=(regime_filter(distinct), regime_filter(first)))
+    _assert_receipt_invariants(both)
+    assert both.preregistration_sealed is True
+    assert both.registered_regime_policy_digests == tuple(
+        sorted((first.regime_feature_policy_digest, distinct.regime_feature_policy_digest))
+    )
+    assert [item.regime_feature_policy_digest for item in both.registered_regime_filters] == list(
+        both.registered_regime_policy_digests
+    )
+    assert prereg(regime_filters=(regime_filter(first), regime_filter(distinct))) == both  # declaration order is moot
+
+
+def test_a_v1_artifact_can_never_carry_a_regime_filter() -> None:
+    sealed, ledger = _sealed(), _sealed_v2()
+    for name, value in (
+        ("registered_regime_policy_digests", (regime_policy().regime_feature_policy_digest,)),
+        ("registered_regime_policy_digests", []),
+        ("registered_regime_filters", ledger.registered_regime_filters),
+        ("regime_filter_bindings", ledger.regime_filter_bindings),
+        ("regime_filter_set_digest", ledger.regime_filter_set_digest),
+    ):
+        forged = replace(sealed, **{name: value})
+        _assert_not_intact(forged, "evidence_serialization_failed")
+        with pytest.raises(EdgeLeakageBiasEvidenceError, match="payload_v1_carries_regime_filter_fields"):
+            edge_leakage_bias_evidence_to_dict(forged)
+    payload = _payload(sealed)
+    payload["registered_regime_policy_digests"] = [regime_policy().regime_feature_policy_digest]
+    assert edge_leakage_bias_evidence_payload_is_well_formed(payload) is False
+    with pytest.raises(EdgeLeakageBiasEvidenceError, match="payload_fields_malformed"):
+        edge_leakage_bias_evidence_from_payload(payload)
+    with pytest.raises(EdgeLeakageBiasEvidenceError, match="payload_schema_version_unsupported"):
+        edge_leakage_bias_evidence_from_payload({**_payload(sealed), "schema_version": "edge-leakage-bias-evidence.v3"})
+
+
+def test_a_schema_relabel_never_verifies() -> None:
+    carried = _payload(_sealed_v2())
+    with pytest.raises(EdgeLeakageBiasEvidenceError, match="payload_fields_malformed"):
+        edge_leakage_bias_evidence_from_payload({**carried, "schema_version": V1_SCHEMA})
+    stripped = {name: value for name, value in carried.items() if name not in REGIME_FILTER_FIELDS}
+    relabelled_v1 = _resealed_payload({**stripped, "schema_version": V1_SCHEMA})
+    _assert_not_intact(relabelled_v1, "field_mismatch:decision_structure_digest", "field_mismatch:gate_verdict")
+    empty_ledger = dict(zip(REGIME_FILTER_FIELDS, ([], [], [], "")))
+    relabelled_v2 = _resealed_payload({**_payload(_sealed()), **empty_ledger, "schema_version": V2_SCHEMA})
+    _assert_not_intact(relabelled_v2, "field_mismatch:schema_version", "field_mismatch:regime_filter_bindings")
+
+
+def test_v2_ledger_tampering_is_detected() -> None:
+    sealed = _sealed_v2()
+    entry = sealed.registered_regime_filters[0]
+    for changes in (
+        {"registered_regime_policy_digests": ("e" * 64,)},
+        {"registered_regime_filters": (replace(entry, policy_governed=False),)},
+        {"registered_regime_filters": (replace(entry, policy_id="rf2-other-policy"),)},
+        {"regime_filter_set_digest": "e" * 64},
+        {"regime_filter_bindings": ()},
+    ):
+        name = next(iter(changes))
+        _assert_not_intact(_reseal(sealed, **changes), f"field_mismatch:{name}")
+
+
+def test_a_v2_preregistration_is_consumed_by_ef6_through_the_public_parser_and_verifier() -> None:
+    import crypto_core.validation.edge_walk_forward_oos_evidence as ef6_module
+
+    sealed = _sealed_v2()
+    payload = edge_leakage_bias_evidence_to_dict(sealed)
+    assert edge_leakage_bias_evidence_payload_is_well_formed(payload) is True
+    binding = build_edge_authority_binding(
+        snapshot_payload=payload,
+        expected_digest=sealed.leakage_bias_evidence_digest,
+        shape=edge_leakage_bias_evidence_payload_is_well_formed,
+        error=EdgeLeakageBiasEvidenceError,
+        code="ef6_consumer",
+    )
+    codes, chain = ef6_module._chain_authority(
+        binding, root_intake_digest=sealed.root_intake_digest, correlation_id=sealed.correlation_id
+    )
+    assert codes == []
+    assert chain is not None and chain.ef5 == sealed
+
+
+def test_regime_filters_default_to_the_v1_representation() -> None:
+    parameter = inspect.signature(build_edge_leakage_bias_evidence).parameters["regime_filters"]
+    assert parameter.default == ()
+    assert [field.name for field in fields(EdgeInputRegimeFilter)] == ["policy", "expected_policy_digest"]
