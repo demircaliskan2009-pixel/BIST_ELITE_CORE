@@ -20,6 +20,11 @@ import pytest
 
 import crypto_core.validation.regime_feature_policy as policy_module
 from crypto_core.validation.edge_artifact_core import EdgeGateVerdict, edge_canonical_json, edge_sha256_text
+from crypto_core.validation.historical_pit_dataset import (
+    HistoricalPitDatasetError,
+    HistoricalPitValue,
+    build_historical_pit_record,
+)
 from crypto_core.validation.regime_feature_policy import (
     REGIME_F1_FORMULA_POLICY_ID,
     REGIME_F2_FORMULA_POLICY_ID,
@@ -58,6 +63,7 @@ UNIT = Fraction(1, 10**18)
 INT64_MAX = 9223372036854775807
 SOURCE = Path(policy_module.__file__).read_text(encoding="utf-8")
 SERIES, INSTRUMENT = "mark-majors", "BTC-PERPETUAL"  # an eligible price series of the EF-3 test manifest
+VALUE = "close"  # SYNTHETIC governed value name of the close in each authenticated PIT record
 VOL, DD = "vol-btc-3d", "dd-btc-2d"
 
 
@@ -86,6 +92,7 @@ def feature(
     *,
     series: object = SERIES,
     instrument: object = INSTRUMENT,
+    value_name: object = VALUE,
     lookback: object = 3,
     formula: object = None,
 ) -> RegimeFeatureDefinition:
@@ -93,7 +100,15 @@ def feature(
         formula = (
             REGIME_F1_FORMULA_POLICY_ID if feature_class in (F1, "F1_REALIZED_VOL") else REGIME_F2_FORMULA_POLICY_ID
         )
-    return RegimeFeatureDefinition(feature_id, feature_class, series, instrument, lookback, formula)  # type: ignore[arg-type]
+    return RegimeFeatureDefinition(
+        feature_id=feature_id,
+        feature_class=feature_class,  # type: ignore[arg-type]
+        source_series_id=series,  # type: ignore[arg-type]
+        instrument_id=instrument,  # type: ignore[arg-type]
+        value_name=value_name,  # type: ignore[arg-type]
+        lookback_days=lookback,  # type: ignore[arg-type]
+        formula_policy_id=formula,  # type: ignore[arg-type]
+    )
 
 
 def predicate(feature_id: str, operator: object, threshold: str) -> RegimeLabelPredicate:
@@ -235,6 +250,7 @@ def test_any_governed_change_makes_an_earlier_approval_stale() -> None:
             ],
         },
         {"features": [feature(VOL, F1, lookback=4), feature(DD, F2, lookback=2)]},
+        {"features": [feature(VOL, F1, value_name="settle_close"), feature(DD, F2, lookback=2)]},
         {"max_unlabeled_fraction": d("0.4")},
         {"stability_min_overlap_days": 4},
         {"stability_min_asof_gap_days": 2},
@@ -316,6 +332,17 @@ def test_every_deferred_feature_class_is_refused_explicitly(deferred: str) -> No
         ),
         ([feature(VOL, F1, series="Mark-Majors"), feature(DD, F2, lookback=2)], "feature_source_series_id_invalid"),
         ([feature(VOL, F1, instrument="BTC PERPETUAL"), feature(DD, F2, lookback=2)], "feature_instrument_id_invalid"),
+        ([feature(VOL, F1, value_name=""), feature(DD, F2, lookback=2)], "feature_value_name_invalid"),
+        ([feature(VOL, F1, value_name="Close"), feature(DD, F2, lookback=2)], "feature_value_name_invalid"),
+        ([feature(VOL, F1, value_name="close price"), feature(DD, F2, lookback=2)], "feature_value_name_invalid"),
+        ([feature(VOL, F1, value_name="_close"), feature(DD, F2, lookback=2)], "feature_value_name_invalid"),
+        ([feature(VOL, F1, value_name="c" * 129), feature(DD, F2, lookback=2)], "feature_value_name_invalid"),
+        ([feature(VOL, F1, value_name="clöse"), feature(DD, F2, lookback=2)], "feature_value_name_invalid"),
+        ([feature(VOL, F1, value_name=None), feature(DD, F2, lookback=2)], "feature_value_name_invalid"),
+        (
+            [feature(VOL, F1, value_name="live"), feature(DD, F2, lookback=2)],
+            "forbidden_scope_token:feature_value_name",
+        ),
         ([feature("vol live", F1), feature(DD, F2, lookback=2)], "feature_id_invalid"),
     ],
 )
@@ -325,10 +352,66 @@ def test_malformed_or_inconsistent_features_are_refused(features: object, reason
 
 
 def test_the_same_series_may_carry_distinct_features() -> None:
-    features = [feature(VOL, F1), feature(DD, F2, lookback=2), feature("vol-btc-5d", F1, lookback=5)]
-    rules = [*default_rules(), rule(4, "STRESSED", predicate("vol-btc-5d", GT, d("0.04")))]
+    features = [
+        feature(VOL, F1),
+        feature(DD, F2, lookback=2),
+        feature("vol-btc-5d", F1, lookback=5),
+        feature("vol-btc-3d-settle", F1, value_name="settle_close"),  # the same binding but another governed value
+    ]
+    rules = [
+        *default_rules(),
+        rule(4, "STRESSED", predicate("vol-btc-5d", GT, d("0.04"))),
+        rule(5, "STRESSED", predicate("vol-btc-3d-settle", GT, d("0.04"))),
+    ]
     policy = build(features=features, label_rules=rules)
-    assert [item.feature_id for item in policy.features] == [DD, VOL, "vol-btc-5d"]
+    assert [item.feature_id for item in policy.features] == [DD, VOL, "vol-btc-3d-settle", "vol-btc-5d"]
+    assert [item.value_name for item in policy.features] == [VALUE, VALUE, "settle_close", VALUE]
+
+
+def test_the_governed_value_name_is_mandatory_and_committed_by_the_approval() -> None:
+    assert {item.name: item.default for item in fields(RegimeFeatureDefinition)}["value_name"] is dataclasses.MISSING
+    base = governed()
+    assert {item.value_name for item in base.features} == {VALUE}
+    renamed = [feature(VOL, F1, value_name="settle_close"), feature(DD, F2, lookback=2)]
+    stale = build(features=renamed, approval=base.approval)
+    assert stale.policy_digest != base.policy_digest  # only the value name changed
+    assert (stale.gate_verdict, stale.advances) == (EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL, False)
+    assert stale.verdict_reason_codes == (code("governance_approval_policy_digest_mismatch"),)
+    fresh = governed(features=renamed)
+    assert (fresh.gate_verdict, fresh.advances) == (EdgeGateVerdict.PASS, True)
+    assert [item["value_name"] for item in regime_feature_policy_to_dict(fresh)["features"]] == [VALUE, "settle_close"]  # type: ignore[index,union-attr]
+    synthetic = build(features=renamed, approval=approval_for(build(features=renamed), kind=SYNTHETIC))
+    assert (synthetic.advances, synthetic.synthetic_test_approval_used) == (False, True)
+    assert_intact(fresh)
+
+
+@pytest.mark.parametrize(
+    "name", ["close", "settle_close", "a.b:c-d", "9close", "", "Close", "close price", "_close", "c" * 129, "live"]
+)
+def test_the_value_name_grammar_is_the_accepted_pit_value_name_grammar(name: str) -> None:
+    """The accepted ``HistoricalPitRecord`` builder is the oracle: RF-2 accepts exactly the value names it accepts."""
+
+    try:
+        build_historical_pit_record(
+            series_id=SERIES,
+            data_requirement_key="mark_price",
+            instrument=INSTRUMENT,
+            sequence_id=0,
+            event_time_ns=1,
+            available_at_ns=1,
+            finalized_at_ns=1,
+            revision_vintage_id=None,
+            values=(HistoricalPitValue(name, d("1")),),
+        )
+        pit_accepts = True
+    except HistoricalPitDatasetError:
+        pit_accepts = False
+    try:
+        build(features=[feature(VOL, F1, value_name=name), feature(DD, F2, lookback=2)])
+        policy_accepts = True
+    except RegimeFeaturePolicyError:
+        policy_accepts = False
+    assert policy_accepts is pit_accepts
 
 
 @pytest.mark.parametrize(

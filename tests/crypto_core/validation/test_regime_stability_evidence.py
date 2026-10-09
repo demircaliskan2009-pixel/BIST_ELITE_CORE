@@ -22,6 +22,7 @@ import pytest
 
 import crypto_core.validation.regime_stability_evidence as stability_module
 from crypto_core.validation.edge_artifact_core import EdgeGateVerdict, edge_canonical_json, edge_sha256_text
+from crypto_core.validation.historical_pit_dataset import HistoricalPitValue
 from crypto_core.validation.regime_feature_policy import REGIME_NON_CLAIM_FLAGS, REGIME_UNLABELED, RegimeFeaturePolicy
 from crypto_core.validation.regime_label_evidence import regime_label_evidence_digest
 from crypto_core.validation.regime_stability_evidence import (
@@ -44,9 +45,11 @@ from tests.crypto_core.validation import test_historical_pit_dataset as pit
 
 try:  # the module objects pytest collects (basename import), so cached fixtures are shared with their own tests
     import test_regime_feature_policy as rf2t
+    import test_regime_feature_series_evidence as rf3t
     import test_regime_label_evidence as rf4t
 except ImportError:  # imported outside a pytest session
     from tests.crypto_core.validation import test_regime_feature_policy as rf2t
+    from tests.crypto_core.validation import test_regime_feature_series_evidence as rf3t
     from tests.crypto_core.validation import test_regime_label_evidence as rf4t
 
 _PREFIX = "regime_stability_evidence"
@@ -350,6 +353,32 @@ def test_every_input_is_reproven_and_bound_to_one_policy() -> None:
         build(replace(inputs, stability_evidence_id=" rf5"))
     with refused("inputs_malformed"):
         build(None)
+
+
+def test_the_retained_digest_close_attack_can_never_reach_labels_or_stability() -> None:
+    """The audited downstream attack: day D0+1's authenticated close 101 replaced by 80 under its retained record
+    digest, which would flip the labels of days D0+2 and D0+3 that RF-5 compares. The accepted record-digest
+    recomputation refuses every route, so no RF-4 or RF-5 evidence can ever be built over the forged close."""
+
+    inputs = stability_inputs("UDUD", "UDUDU")
+    assert decide(inputs).status is PROVEN
+    later = inputs.later_label_inputs.feature_series_inputs
+    authentic = later.pit_dataset.records
+    assert [item.value for item in authentic[1].values] == [rf3t.price("101")]
+    forged = replace(authentic[1], values=(HistoricalPitValue(rf3t.VALUE, rf3t.price("80")),))
+    attacked = (authentic[0], forged, *authentic[2:])
+    # Rebuilding the dataset: the accepted builder recomputes the record digest and rejects the dataset.
+    with rf3t.refused("pit_dataset_not_advancing"):
+        rf4t.label_inputs("UDUDU", policy=inputs.policy, records=attacked)
+    # Substituting the record into the anchored dataset and resealing it: the dataset verifier refuses it, so neither
+    # RF-4 nor RF-5 can rebuild their upstream evidence.
+    substituted = rf3t.reseal_dataset(later.pit_dataset, records=attacked)
+    forged_series = replace(later, pit_dataset=substituted, pit_dataset_digest=substituted.dataset_digest)
+    forged_labels = replace(inputs.later_label_inputs, feature_series_inputs=forged_series)
+    with rf4t.refused("feature_series_reconstruction_failed"):
+        rf4t.build(forged_labels)
+    with refused("later_labels_reconstruction_failed"):
+        build(replace(inputs, later_label_inputs=forged_labels))
 
 
 # --- the verifier ---------------------------------------------------------------------------------------------------

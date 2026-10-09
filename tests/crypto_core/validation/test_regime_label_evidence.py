@@ -1,7 +1,7 @@
 """Tests for the RF-4 prior-day-close regime label evidence (``regime_label_evidence``).
 
-Fixtures: the authentic EF-3 manifest and governed synthetic RF-2 policies of the RF-2/RF-3 test modules, over
-"up/down" close worlds. With the one-feature policy below, ``label(D)`` is ``STRESSED`` exactly when day ``D - 1``
+Fixtures: the authentic EF-3 manifest, authenticated ``HistoricalPitDataset`` and governed synthetic RF-2 policies of
+the RF-2/RF-3 test modules, over "up/down" close worlds (one authenticated record per daily close). With the one-feature policy below, ``label(D)`` is ``STRESSED`` exactly when day ``D - 1``
 closed below day ``D - 2`` (a positive two-day peak distance) and ``CALM`` otherwise, so every expected label is
 derived here from the move string alone, never from the module. Every value is a SYNTHETIC TEST VALUE.
 """
@@ -12,6 +12,7 @@ import ast
 import dataclasses
 import json
 import re
+from collections.abc import Sequence
 from dataclasses import fields, replace
 from fractions import Fraction
 from pathlib import Path
@@ -20,6 +21,7 @@ import pytest
 
 import crypto_core.validation.regime_label_evidence as label_module
 from crypto_core.validation.edge_artifact_core import EdgeGateVerdict, edge_canonical_json, edge_sha256_text
+from crypto_core.validation.historical_pit_dataset import HistoricalPitRecord
 from crypto_core.validation.regime_feature_policy import (
     REGIME_NON_CLAIM_FLAGS,
     REGIME_UNLABELED,
@@ -111,15 +113,16 @@ def label_inputs(
     policy: RegimeFeaturePolicy | None = None,
     drop_days: tuple[int, ...] = (),
     closes: tuple[str, ...] | None = None,
+    records: Sequence[HistoricalPitRecord] | None = None,
     **overrides: object,
 ) -> RegimeLabelInputs:
-    """Labels for days D0+2 .. D0+1+len(moves), as of the start of the last day; ``drop_days`` removes closes."""
+    """Labels for days D0+2 .. D0+1+len(moves), as of the start of the last day, over an authenticated dataset of one
+    record per close; ``drop_days`` removes records and ``records`` replaces them all."""
 
     closes = moves_closes(moves) if closes is None else closes
-    observations = [item for item in rf3t.world(closes) if item.day_index not in drop_days]
     series_inputs = rf3t.series_inputs(
         policy=updown_policy() if policy is None else policy,
-        observations=observations,
+        records=rf3t.pit_records(closes, skip=drop_days) if records is None else records,
         last=D0 + len(closes),
         first_feature_day=D0 + 2,
     )
@@ -253,9 +256,8 @@ def test_no_matching_rule_is_unlabeled_and_counted() -> None:
 
 
 def test_one_missing_required_feature_makes_the_day_unlabeled_never_filled() -> None:
-    # The two-feature RF-2 test policy over the RF-3 world without the close of day D0+5.
-    observations = [item for item in rf3t.world() if item.day_index != D0 + 5]
-    series_inputs = rf3t.series_inputs(observations=observations)
+    # The two-feature RF-2 test policy over the RF-3 world without the record of day D0+5.
+    series_inputs = rf3t.series_inputs(records=rf3t.pit_records(skip=(D0 + 5,)))
     inputs = RegimeLabelInputs(
         "rf4-synthetic-2", "corr-rf4", series_inputs.policy, series_inputs, rf3t.build(series_inputs)
     )

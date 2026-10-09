@@ -4,14 +4,23 @@ Design authority: ``docs/crypto_core/regime_volatility_filter_design.md`` sectio
 structural authority ``RF_CORE_FORMULA_LABEL_AND_STABILITY_POLICY_V1`` (closure
 ``RF2_RF5_CORE_PIT_REGIME_EVIDENCE_SPINE_V1``).
 
-For one exact RF-2 policy, RF-3 computes every policy feature for every UTC day of a declared feature window. It does
-so from supplied, digest-bound daily close observations, as of one UTC-day-aligned coordinate. It proves a
-deterministic transformation of authenticated inputs, never external market truth.
+For one exact RF-2 policy, RF-3 computes every policy feature for every UTC day of a declared feature window, as of
+one UTC-day-aligned coordinate. Every close it reads is DERIVED from an authenticated record of an accepted
+``HistoricalPitDataset``. It proves a deterministic transformation of digest-bound, re-proven records, never external
+market truth: ``external_market_truth_proven`` stays structurally False, because record authentication proves internal
+provenance, not that an external archive was honest or complete.
 
-Source authority. The exact EF-3 ``EdgeSourcePacketEvidence`` is re-proven through
-``verify_edge_source_packet_evidence``. It must be intact, ``READY`` and equal to the caller's digest anchor; a
-manifest that fails its own candidate-level gate still serves, because RF-3 reads only per-series eligibility. Every
-feature's source series must, in the authenticated manifest:
+Source authority (``RF3_AUTHENTICATED_HISTORICAL_PIT_DATASET_BINDING_V1``):
+* the exact EF-3 ``EdgeSourcePacketEvidence``, re-proven through ``verify_edge_source_packet_evidence``: intact, equal
+  to the caller's digest anchor and ``READY``;
+* the exact ``HistoricalPitDataset``, re-proven through ``verify_historical_pit_dataset``, which recomputes every
+  record digest and re-proves the dataset's embedded EF-3 binding. It must be intact, equal to the caller's digest
+  anchor, ``READY``, ``PASS`` and advancing;
+* the dataset must belong to the SAME exact EF-3 manifest: its ``source_manifest_digest`` and its embedded manifest
+  snapshot equal the supplied manifest's;
+* ``pit_dataset.correlation_id == source_manifest.correlation_id == correlation_id``.
+
+Every feature's source series must, in the authenticated manifest:
 * exist;
 * be ``finalized_only`` and ``point_in_time_revision_safe``;
 * be ``rights_usable``;
@@ -19,27 +28,20 @@ feature's source series must, in the authenticated manifest:
 * be a price series (``price_semantics`` present);
 * cover the feature's instrument.
 
-Any failure raises.
+Any failure raises. There is no caller close, no caller source digest and no parallel source world.
 
-Observations. Exactly one per (series, instrument, UTC day). Each binds:
-* the series, instrument and ``day_index``;
-* a canonical strictly positive close;
-* the close instant ``event_time_ns`` inside ``(start(day), start(day + 1)]``;
-* ``available_at_ns`` and ``finalized_at_ns``, never before the close instant and never after ``as_of_ns``;
-* its source record digest.
+Daily close derivation (the prior-day-close rule). Feature day ``D`` reads ONLY source days ``D - w`` to ``D - 1``, from
+the records the accepted ``select_visible_pit_records`` shows for the feature's exact series and instrument at
+``decision_time_ns = start(D) = D * 86_400_000_000_000`` ns. Visibility is the accepted inclusive convention:
+``available_at_ns <= start(D)`` and ``finalized_at_ns <= start(D)`` for the finalized series. One nanosecond later is not
+visible, and the dataset alone selects the latest visible revision vintage. For each source day ``d``, the visible
+records whose ``start(d) < event_time_ns <= start(d + 1)`` are counted:
+* exactly one: its value named by the governed ``value_name`` is the close;
+* none: the feature-day is unavailable (``window_day_not_visible_at_cutoff``);
+* more than one: the feature-day is unavailable (``window_day_ambiguous``), never an arbitrary or latest pick.
 
-Every supplied observation must belong to a policy feature's series and instrument.
-
-Cutoff (the prior-day-close rule). Feature day ``D`` reads ONLY the closes of days ``D - w`` to ``D - 1``. Each must be
-available and finalized at or before ``start(D) = D * 86_400_000_000_000`` ns. The boundary is inclusive, the accepted
-point-in-time convention (``historical_pit_dataset``: visible at ``t`` iff ``available_at_ns <= t`` and
-``finalized_at_ns <= t``). So:
-* a close finalized exactly at ``start(D)`` counts;
-* one nanosecond later it does not;
-* day ``D`` and later days are never read.
-
-A missing or late window day makes that feature-day UNAVAILABLE with its reasons. There is no interpolation, carry
-forward or backfill, and a late close feeds only later feature days.
+A missing governed value, or a close that is not strictly positive, also makes the feature-day unavailable. There is no
+substitution, interpolation, carry forward, averaging or backfill, and day ``D`` and later days are never read.
 
 Formulas (``RF_FIXED_SCALE18_DECIMAL_HALF_EVEN_P80_V1``):
 * ``RF_F1_SIMPLE_RETURN_SAMPLE_STDDEV_V1``: ``w`` closes give ``w - 1`` exact simple returns ``c_t / c_(t-1) - 1``, then
@@ -51,11 +53,18 @@ Formulas (``RF_FIXED_SCALE18_DECIMAL_HALF_EVEN_P80_V1``):
 A value beyond the 60-character representation bound is unavailable, never truncated.
 
 Every record binds:
-* the feature, its class, source series and instrument;
+* the feature, its class, source series, instrument and governed value name;
 * the target day and its exact window day range;
 * the cutoff and the published value;
-* the ``inputs_window_digest`` of the window's observation digests;
+* the exact ``source_record_digests`` it consumed;
+* the ``inputs_window_digest`` over the dataset digest and each consumed close's full derived provenance (series,
+  instrument, source day, value name, value, event, availability and finality coordinates, record digest);
 * the formula and numeric policy ids.
+
+The evidence binds the dataset id and digest and every consumed close (``consumed_sources``). A consumed close is a
+``RegimeDailyCloseObservation`` built here from exactly one authenticated record; its ``source_record_digest`` is that
+record's own digest, which the dataset verifier recomputes from every other record field. So no consumed value,
+identity or coordinate can change while that digest is retained.
 
 Every caller claim is recomputed: a different value raises ``feature_recompute_mismatch``. Status: ``PASS`` with a
 governed policy, otherwise ``NEEDS_GOVERNANCE_APPROVAL``; unavailable days are recorded and never fail the evidence.
@@ -68,7 +77,7 @@ No float, no ambient ``Decimal`` context, no IO, clock, randomness, network or e
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, fields, replace
 from decimal import Context, Decimal, DivisionByZero, InvalidOperation, Overflow
 from enum import Enum
@@ -90,7 +99,14 @@ from crypto_core.validation.edge_artifact_core import (
 )
 from crypto_core.validation.edge_source_packet_evidence import (
     EdgeSourcePacketEvidence,
+    edge_source_packet_evidence_to_dict,
     verify_edge_source_packet_evidence,
+)
+from crypto_core.validation.historical_pit_dataset import (
+    HistoricalPitDataset,
+    HistoricalPitRecord,
+    select_visible_pit_records,
+    verify_historical_pit_dataset,
 )
 from crypto_core.validation.regime_feature_policy import (
     REGIME_F1_FORMULA_POLICY_ID,
@@ -110,26 +126,31 @@ _PREFIX = "regime_feature_series_evidence"
 _SCHEMA = "regime-feature-series-evidence.v1"
 _DIGEST_FIELD = "feature_series_digest"
 _IDENTIFIER_PUNCTUATION = frozenset("-_./:")
-_SERIES_PUNCTUATION = frozenset("_.:-")
 
 _RULE_SET_V1: dict[str, object] = {
     "rule_set_id": "regime_feature_series_evidence_rules.v1",
     "contract_id": "RF2_RF5_CORE_PIT_REGIME_EVIDENCE_SPINE_V1",
     "structural_authority_id": "RF_CORE_FORMULA_LABEL_AND_STABILITY_POLICY_V1",
-    "scope_rule_id": "deterministic_transformation_of_digest_bound_observations_never_external_market_truth.v1",
+    "scope_rule_id": "deterministic_transformation_of_authenticated_pit_records_never_external_market_truth.v1",
     "policy_rule_id": "exact_rf2_policy_reproven_governance_incomplete_policy_never_advances.v1",
     "source_rule_id": (
         "ef3_reproven_intact_ready_anchor_equal_every_feature_series_finalized_point_in_time_safe_rights_usable_"
         "feature_input_eligible_price_series_covering_its_instrument.v1"
     ),
-    "observation_rule_id": "one_digest_bound_positive_daily_close_per_series_instrument_utc_day_bound_to_a_feature.v1",
-    "close_instant_rule_id": "close_instant_after_start_of_its_day_and_at_or_before_start_of_the_next.v1",
-    "time_order_rule_id": "available_and_finalized_never_before_the_close_instant.v1",
-    "as_of_rule_id": "utc_day_aligned_as_of_every_observation_known_by_it_every_feature_day_starts_by_it.v1",
+    "dataset_rule_id": (
+        "historical_pit_dataset_reproven_intact_anchor_equal_ready_pass_advancing_bound_to_the_exact_supplied_ef3.v1"
+    ),
+    "correlation_rule_id": "pit_dataset_correlation_equals_ef3_manifest_correlation_equals_rf3_correlation.v1",
+    "daily_close_rule_id": (
+        "exactly_one_visible_record_with_event_time_after_start_of_day_at_or_before_start_of_next_else_unavailable.v1"
+    ),
+    "value_rule_id": "governed_value_name_exact_canonical_strictly_positive_close_else_unavailable_never_substituted.v1",
+    "provenance_rule_id": "every_consumed_close_bound_to_its_recomputed_record_digest_and_the_dataset_digest.v1",
+    "as_of_rule_id": "utc_day_aligned_as_of_every_feature_day_starts_by_it.v1",
     "cutoff_rule_id": "feature_day_d_reads_only_days_d_minus_w_to_d_minus_1_available_and_finalized_by_start_of_d.v1",
     "cutoff_boundary": "INCLUSIVE_AT_START_OF_FEATURE_DAY",
-    "visibility_convention_id": "accepted_pit_visibility_available_at_and_finalized_at_at_or_before_t.v1",
-    "no_fill_rule_id": "missing_or_late_window_day_makes_the_feature_unavailable_no_interpolation_carry_or_backfill.v1",
+    "visibility_convention_id": "accepted_select_visible_pit_records_at_start_of_the_feature_day_latest_visible_vintage.v1",
+    "no_fill_rule_id": "invisible_ambiguous_or_unusable_window_day_makes_the_feature_unavailable_no_fill_of_any_kind.v1",
     "f1_formula_policy_id": REGIME_F1_FORMULA_POLICY_ID,
     "f1_method_id": "w_closes_w_minus_1_exact_simple_returns_exact_mean_sample_variance_n_minus_1_square_root.v1",
     "f2_formula_policy_id": REGIME_F2_FORMULA_POLICY_ID,
@@ -147,7 +168,6 @@ _RULE_SET_V1: dict[str, object] = {
     "max_wire_integer": 9223372036854775807,
     "max_text_length": 256,
     "max_identifier_length": 128,
-    "max_instrument_length": 64,
 }
 REGIME_FEATURE_SERIES_RULE_SET_DIGEST = edge_sha256_text(edge_canonical_json(_RULE_SET_V1))
 _RULE_SET_ID = str(_RULE_SET_V1["rule_set_id"])
@@ -162,7 +182,6 @@ _MAX_WIRE_INT: int = _RULE_SET_V1["max_wire_integer"]  # type: ignore[assignment
 _MAX_DAY_INDEX = _MAX_WIRE_INT // _DAY_NS - 1  # so that the start of the next day is still an int64 coordinate
 _MAX_TEXT: int = _RULE_SET_V1["max_text_length"]  # type: ignore[assignment]
 _MAX_IDENTIFIER: int = _RULE_SET_V1["max_identifier_length"]  # type: ignore[assignment]
-_MAX_INSTRUMENT: int = _RULE_SET_V1["max_instrument_length"]  # type: ignore[assignment]
 _UNITS_BOUND = 10 ** (_MAX_TEXT_DECIMAL - 1)  # the first unit count whose rendering exceeds the 60-character bound
 _MIN_CLOSES: dict[RegimeFeatureClass, int] = {
     RegimeFeatureClass(name): int(minimum)
@@ -182,16 +201,21 @@ class RegimeFeatureSeriesError(EdgeArtifactError):
 
 @dataclass(frozen=True)
 class RegimeDailyCloseObservation:
-    """One finalized daily close of one series and instrument, as its digest-bound source record supplies it."""
+    """One daily close DERIVED here from exactly one authenticated ``HistoricalPitRecord``; never a caller input.
+
+    ``source_record_digest`` is that record's own digest, recomputed by the dataset verifier from every other record
+    field.
+    """
 
     series_id: str
     instrument_id: str
     day_index: int
+    value_name: str
     close: str
     event_time_ns: int
     available_at_ns: int
     finalized_at_ns: int
-    source_digest: str
+    source_record_digest: str
 
 
 @dataclass(frozen=True)
@@ -212,10 +236,11 @@ class RegimeFeatureSeriesInputs:
     policy: RegimeFeaturePolicy
     source_manifest: EdgeSourcePacketEvidence
     source_manifest_digest: str
+    pit_dataset: HistoricalPitDataset
+    pit_dataset_digest: str
     as_of_ns: int
     first_feature_day: int
     last_feature_day: int
-    observations: tuple[RegimeDailyCloseObservation, ...]
     claims: tuple[RegimeFeatureClaim, ...]
 
 
@@ -227,12 +252,14 @@ class RegimeFeatureRecord:
     feature_class: RegimeFeatureClass
     source_series_id: str
     instrument_id: str
+    value_name: str
     target_day_index: int
     window_first_day_index: int
     window_last_day_index: int
     cutoff_ns: int
     available: bool
     value: str | None
+    source_record_digests: tuple[str, ...]
     inputs_window_digest: str | None
     unavailable_reason_codes: tuple[str, ...]
     formula_policy_id: str
@@ -255,12 +282,13 @@ class RegimeFeatureSeriesEvidence:
     source_manifest_id: str
     source_manifest_digest: str
     source_manifest_gate_verdict: str
+    pit_dataset_id: str
+    pit_dataset_digest: str
     as_of_ns: int
     first_feature_day_index: int
     last_feature_day_index: int
     feature_ids: tuple[str, ...]
-    observation_count: int
-    observations_digest: str
+    consumed_sources: tuple[RegimeDailyCloseObservation, ...]
     claimed_value_count: int
     records: tuple[RegimeFeatureRecord, ...]
     available_record_count: int
@@ -339,24 +367,6 @@ def _require_text(value: object, name: str) -> str:
 
 def _require_identifier(value: object, name: str) -> str:
     if type(value) is not str or value == "" or len(value) > _MAX_IDENTIFIER or not value.isascii():
-        raise _fail(f"{name}_invalid")
-    if not value[0].isalnum() or not all(char.isalnum() or char in _IDENTIFIER_PUNCTUATION for char in value):
-        raise _fail(f"{name}_invalid")
-    return _require_text(value, name)
-
-
-def _require_series_id(value: object, name: str) -> str:
-    if type(value) is not str or value == "" or len(value) > _MAX_IDENTIFIER or not value.isascii():
-        raise _fail(f"{name}_invalid")
-    if not value[0].isalnum() or not all(
-        char.islower() or char.isdigit() or char in _SERIES_PUNCTUATION for char in value
-    ):
-        raise _fail(f"{name}_invalid")
-    return _require_text(value, name)
-
-
-def _require_instrument(value: object, name: str) -> str:
-    if type(value) is not str or value == "" or len(value) > _MAX_INSTRUMENT or not value.isascii():
         raise _fail(f"{name}_invalid")
     if not value[0].isalnum() or not all(char.isalnum() or char in _IDENTIFIER_PUNCTUATION for char in value):
         raise _fail(f"{name}_invalid")
@@ -542,14 +552,6 @@ def _payload(artifact: object) -> dict[str, object]:
     return payload
 
 
-def regime_daily_close_observation_digest(observation: RegimeDailyCloseObservation) -> str:
-    """The digest of one observation's exact canonical wire form."""
-
-    if type(observation) is not RegimeDailyCloseObservation:
-        raise _fail("observation_malformed")
-    return edge_sha256_text(edge_canonical_json(_payload(observation)))
-
-
 # --- provenance -----------------------------------------------------------------------------------------------------
 
 
@@ -602,98 +604,146 @@ def _bind_feature_sources(policy: RegimeFeaturePolicy, manifest: EdgeSourcePacke
             raise _fail(f"source_series_instrument_not_covered:{series_id}:{feature.instrument_id}")
 
 
-def _canonical_observations(
-    values: object, *, as_of_ns: int, bindings: frozenset[tuple[str, str]]
-) -> dict[tuple[str, str], dict[int, RegimeDailyCloseObservation]]:
-    """Every observation validated once, grouped by (series, instrument) and keyed by UTC day."""
+def _require_pit_dataset(
+    value: object, anchor: object, *, manifest: EdgeSourcePacketEvidence, correlation_id: str
+) -> HistoricalPitDataset:
+    """The exact ``HistoricalPitDataset``: re-proven, anchored, advancing and bound to this exact EF-3 world.
 
-    grouped: dict[tuple[str, str], dict[int, RegimeDailyCloseObservation]] = {binding: {} for binding in bindings}
-    for item in _snapshot(values, "observations"):
-        _require_exact(item, RegimeDailyCloseObservation, "observation")
-        observation = cast(RegimeDailyCloseObservation, item)
-        series_id = _require_series_id(observation.series_id, "observation_series_id")
-        instrument_id = _require_instrument(observation.instrument_id, "observation_instrument_id")
-        day = _require_day_index(observation.day_index, "observation_day_index")
-        close = regime_decimal_value(observation.close)
-        if close is None:
-            raise _fail("observation_close_invalid")
-        if close <= 0:
-            raise _fail("observation_close_not_positive")
-        event = _require_ns(observation.event_time_ns, "observation_event_time_ns")
-        available = _require_ns(observation.available_at_ns, "observation_available_at_ns")
-        finalized = _require_ns(observation.finalized_at_ns, "observation_finalized_at_ns")
-        if not day * _DAY_NS < event <= (day + 1) * _DAY_NS:
-            raise _fail("observation_close_instant_outside_its_day")
-        if available < event:
-            raise _fail("observation_available_before_its_close")
-        if finalized < event:
-            raise _fail("observation_finalized_before_its_close")
-        if available > as_of_ns or finalized > as_of_ns:
-            raise _fail("observation_after_as_of")
-        source_digest = _require_hex64(observation.source_digest, "observation_source_digest")
-        binding = (series_id, instrument_id)
-        if binding not in grouped:
-            raise _fail("observation_not_bound_to_a_policy_feature")
-        if day in grouped[binding]:
-            raise _fail("observation_duplicate_day")
-        grouped[binding][day] = RegimeDailyCloseObservation(
-            series_id=series_id,
-            instrument_id=instrument_id,
-            day_index=day,
-            close=cast(str, observation.close),
-            event_time_ns=event,
-            available_at_ns=available,
-            finalized_at_ns=finalized,
-            source_digest=source_digest,
-        )
-    return grouped
+    ``verify_historical_pit_dataset`` recomputes every record digest and re-proves the dataset's embedded EF-3 binding;
+    RF-3 additionally requires that embedded manifest to be exactly the manifest supplied to RF-3, and one correlation
+    across the dataset, the manifest and this evidence.
+    """
+
+    _require_exact(value, HistoricalPitDataset, "pit_dataset")
+    expected = _require_hex64(anchor, "pit_dataset_digest")
+    verification = verify_historical_pit_dataset(value)
+    if not verification.intact:
+        raise _fail("pit_dataset_not_intact")
+    if verification.recomputed_digest != expected:
+        raise _fail("pit_dataset_digest_mismatch")
+    dataset = cast(HistoricalPitDataset, value)
+    if (
+        dataset.status is not EdgeEvidenceStatus.READY
+        or dataset.gate_verdict is not EdgeGateVerdict.PASS
+        or dataset.advances is not True
+    ):
+        raise _fail("pit_dataset_not_advancing")
+    manifest_snapshot = edge_canonical_json(edge_source_packet_evidence_to_dict(manifest))
+    if (
+        dataset.source_manifest_digest != manifest.source_packet_evidence_digest
+        or dataset.source_manifest_binding.snapshot_json != manifest_snapshot
+    ):
+        raise _fail("pit_dataset_source_manifest_mismatch")
+    if manifest.correlation_id != correlation_id:
+        raise _fail("source_manifest_correlation_mismatch")
+    if dataset.correlation_id != manifest.correlation_id:
+        raise _fail("pit_dataset_correlation_mismatch")
+    return dataset
 
 
 # --- the feature records --------------------------------------------------------------------------------------------
 
 
-def _window_digest(window: Sequence[RegimeDailyCloseObservation]) -> str:
-    return edge_sha256_text(edge_canonical_json([regime_daily_close_observation_digest(item) for item in window]))
+def _window_digest(pit_dataset_digest: str, window: Sequence[RegimeDailyCloseObservation]) -> str:
+    """The dataset digest and every consumed close's full derived provenance, in source-day order."""
+
+    return edge_sha256_text(
+        edge_canonical_json({"pit_dataset_digest": pit_dataset_digest, "sources": [_payload(item) for item in window]})
+    )
+
+
+def _visible_records(
+    dataset: HistoricalPitDataset, feature: RegimeFeatureDefinition, cutoff: int
+) -> tuple[HistoricalPitRecord, ...]:
+    """The accepted PIT view of the feature's exact series and instrument at ``cutoff``; the dataset picks vintages."""
+
+    try:
+        view = select_visible_pit_records(
+            dataset, series_id=feature.source_series_id, instrument=feature.instrument_id, decision_time_ns=cutoff
+        )
+    except Exception as exc:  # noqa: BLE001 - the accepted view refusing a bound series is a provenance defect
+        raise _fail("pit_dataset_view_failed") from exc
+    return view.records
+
+
+def _daily_close(
+    record: HistoricalPitRecord, feature: RegimeFeatureDefinition, day: int
+) -> tuple[RegimeDailyCloseObservation | None, str]:
+    """The close of source day ``day``: the exact governed value of its one authenticated record, else a reason."""
+
+    named = [item for item in record.values if item.name == feature.value_name]
+    if len(named) != 1:
+        return None, _reason(f"window_day_value_missing:{day}")
+    close = regime_decimal_value(named[0].value)
+    if close is None:
+        return None, _reason(f"window_day_close_noncanonical:{day}")
+    if close <= 0:
+        return None, _reason(f"window_day_close_not_positive:{day}")
+    if record.finalized_at_ns is None:
+        return None, _reason(f"window_day_not_final:{day}")
+    observation = RegimeDailyCloseObservation(
+        series_id=record.series_id,
+        instrument_id=record.instrument,
+        day_index=day,
+        value_name=feature.value_name,
+        close=named[0].value,
+        event_time_ns=record.event_time_ns,
+        available_at_ns=record.available_at_ns,
+        finalized_at_ns=record.finalized_at_ns,
+        source_record_digest=record.record_digest,
+    )
+    return observation, ""
 
 
 def _feature_record(
-    feature: RegimeFeatureDefinition, day: int, closes: Mapping[int, RegimeDailyCloseObservation]
-) -> RegimeFeatureRecord:
-    """One feature on day ``day``: only days ``day - w`` to ``day - 1``, each final by ``start(day)``."""
+    feature: RegimeFeatureDefinition, day: int, dataset: HistoricalPitDataset
+) -> tuple[RegimeFeatureRecord, tuple[RegimeDailyCloseObservation, ...]]:
+    """One feature on day ``day``: source days ``day - w`` to ``day - 1`` only, each from exactly one record visible at
+    ``start(day)``."""
 
     first, last = day - feature.lookback_days, day - 1
     cutoff = day * _DAY_NS
+    visible = _visible_records(dataset, feature, cutoff)
     reasons: list[str] = []
     window: list[RegimeDailyCloseObservation] = []
     for index in range(first, last + 1):
-        observation = closes.get(index)
-        if observation is None:
-            reasons.append(_reason(f"window_day_missing:{index}"))
-        elif observation.available_at_ns > cutoff or observation.finalized_at_ns > cutoff:
-            reasons.append(_reason(f"window_day_not_final_by_cutoff:{index}"))
+        start, end = index * _DAY_NS, (index + 1) * _DAY_NS
+        eligible = [record for record in visible if start < record.event_time_ns <= end]
+        if not eligible:
+            reasons.append(_reason(f"window_day_not_visible_at_cutoff:{index}"))
+        elif len(eligible) > 1:
+            reasons.append(_reason(f"window_day_ambiguous:{index}"))
         else:
-            window.append(observation)
+            observation, problem = _daily_close(eligible[0], feature, index)
+            if observation is None:
+                reasons.append(problem)
+            else:
+                window.append(observation)
     value: str | None = None
     if not reasons:
         value = _measure(feature.feature_class, [Fraction(item.close) for item in window])
         if value is None:
             reasons.append(_reason("value_beyond_representation"))
-    return RegimeFeatureRecord(
+    consumed = tuple(window) if value is not None else ()
+    record = RegimeFeatureRecord(
         feature_id=feature.feature_id,
         feature_class=feature.feature_class,
         source_series_id=feature.source_series_id,
         instrument_id=feature.instrument_id,
+        value_name=feature.value_name,
         target_day_index=day,
         window_first_day_index=first,
         window_last_day_index=last,
         cutoff_ns=cutoff,
         available=value is not None,
         value=value,
-        inputs_window_digest=None if value is None else _window_digest(window),
+        source_record_digests=tuple(item.source_record_digest for item in consumed),
+        inputs_window_digest=None if value is None else _window_digest(dataset.dataset_digest, consumed),
         unavailable_reason_codes=_sorted_unique(reasons),
         formula_policy_id=feature.formula_policy_id,
         numeric_policy_id=REGIME_NUMERIC_POLICY_ID,
     )
+    return record, consumed
 
 
 def _verify_claims(values: object, records: Sequence[RegimeFeatureRecord]) -> int:
@@ -727,8 +777,9 @@ def _verify_claims(values: object, records: Sequence[RegimeFeatureRecord]) -> in
 def build_regime_feature_series_evidence(inputs: RegimeFeatureSeriesInputs) -> RegimeFeatureSeriesEvidence:
     """Compute every policy feature for every day of the window from the exact, re-proven inputs.
 
-    Malformed input and every provenance or source-binding defect raise ``RegimeFeatureSeriesError``; a claim that is
-    not the recomputation raises ``feature_recompute_mismatch``. Inputs are never mutated.
+    Every close is derived from one authenticated record of the re-proven ``HistoricalPitDataset``. Malformed input and
+    every provenance, dataset or source-binding defect raise ``RegimeFeatureSeriesError``, before any feature is
+    computed; a claim that is not the recomputation raises ``feature_recompute_mismatch``. Inputs are never mutated.
     """
 
     _require_exact(inputs, RegimeFeatureSeriesInputs, "inputs")
@@ -736,6 +787,9 @@ def build_regime_feature_series_evidence(inputs: RegimeFeatureSeriesInputs) -> R
     correlation_id = _require_text(inputs.correlation_id, "correlation_id")
     policy = _require_policy(inputs.policy)
     manifest = _require_source_manifest(inputs.source_manifest, inputs.source_manifest_digest)
+    dataset = _require_pit_dataset(
+        inputs.pit_dataset, inputs.pit_dataset_digest, manifest=manifest, correlation_id=correlation_id
+    )
     as_of_ns = _require_ns(inputs.as_of_ns, "as_of_ns")
     if as_of_ns % _DAY_NS:
         raise _fail("as_of_ns_not_utc_day_aligned")
@@ -748,16 +802,28 @@ def build_regime_feature_series_evidence(inputs: RegimeFeatureSeriesInputs) -> R
     if first < max(feature.lookback_days for feature in policy.features):
         raise _fail("feature_window_reaches_before_day_zero")
     _bind_feature_sources(policy, manifest)
-    bindings = frozenset((feature.source_series_id, feature.instrument_id) for feature in policy.features)
-    observations = _canonical_observations(inputs.observations, as_of_ns=as_of_ns, bindings=bindings)
 
-    records = tuple(
-        _feature_record(feature, day, observations[(feature.source_series_id, feature.instrument_id)])
-        for feature in policy.features
-        for day in range(first, last + 1)
+    built = [_feature_record(feature, day, dataset) for feature in policy.features for day in range(first, last + 1)]
+    records = tuple(record for record, _ in built)
+    consumed = {
+        (observation.source_record_digest, observation.value_name): observation
+        for _, window in built
+        for observation in window
+    }
+    sources = tuple(
+        sorted(
+            consumed.values(),
+            key=lambda item: (
+                item.series_id,
+                item.instrument_id,
+                item.day_index,
+                item.value_name,
+                item.available_at_ns,
+                item.source_record_digest,
+            ),
+        )
     )
     claimed = _verify_claims(inputs.claims, records)
-    ordered = [observations[binding][day] for binding in sorted(observations) for day in sorted(observations[binding])]
     governance = [] if policy.advances else [_reason("policy_needs_governance_approval")]
     verdict = resolve_edge_gate_verdict([], [], governance)
     available = sum(1 for record in records if record.available)
@@ -775,12 +841,13 @@ def build_regime_feature_series_evidence(inputs: RegimeFeatureSeriesInputs) -> R
         source_manifest_id=manifest.manifest_id,
         source_manifest_digest=manifest.source_packet_evidence_digest,
         source_manifest_gate_verdict=manifest.gate_verdict.value,
+        pit_dataset_id=dataset.dataset_id,
+        pit_dataset_digest=dataset.dataset_digest,
         as_of_ns=as_of_ns,
         first_feature_day_index=first,
         last_feature_day_index=last,
         feature_ids=tuple(feature.feature_id for feature in policy.features),
-        observation_count=len(ordered),
-        observations_digest=_window_digest(ordered),
+        consumed_sources=sources,
         claimed_value_count=claimed,
         records=records,
         available_record_count=available,
@@ -843,7 +910,6 @@ __all__ = [
     "RegimeFeatureSeriesInputs",
     "build_regime_feature_series_evidence",
     "measure_regime_feature_value",
-    "regime_daily_close_observation_digest",
     "regime_feature_series_evidence_digest",
     "regime_feature_series_evidence_to_dict",
     "regime_feature_series_rule_set",

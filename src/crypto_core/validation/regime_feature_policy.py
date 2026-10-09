@@ -18,8 +18,10 @@ portfolio stop, a promotion or demotion, a kill or quarantine decision, an order
 Governed structure. Every number is a caller-supplied GOVERNANCE input: nothing is defaulted, and this module holds no
 production value.
 
-* ``features``. Each one binds an id, a feature class, an EF-3 source series id, an instrument, ``lookback_days`` and
-  its formula policy id. V1 supports exactly two classes:
+* ``features``. Each one binds an id, a feature class, an EF-3 source series id, an instrument, a governed
+  ``value_name``, ``lookback_days`` and its formula policy id. ``value_name`` names the exact ``HistoricalPitValue`` of
+  an authenticated ``HistoricalPitRecord`` that is the feature's close; it follows the accepted PIT value-name token
+  grammar and has no default. V1 supports exactly two classes:
   - ``F1_REALIZED_VOL`` with ``RF_F1_SIMPLE_RETURN_SAMPLE_STDDEV_V1``. It needs at least 3 closes, so that 2 returns
     give a sample variance.
   - ``F2_DRAWDOWN_STATE`` with ``RF_F2_ROLLING_PEAK_DISTANCE_V1``. It needs at least 2 closes, because one close is
@@ -27,7 +29,7 @@ production value.
 
   The deferred classes ``F3_TREND_RANGE_PERSISTENCE``, ``F4_FUNDING_REGIME``, ``F5_LIQUIDITY_SPREAD`` and
   ``F6_LIQUIDATION_EVENT`` are refused explicitly; none is stubbed. Feature ids are unique (also case-insensitively),
-  and so are the bindings (class, series, instrument, lookback).
+  and so are the bindings (class, series, instrument, value name, lookback).
 * ``label_set``. The closed, human-governed label vocabulary. It is exactly the set of rule outputs and never contains
   the reserved system label ``UNLABELED``. Growing it is a new policy version and a new digest.
 * ``label_rules``. Priorities are contiguous from 1 and evaluated ascending, and the first matching rule wins.
@@ -144,6 +146,7 @@ _RULE_SET_V1: dict[str, object] = {
     ),
     "numeric_policy_id": REGIME_NUMERIC_POLICY_ID,
     "feature_rule_id": "unique_feature_ids_and_bindings_every_feature_read_by_some_predicate.v1",
+    "value_name_rule_id": "governed_value_name_in_the_accepted_historical_pit_value_name_token_grammar.v1",
     "lookback_rule_id": "f1_needs_three_closes_for_two_returns_and_a_sample_variance_f2_needs_two_closes.v1",
     "predicate_operators": tuple(operator.value for operator in RegimePredicateOperator),
     "predicate_rule_id": "conjunctive_predicates_on_policy_features_against_canonical_scale_18_thresholds.v1",
@@ -227,6 +230,7 @@ class RegimeFeatureDefinition:
     feature_class: RegimeFeatureClass
     source_series_id: str
     instrument_id: str
+    value_name: str
     lookback_days: int
     formula_policy_id: str
 
@@ -423,16 +427,17 @@ def _require_identifier(value: object, field_name: str) -> str:
     return _require_text(value, field_name)
 
 
-def _require_series_id(value: object) -> str:
-    """An EF-3 series id: the exact token grammar EF-3 accepts, so no policy names a series EF-3 could never hold."""
+def _require_token(value: object, field_name: str) -> str:
+    """The accepted EF-3 series-id and PIT value-name token grammar, so no policy names what EF-3 or a
+    ``HistoricalPitRecord`` could never hold."""
 
     if type(value) is not str or value == "" or len(value) > _MAX_IDENTIFIER or not value.isascii():
-        raise _fail("feature_source_series_id_invalid")
+        raise _fail(f"{field_name}_invalid")
     if not value[0].isalnum() or any(
         not (char.islower() or char.isdigit() or char in _SERIES_EXTRA_CHARS) for char in value
     ):
-        raise _fail("feature_source_series_id_invalid")
-    return _require_text(value, "feature_source_series_id")
+        raise _fail(f"{field_name}_invalid")
+    return _require_text(value, field_name)
 
 
 def _require_instrument(value: object) -> str:
@@ -510,21 +515,22 @@ def _canonical_features(values: object) -> tuple[RegimeFeatureDefinition, ...]:
         raise _fail("features_missing")
     by_id: dict[str, RegimeFeatureDefinition] = {}
     folded: set[str] = set()
-    bindings: set[tuple[RegimeFeatureClass, str, str, int]] = set()
+    bindings: set[tuple[RegimeFeatureClass, str, str, str, int]] = set()
     for item in items:
         if type(item) is not RegimeFeatureDefinition:
             raise _fail("feature_malformed")
         feature_id = _require_identifier(item.feature_id, "feature_id")
         feature_class = _require_feature_class(item.feature_class)
-        series_id = _require_series_id(item.source_series_id)
+        series_id = _require_token(item.source_series_id, "feature_source_series_id")
         instrument_id = _require_instrument(item.instrument_id)
+        value_name = _require_token(item.value_name, "feature_value_name")
         lookback = _require_int(item.lookback_days, "feature_lookback_days", minimum=_MIN_LOOKBACK[feature_class])
         formula = _require_text(item.formula_policy_id, "feature_formula_policy_id")
         if formula != _FORMULA_POLICY[feature_class]:
             raise _fail("feature_formula_policy_mismatch")
         if feature_id.lower() in folded:
             raise _fail("feature_id_duplicate")
-        binding = (feature_class, series_id, instrument_id, lookback)
+        binding = (feature_class, series_id, instrument_id, value_name, lookback)
         if binding in bindings:
             raise _fail("feature_binding_duplicate")
         folded.add(feature_id.lower())
@@ -534,6 +540,7 @@ def _canonical_features(values: object) -> tuple[RegimeFeatureDefinition, ...]:
             feature_class=feature_class,
             source_series_id=series_id,
             instrument_id=instrument_id,
+            value_name=value_name,
             lookback_days=lookback,
             formula_policy_id=formula,
         )
