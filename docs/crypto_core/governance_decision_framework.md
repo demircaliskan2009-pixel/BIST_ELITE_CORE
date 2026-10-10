@@ -61,6 +61,7 @@ precedent, not advice.
 | feature definitions (V1: F1 realized vol, F2 drawdown state) | Each binds an EF-3 series, an instrument, the governed PIT value name read as the close, a lookback and its formula id; more features = richer labels but more ways to overfit the label set |
 | label rule thresholds and priorities | Pinned before any label exists; the first matching rule wins, so priority order is part of the methodology and re-ordering is a new policy version |
 | stability minimum overlap days / minimum as-of gap days (RF-5) | A short overlap or a small gap proves little about repaint; long ones delay stability evidence |
+| regime filters preregistered per spec (EF-5 V2 ledger, consumer: `regime_filter_admission_decision.py`) | The preregistration approval commits the exact set of governed RF-2 policies a spec may later admit. Each one is one more preregistered hypothesis, so a wide set widens the search a regime-conditioned evaluation must count, and an empty set leaves RF-6 nothing to admit. Adding a filter after results needs a new preregistration |
 
 ## 7. Pilot — funding/basis/carry (values post-DR, PRM-16)
 

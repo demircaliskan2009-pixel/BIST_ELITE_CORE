@@ -1,6 +1,7 @@
 # Regime / Volatility Filter Evidence (RF) — Design Contract (Fable-authored, 2026-07-08)
 
-Status: RF-2..RF-5 IMPLEMENTED (V1 closure, section 7); RF-6/RF-7 DESIGN ONLY. Purpose: deterministic,
+Status: RF-2..RF-5 IMPLEMENTED (V1 closure, section 7); RF-6 IMPLEMENTED with the EF-5 V2 regime filter ledger
+(section 8); RF-7 DESIGN ONLY. Purpose: deterministic,
 PIT-grade regime LABELS as digest-bound evidence.
 A regime filter is NOT an edge — it labels market state so strategies can be gated and performance
 stratified; it never produces direction/profit signals. The existing `regime/tracker.py`
@@ -30,9 +31,11 @@ Module namespace: `validation/regime_*` (no collision with the runtime package).
    GOVERNANCE_REQUIRED cap. Verdicts {STABILITY_PROVEN, STABILITY_REJECTED, INSUFFICIENT_OVERLAP}
    — INSUFFICIENT_OVERLAP never advances.
 5. **RF-6 `regime_filter_admission_decision.py`**: admits a filter for a specific spec ONLY when
-   (a) stability is STABILITY_PROVEN and (b) the policy digest is a MEMBER of that spec's EF-5
-   preregistration ledger — a policy created AFTER performance was seen can never be admitted
-   (post-hoc filter fitting is structurally impossible, not just forbidden).
+   (a) stability is STABILITY_PROVEN and (b) the policy's exact RF-2 self-digest is a MEMBER of that
+   spec's sealed EF-5 V2 regime filter ledger. A filter introduced after performance was seen needs a
+   NEW preregistration (a new EF-5 digest under a new approval) that every downstream artifact binds,
+   so it can never ride an earlier sealed ledger. Membership is a digest commitment, not a proof of
+   real-world chronological ordering (section 8).
 6. **RF-7 `regime_conditioned_performance_evidence.py`**: regime-stratified performance report
    (day-index join of labels with sleeve returns); per-stratum count/mean/Sharpe-if-sufficient/
    max-DD in Decimal; strata below min-observation are marked `insufficient_sample` and never
@@ -78,8 +81,8 @@ fill; any admission without ledger membership proof; scope beyond the named slic
 
 Implemented under the controller structural authority `RF_CORE_FORMULA_LABEL_AND_STABILITY_POLICY_V1` in
 `validation/regime_feature_policy.py`, `regime_feature_series_evidence.py`, `regime_label_evidence.py` and
-`regime_stability_evidence.py`. RF-6 admission, RF-7 conditioned performance and every EF/RG consumer integration
-remain the next protected closure; the accepted EF/RG regime fields stay pending/unavailable.
+`regime_stability_evidence.py`. RF-6 admission is closed in section 8; RF-7 conditioned performance and every EF/RG
+consumer integration remain the next protected closure, and the accepted EF/RG regime fields stay pending/unavailable.
 
 - **RF-2**: only `F1_REALIZED_VOL` (`RF_F1_SIMPLE_RETURN_SAMPLE_STDDEV_V1`, lookback >= 3) and `F2_DRAWDOWN_STATE`
   (`RF_F2_ROLLING_PEAK_DISTANCE_V1`, lookback >= 2); `F3`-`F6` are refused explicitly, never stubbed. Each feature
@@ -130,3 +133,58 @@ remain the next protected closure; the accepted EF/RG regime fields stay pending
   (`RF5_TOTAL_VARIATION_LABEL_DISTRIBUTION_DRIFT_V1`) must be at most the governed cap. A label evidence that fails
   its own UNLABELED cap also makes the status `STABILITY_REJECTED`. A policy without exact human governance is
   `NEEDS_GOVERNANCE_APPROVAL`, never `STABILITY_PROVEN`, and only `STABILITY_PROVEN` advances.
+
+## 8. RF-6 closure — `EF5_RF6_REGIME_POLICY_PREREGISTRATION_ADMISSION_V1`
+
+Implemented in `validation/edge_leakage_bias_evidence.py` (the EF-5 V2 regime filter ledger) and
+`validation/regime_filter_admission_decision.py` (RF-6). RF-7, EF-6 regime-split consumption and RG
+regime-stratified correlation stay out of scope.
+
+- **EF-5 V2 regime filter ledger (preregistration authority).**
+  - Declarations: a preregistration may register RF-2 policies, each declared as the exact policy plus an
+    anchor of its self-digest. EF-5 binds the policy snapshot and re-proves it through
+    `verify_regime_feature_policy`. An integrity failure or anchor mismatch is `REJECTED`, and a duplicate
+    declaration raises.
+  - Ledger entries: each entry is derived from the re-proven policy, never supplied: the self-digest, id,
+    version, content and rule-set digests, feature ids, label set, and whether the policy is governed.
+  - Governance: a policy without exact `HUMAN_GOVERNANCE` RF-2 approval is `NEEDS_GOVERNANCE_APPROVAL`, so a
+    synthetic, stale or missing RF-2 approval never seals. One policy id and version registered twice is
+    `FAIL`.
+  - Approval binding: a non-empty ledger makes the artifact `edge-leakage-bias-evidence.v2`. Its
+    `regime_filter_set_digest` joins the decision structure, so the human preregistration approval commits it.
+    Attaching, removing or swapping a filter therefore leaves every earlier approval stale (no late sidecar, no
+    retrospective approval).
+  - V1 compatibility: without regime filters the artifact stays `edge-leakage-bias-evidence.v1`, and its payload
+    and every V1 digest are byte-identical to the accepted representation. A V1 artifact cannot serialize with a
+    regime filter field, so an existing V1 record can never acquire RF admission rights.
+  - Consumers: EF-6 and EF-7 consume V1 and V2 unchanged through the public parser and verifier.
+- **RF-6 admission (the supported entry path).**
+  - Policy: the RF-2 policy is re-proven.
+  - Preregistration: the EF-5 artifact is bound as an exact snapshot with its digest anchor, parsed back from
+    that snapshot and re-proven. It must equal the anchor, carry the caller's root intake anchor and be READY.
+  - Stability: RF-5 is rebuilt from its exact inputs (both RF-4 and both RF-3 with it), canonically equal and
+    pinned to the same policy self-digest.
+  - Admission conditions: the filter is admitted (`PASS`, `regime_filter_admitted`) only when EF-5 is sealed,
+    the policy self-digest is in the sealed V2 `registered_regime_policy_digests`, the policy is governed, and
+    RF-5 is `STABILITY_PROVEN`.
+  - Modelled outcomes:
+    - `FAIL`: a V1 ledger, a policy outside the ledger, an EF-5 `FAIL`, or RF-5 `STABILITY_REJECTED` /
+      `INSUFFICIENT_OVERLAP`;
+    - `NEEDS_EXTERNAL_FACTS`: EF-5 needs external facts;
+    - `NEEDS_GOVERNANCE_APPROVAL`: any pending governance.
+  - Membership is never inferred from a feature id, policy id, content digest, caller digest or late sidecar.
+- **Identity binding at RF-6.** Each defect raises.
+  - One correlation runs through RF-6, EF-5, RF-5, both RF-4 and both RF-3. RF-3 already binds its correlation
+    to its EF-3 manifest and PIT dataset.
+  - Both RF-3 feature series are computed over EF-5's exact EF-3 manifest digest (one source world, so one
+    candidate root).
+  - RF-3, RF-4 and RF-5 pin one policy self-digest.
+  - This closes the historical RF-3 → RF-4 → RF-5 correlation concern on the only supported path where RF
+    evidence gains authority. RF-4 and RF-5 themselves are unchanged.
+- **Non-claims.**
+  - Membership is a digest commitment fixed when EF-5 is sealed and does not independently prove real-world
+    chronological ordering (`chronological_ordering_proven` stays False).
+  - Admission is never an edge, profitability, direction, allocation, stop, promotion, kill or quarantine,
+    execution, order, capital or readiness authorization, and never regime-conditioned performance (RF-7).
+  - Each registered filter is one more preregistered hypothesis for the spec. Counting it in a regime-conditioned
+    evaluation belongs to RF-7, not to EF-5's variant `multiple_testing_count`.

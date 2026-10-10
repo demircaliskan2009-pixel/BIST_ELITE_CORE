@@ -20,7 +20,10 @@ die here — that is the design working, not failing. Module namespace: `edge_*`
 4. **EF-5 `edge_leakage_bias_evidence.py`**: preregistration ledger — pinned feature set,
    parameter search bounds, label/threshold structures BEFORE any performance is seen; the
    multiple-testing counter (every tried variant is a ledger entry); lookahead/repaint/survivorship
-   checks recorded as explicit proofs, not prose.
+   checks recorded as explicit proofs, not prose. V2 (`edge-leakage-bias-evidence.v2`) adds the regime
+   filter ledger: re-proven, governed RF-2 policies whose set digest the preregistration approval commits.
+   This is the only membership RF-6 admission accepts. Without filters the artifact stays V1, byte-identical
+   (`regime_volatility_filter_design.md` section 8).
 5. **EF-6 `edge_walk_forward_oos_evidence.py`**: replay/OOS/walk-forward results (consumes
    `walk_forward.py` window contract); re-proves the FULL back-chain (intake→packet→spec→ledger
    digests); regime_split_report field (digest-bound `regime_evidence_unavailable` until RF chain
