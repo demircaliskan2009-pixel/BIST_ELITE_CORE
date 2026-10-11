@@ -55,7 +55,7 @@ precedent, not advice.
 |---|---|
 | label-set members | More labels = finer gating but thinner strata (p-hacking surface grows); start minimal (e.g. vol high/low + drawdown-state class), grow only with governance |
 | window lengths | Short = responsive but noisy labels; long = stable but laggy |
-| min-observation per stratum | Below it, stratum stats are decoration — `insufficient_sample` exists so nobody trades decoration |
+| min-observation per stratum (RF-7 `RegimeConditionedPerformancePolicy`, consumer: `regime_conditioned_performance_evidence.py`) | Below it, stratum stats are decoration — `insufficient_sample` exists so nobody trades decoration. Its own exact human approval, an integer of at least 2 (a sample variance needs two observations), never borrowed from the RF-5 overlap minimum: a low floor publishes noisy strata, a high one withholds most metrics |
 | UNLABELED cap | High cap tolerates data gaps but a mostly-UNLABELED series labels nothing meaningful |
 | drift cap (RF-5) | Tight = rejects regime-definition instability early; loose = accepts drifting definitions that repaint slowly |
 | feature definitions (V1: F1 realized vol, F2 drawdown state) | Each binds an EF-3 series, an instrument, the governed PIT value name read as the close, a lookback and its formula id; more features = richer labels but more ways to overfit the label set |
