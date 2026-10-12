@@ -1,8 +1,8 @@
 # Regime / Volatility Filter Evidence (RF) — Design Contract (Fable-authored, 2026-07-08)
 
 Status: RF-2..RF-5 IMPLEMENTED (V1 closure, section 7); RF-6 IMPLEMENTED with the EF-5 V2 regime filter ledger
-(section 8); RF-7 DESIGN ONLY. Purpose: deterministic,
-PIT-grade regime LABELS as digest-bound evidence.
+(section 8); RF-7 IMPLEMENTED as a descriptive report (section 9); EF-6/RG-5 regime consumption NOT integrated.
+Purpose: deterministic, PIT-grade regime LABELS as digest-bound evidence.
 A regime filter is NOT an edge — it labels market state so strategies can be gated and performance
 stratified; it never produces direction/profit signals. The existing `regime/tracker.py`
 (`MarketRegimeTracker`: stateful deque, `update()` mutation, wall-clock ns, float scores) is
@@ -37,10 +37,10 @@ Module namespace: `validation/regime_*` (no collision with the runtime package).
    so it can never ride an earlier sealed ledger. Membership is a digest commitment, not a proof of
    real-world chronological ordering (section 8).
 6. **RF-7 `regime_conditioned_performance_evidence.py`**: regime-stratified performance report
-   (day-index join of labels with sleeve returns); per-stratum count/mean/Sharpe-if-sufficient/
-   max-DD in Decimal; strata below min-observation are marked `insufficient_sample` and never
-   trusted; NO threshold decisions here — pure report. Feeds EF-6 `regime_split_report` and RG-5
-   regime-stratified correlation.
+   (exact UTC-day join of labels with sleeve returns); per-stratum count/mean/Sharpe-if-sufficient/
+   per-episode max peak distance, exact; strata below min-observation are marked `insufficient_sample` and never
+   trusted; NO threshold decisions here — pure report (section 9). Feeding EF-6 `regime_split_report` and RG-5
+   regime-stratified correlation is a separate, not yet authorized integration.
 
 ## 2. Feature classes (ids pinned in policy; no current-market facts invented)
 
@@ -81,8 +81,9 @@ fill; any admission without ledger membership proof; scope beyond the named slic
 
 Implemented under the controller structural authority `RF_CORE_FORMULA_LABEL_AND_STABILITY_POLICY_V1` in
 `validation/regime_feature_policy.py`, `regime_feature_series_evidence.py`, `regime_label_evidence.py` and
-`regime_stability_evidence.py`. RF-6 admission is closed in section 8; RF-7 conditioned performance and every EF/RG
-consumer integration remain the next protected closure, and the accepted EF/RG regime fields stay pending/unavailable.
+`regime_stability_evidence.py`. RF-6 admission is closed in section 8 and RF-7 conditioned performance in section 9;
+every EF/RG consumer integration remains a separate protected closure, and the accepted EF/RG regime fields stay
+pending/unavailable.
 
 - **RF-2**: only `F1_REALIZED_VOL` (`RF_F1_SIMPLE_RETURN_SAMPLE_STDDEV_V1`, lookback >= 3) and `F2_DRAWDOWN_STATE`
   (`RF_F2_ROLLING_PEAK_DISTANCE_V1`, lookback >= 2); `F3`-`F6` are refused explicitly, never stubbed. Each feature
@@ -188,3 +189,71 @@ regime-stratified correlation stay out of scope.
     execution, order, capital or readiness authorization, and never regime-conditioned performance (RF-7).
   - Each registered filter is one more preregistered hypothesis for the spec. Counting it in a regime-conditioned
     evaluation belongs to RF-7, not to EF-5's variant `multiple_testing_count`.
+
+## 9. RF-7 closure — `RF7_REGIME_CONDITIONED_PERFORMANCE_EVIDENCE_V1`
+
+Implemented in `validation/regime_conditioned_performance_evidence.py`: a deterministic, point-in-time, descriptive
+REPORT of one sleeve's paper performance stratified by one admitted filter's labels. It measures; it never decides,
+ranks, selects, allocates, promotes, kills or trades. EF-6, RG-5 and every other accepted artifact are unchanged and do
+not consume it, so their regime fields stay pending/unavailable; any consumer integration is a separate protected
+closure.
+
+- **Authority.** Each element is re-proven before anything is measured, and a defect raises.
+  - RF-6: the decision is re-proven by `verify_regime_filter_admission_decision` from its exact inputs, and its
+    recomputed digest must equal the caller's anchor. That rebuild re-proves the RF-2 policy, the EF-5
+    preregistration, both RF-4 label evidences, both RF-3 series and RF-5, so every label, policy and coverage fact
+    comes from that proven world, never from a caller string.
+  - RG-3: the sleeve performance is re-proven by `verify_paper_sleeve_performance_evidence` from its producer inputs
+    (the valuation, daily-return series and Sharpe are rebuilt) and must equal its anchor. Only its rebuilt `READY`
+    daily returns are measured.
+  - EF-5: read back from the snapshot RF-6 bound; its recomputed digest must equal RF-6's.
+  - Measurement policy: the governed sample floor, re-proven by its total verifier.
+- **Identity.**
+  - Correlation: the report's must equal the RF-6 world's. RG-3's own correlation is recorded, never attribution.
+  - Strategy: every RG-3 valuation episode carries the re-proven `StrategySpec` its signal bridge was rebuilt from.
+    Each spec digest must equal the EF-5 `strategy_spec_digest`; any other spec raises
+    `sleeve_strategy_spec_contradicts_the_preregistration`.
+  - Market: the RG-3 market must lie in the EF-5 pinned instrument universe.
+  - Not consumed: EF-7 candidate paper admission and the trading variant, so `candidate_paper_admission_proven` and
+    `variant_attribution_proven` stay False.
+- **Status, first match wins.**
+  - `FILTER_NOT_ADMITTED`: RF-6 is neither a `PASS` that admits the filter nor pending governance. Authorization is
+    positive, never the absence of a known refusal.
+  - `NEEDS_GOVERNANCE_APPROVAL`: RF-6, RG-3 or the measurement policy is pending governance.
+  - `NOT_COMPUTABLE`: RG-3 is otherwise not `READY`, or no trusted day exists.
+  - `READY`: only this status carries the day join and the strata.
+- **Join (`RF7_EXACT_UTC_DAY_JOIN_V1`).** The RG-3 window must lie on the UTC-day grid. Return `i` belongs to UTC day
+  `window_start_ns // 86_400_000_000_000 + i`, the absolute day index RF-4 labels. label(D) is known at the start of
+  D and the return of D is realized during D. Nothing is shifted, interpolated, carried forward or inferred from a
+  timezone.
+- **Coverage.** Every window day is exactly one of the following, and the four counts sum to the window:
+  - `TRUSTED`: inside the RF-5 proven overlap with a governed label (the only measured days);
+  - `UNLABELED`: inside the overlap, counted, never a stratum;
+  - `STABILITY_UNPROVEN`: labeled by only one RF-4 evidence, so no repaint proof;
+  - `LABEL_NOT_COVERED`: no label.
+  Label days outside the window are counted separately.
+- **Strata.** One stratum per governed label, an empty one included. Below the governed floor a stratum is
+  `insufficient_sample`: its counts are published and its metrics withheld. Otherwise:
+  - mean: exact `Fraction`, rendered half-even at scale 18;
+  - paper Sharpe: the accepted `paper_sharpe_evidence` methodology (risk-free zero, sample stddev `n - 1`,
+    `sqrt(365)`, exact zero variance fail-closed). Each ratio is the signed square root of an exact rational,
+    adjudicated half-even at scale 18 by integer arithmetic. Over the full window it reproduces RG-3's paper Sharpe;
+  - drawdown (`RF7_EPISODE_PEAK_DISTANCE_V1`): an episode is a maximal run of consecutive trusted days with the label,
+    re-based to 1 and measured by the accepted RG-4 `measure_paper_peak_distance`. The stratum publishes the maximum
+    (exact `p/q`), the episode count and the longest episode. Noncontiguous days are never one equity path;
+  - no float and no `decimal` context. A published mean or ratio beyond 60 characters, or an episode index beyond
+    the 4096-character RG-4 index grammar, is `NOT_REPRESENTABLE`, decided on integers before any text exists.
+    Returns are parsed under 4096 characters, which covers every return the accepted valuation renders.
+- **Governance (`RegimeConditionedPerformancePolicy`).** `min_observations_per_stratum` is an explicit integer of at
+  least 2 (the floor of a sample variance), with no default and no production value; the RF-5 overlap minimum is
+  never reused for it. Only an exact `HUMAN_GOVERNANCE` approval of the policy and rule-set digests advances. A
+  missing, stale or `TEST_ONLY_SYNTHETIC` approval is `NEEDS_GOVERNANCE_APPROVAL`, and the report measures nothing.
+  Every test value is SYNTHETIC.
+- **Multiple testing.** Published with provenance: the EF-5 variant ledger digest and count, the regime filter set
+  digest and count, their product (the preregistered variant-filter pairs) and the reported stratum count. No
+  correction, threshold or significance is computed.
+- **Non-claims.** No chronological ordering, profitability, edge, statistical significance, multiple-testing
+  correction, strategy causation, candidate paper admission, variant attribution, episode-set completeness or proven
+  regime-conditioned performance, and no direction, allocation, stop, promotion, kill, quarantine, execution, order,
+  capital, readiness or live authority. `verify_regime_conditioned_performance_evidence` rebuilds a report from its
+  exact inputs and is total; the strict parser reconstructs, it never proves.
