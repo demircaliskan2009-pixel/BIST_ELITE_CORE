@@ -27,7 +27,9 @@ die here — that is the design working, not failing. Module namespace: `edge_*`
 5. **EF-6 `edge_walk_forward_oos_evidence.py`**: replay/OOS/walk-forward results (consumes
    `walk_forward.py` window contract); re-proves the FULL back-chain (intake→packet→spec→ledger
    digests); regime_split_report field (digest-bound `regime_evidence_unavailable` until RF chain
-   merges — never silently absent); costs/funding/slippage included per pilot rules.
+   merges — never silently absent; the RF-7 report of `regime_volatility_filter_design.md` section 9 is
+   NOT consumed by EF-6, so the field stays unavailable until a separately authorized EF-6 integration);
+   costs/funding/slippage included per pilot rules.
 6. **EF-7 `edge_paper_admission_decision.py`**: the sleeve-entry gate — all prior gates READY with
    passing verdicts; kill-criteria SEALED (immutable from here); RG budget linkage; explicit
    capacity assumptions recorded.
