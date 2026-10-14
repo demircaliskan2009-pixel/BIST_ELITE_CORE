@@ -119,6 +119,9 @@ def test_the_historical_simulation_hooks_are_identities() -> None:
     book = object()
     assert economics_module._Simulation._observed_book(simulation, book) is book  # type: ignore[arg-type]
     assert economics_module._Simulation._effective_slippage(simulation, Fraction(7, 3), book) == Fraction(7, 3)  # type: ignore[arg-type]
+    marks, books = object(), [book]
+    assert economics_module._Simulation._transformed_marks(simulation, marks) is marks  # type: ignore[arg-type]
+    assert economics_module._Simulation._transformed_books(simulation, books) is books  # type: ignore[arg-type]
 
 
 def test_stress_is_deterministic_and_digest_bound() -> None:

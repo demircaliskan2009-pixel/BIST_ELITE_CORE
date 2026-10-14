@@ -82,7 +82,8 @@ Stage-3 synthetic stress (``STRESS_PIT_TRANSFORM_V1``). ``simulate_historical_ex
 the same frozen decision trace, policy, fill model, fees, funding and valuation rules — over a declared, digest-bound
 transformation of the authenticated observations of one READY + PASS result. It is a modeled synthetic scenario,
 never an authenticated market event, and it never mutates or replaces the authenticated dataset. The historical
-simulation itself is unchanged: its only two hooks (the effective slippage and the observed book) are identities.
+simulation itself is unchanged: its only four hooks (the mark and book observations it is constructed over, the
+effective slippage and the observed book) are identities.
 
 * HIGH_VOLATILITY: every observed price is moved so that its log-deviation from the anchor mark ``m0`` (the latest mark
   visible at the evaluation start) is multiplied by exactly 3/2: ``p' = p × g`` with ``g = sqrt(p / m0)`` rendered once
@@ -1033,7 +1034,7 @@ class _Simulation:
             if visible is not None
         ]
         marks.sort(key=lambda mark: (mark.visibility, mark.record.event_time_ns, mark.record.sequence_id))
-        self.marks = _MarkCursor(marks, policy.max_mark_staleness_ns)
+        self.marks = self._transformed_marks(_MarkCursor(marks, policy.max_mark_staleness_ns))
         books = [
             _Book(
                 visible,
@@ -1056,8 +1057,8 @@ class _Simulation:
                 book.record.record_digest,
             )
         )
-        self.books = books
-        self.book_visibilities = [book.visibility for book in books]
+        self.books = self._transformed_books(books)
+        self.book_visibilities = [book.visibility for book in self.books]
         self.position = _FLAT
         self.realized = Fraction(0)
         self.fees = Fraction(0)
@@ -1066,6 +1067,16 @@ class _Simulation:
         self.segments: list[tuple[int, Fraction]] = []
         self.settled: set[tuple[str, str, int]] = set()
         self.ledgers = _Ledgers()
+
+    def _transformed_marks(self, marks: _MarkCursor) -> _MarkCursor:
+        """Construction hook: the mark observations as the simulation reads them (identity; a stress run overrides)."""
+
+        return marks
+
+    def _transformed_books(self, books: list[_Book]) -> list[_Book]:
+        """Construction hook: the book observations as the simulation reads them (identity; a stress run overrides)."""
+
+        return books
 
     # -- exact identities --
 
@@ -1647,9 +1658,10 @@ class _StressSimulation(_Simulation):
         shock_factor: Fraction,
         **arguments: object,
     ) -> None:
-        super().__init__(**arguments)  # type: ignore[arg-type]
+        # The scenario is declared before the base construction, whose hooks below read it.
         kind = scenario.scenario_kind
         self.kind = kind
+        self.anchor = anchor if anchor is not None and anchor > 0 else None
         self.slippage_multiplier = Fraction(scenario.slippage_multiplier)
         self.depth_multiplier = Fraction(scenario.depth_multiplier)
         self.maintenance_fraction = Fraction(scenario.maintenance_margin_fraction)
@@ -1657,23 +1669,40 @@ class _StressSimulation(_Simulation):
         self.shock_end = None if shock_time_ns is None else shock_time_ns + scenario.recovery_ns
         self.first_breach_ns: int | None = None
         self.shock_factor = shock_factor
-        if kind is HistoricalExecutionStressScenarioKind.HIGH_VOLATILITY:
-            if anchor is None or anchor <= 0:
-                raise _EconomicFailure("stress_anchor_mark_unavailable")
-            marks = [
-                _Mark(mark.visibility, mark.record, mark.price * _scaled_sqrt(mark.price / anchor))
-                if mark.price > 0
-                else mark
-                for mark in self.marks._marks
-            ]
-            self.marks = _MarkCursor(marks, self.policy.max_mark_staleness_ns)
-            books = []
-            for book in self.books:
+        super().__init__(**arguments)  # type: ignore[arg-type]
+        if kind is HistoricalExecutionStressScenarioKind.HIGH_VOLATILITY and self.anchor is None:
+            raise _EconomicFailure("stress_anchor_mark_unavailable")
+
+    def _transformed_marks(self, marks: _MarkCursor) -> _MarkCursor:
+        if self.kind is HistoricalExecutionStressScenarioKind.HIGH_VOLATILITY:
+            anchor = self.anchor
+            if anchor is None:  # refused right after the base construction
+                return marks
+            return _MarkCursor(
+                [
+                    _Mark(mark.visibility, mark.record, mark.price * _scaled_sqrt(mark.price / anchor))
+                    if mark.price > 0
+                    else mark
+                    for mark in marks._marks
+                ],
+                self.policy.max_mark_staleness_ns,
+            )
+        if self.kind is HistoricalExecutionStressScenarioKind.FLASH_CRASH and self.shock_start is not None:
+            return _ShockedMarks(marks, self.shock_start, self.shock_end, self.shock_factor)  # type: ignore[return-value,arg-type]
+        return marks
+
+    def _transformed_books(self, books: list[_Book]) -> list[_Book]:
+        if self.kind is HistoricalExecutionStressScenarioKind.HIGH_VOLATILITY:
+            anchor = self.anchor
+            if anchor is None:  # refused right after the base construction
+                return books
+            transformed = []
+            for book in books:
                 if book.bid <= 0 or book.ask <= 0:
-                    books.append(book)
+                    transformed.append(book)
                     continue
                 factor = _scaled_sqrt((book.bid + book.ask) / 2 / anchor)
-                books.append(
+                transformed.append(
                     _Book(
                         book.visibility,
                         book.record,
@@ -1683,9 +1712,9 @@ class _StressSimulation(_Simulation):
                         book.ask_quantity,
                     )
                 )
-            self.books = books
-        elif kind is HistoricalExecutionStressScenarioKind.LOW_LIQUIDITY:
-            self.books = [
+            return transformed
+        if self.kind is HistoricalExecutionStressScenarioKind.LOW_LIQUIDITY:
+            return [
                 _Book(
                     book.visibility,
                     book.record,
@@ -1696,10 +1725,9 @@ class _StressSimulation(_Simulation):
                 )
                 if book.bid_quantity >= 0 and book.ask_quantity >= 0
                 else book
-                for book in self.books
+                for book in books
             ]
-        elif self.shock_start is not None:
-            self.marks = _ShockedMarks(self.marks, self.shock_start, self.shock_end, shock_factor)  # type: ignore[assignment,arg-type]
+        return books
 
     def _in_shock(self, time_ns: int) -> bool:
         return self.shock_start is not None and self.shock_start <= time_ns < self.shock_end  # type: ignore[operator]
