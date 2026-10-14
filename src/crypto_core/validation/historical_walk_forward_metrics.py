@@ -55,6 +55,11 @@ ROUND_HALF_EVEN (the Sharpe square root by an exact integer square root with an 
 the 60-character representation fails closed (``metric_out_of_representation:<metric>``). No ``decimal`` module, no
 float and no near-zero epsilon.
 
+Shared exact methodology. The daily endpoint rule, the endpoint equity units, the common-denominator daily-return
+scaling, the exact renders and the annualized Sharpe are exposed as public functions (``historical_walk_forward_*``) so
+a later governed consumer of authenticated economics (the pre-paper validation evidence) reuses this one methodology
+instead of re-deriving it; this module computes its own metrics through exactly the same functions.
+
 Outcomes: an integrity failure (malformed or non-verifying policy or source, anchor mismatch, correlation mismatch) is
 ``REJECTED``/``NOT_EVALUATED``; a verified input the V1 contract cannot compute (source not computed, geometry,
 ordering, identity, assignment or consistency violation, endpoint or equity-domain violation, undefined metric) is
@@ -323,7 +328,9 @@ def _label(index: int, kind: HistoricalWalkForwardSegmentKind) -> str:
 # --- exact numerics (HISTORICAL_WALK_FORWARD_NUMERIC_POLICY_V1, read from the verified policy) --------------------------
 
 
-def _units_text(negative: bool, units: int, numeric: HistoricalWalkForwardMetricNumericPolicy) -> str | None:
+def historical_walk_forward_units_text(
+    negative: bool, units: int, numeric: HistoricalWalkForwardMetricNumericPolicy
+) -> str | None:
     """Canonical fixed-scale text of ``units`` scale units, or ``None`` outside the representation domain.
 
     The magnitude is bounded by integer comparison BEFORE any ``str`` conversion, so an unrepresentable value can never
@@ -340,7 +347,9 @@ def _units_text(negative: bool, units: int, numeric: HistoricalWalkForwardMetric
     return rendered if len(rendered) <= numeric.max_decimal_text_length else None
 
 
-def _render_ratio(numerator: int, denominator: int, numeric: HistoricalWalkForwardMetricNumericPolicy) -> str | None:
+def historical_walk_forward_render_ratio(
+    numerator: int, denominator: int, numeric: HistoricalWalkForwardMetricNumericPolicy
+) -> str | None:
     """Exact ROUND_HALF_EVEN render of ``numerator / denominator`` (``denominator > 0``); signed zero normalized."""
 
     magnitude = abs(numerator)
@@ -348,10 +357,10 @@ def _render_ratio(numerator: int, denominator: int, numeric: HistoricalWalkForwa
     twice = 2 * remainder
     if twice > denominator or (twice == denominator and quotient % 2 == 1):
         quotient += 1
-    return _units_text(numerator < 0, quotient, numeric)
+    return historical_walk_forward_units_text(numerator < 0, quotient, numeric)
 
 
-def _render_signed_sqrt(
+def historical_walk_forward_render_signed_sqrt(
     negative: bool, numerator: int, denominator: int, numeric: HistoricalWalkForwardMetricNumericPolicy
 ) -> str | None:
     """Exact ROUND_HALF_EVEN render of ``(-1 if negative else 1) * sqrt(numerator / denominator)``.
@@ -367,10 +376,10 @@ def _render_signed_sqrt(
     right = denominator * (2 * root + 1) ** 2
     if left > right or (left == right and root % 2 == 1):
         root += 1
-    return _units_text(negative, root, numeric)
+    return historical_walk_forward_units_text(negative, root, numeric)
 
 
-def _equity_units(text: object) -> int | None:
+def historical_walk_forward_equity_units(text: object) -> int | None:
     """Exact scale units of one authenticated canonical scale-18 equity text (bounded to 60 characters)."""
 
     if not historical_execution_decimal_is_canonical(text):
@@ -378,12 +387,30 @@ def _equity_units(text: object) -> int | None:
     return int(text.replace(".", ""))  # type: ignore[union-attr]
 
 
-def _risk_free(numeric: HistoricalWalkForwardMetricNumericPolicy, text: str) -> tuple[int, int] | None:
+def historical_walk_forward_risk_free(
+    numeric: HistoricalWalkForwardMetricNumericPolicy, text: str
+) -> tuple[int, int] | None:
     """The policy's daily risk-free return as an exact ``(numerator, denominator)`` over the policy scale."""
 
     if not historical_execution_decimal_is_canonical(text):
         return None
     return int(text.replace(".", "")), 10**numeric.decimal_scale
+
+
+def historical_walk_forward_scaled_daily_returns(equity_units: Sequence[int]) -> tuple[int, tuple[int, ...]]:
+    """``(product, scaled)``: every exact daily return of a strictly positive endpoint path over ONE denominator.
+
+    ``r_k = equity_(k+1) / equity_k - 1 = scaled[k] / product`` exactly, where ``product`` is the product of the
+    distinct previous-day equities, so sums of returns and of squared returns stay integers and their cost linear in
+    the path length. Nothing is rounded.
+    """
+
+    previous = equity_units[:-1]
+    product = 1
+    for value in sorted(set(previous)):
+        product *= value
+    scaled = tuple((equity_units[index + 1] - base) * (product // base) for index, base in enumerate(previous))
+    return product, scaled
 
 
 @dataclass(frozen=True)
@@ -399,7 +426,7 @@ class _SegmentFigures:
     profit_factor: str
 
 
-def _annualized_sharpe(
+def historical_walk_forward_annualized_sharpe(
     *,
     total: int,
     squares: int,
@@ -422,9 +449,9 @@ def _annualized_sharpe(
     dispersion = count * squares - total * total
     if dispersion == 0:
         if excess == 0:
-            return _render_ratio(0, 1, numeric), None
+            return historical_walk_forward_render_ratio(0, 1, numeric), None
         return None, "sharpe_undefined_zero_variance_nonzero_mean"
-    text = _render_signed_sqrt(
+    text = historical_walk_forward_render_signed_sqrt(
         excess < 0, factor * excess * excess * (count - 1), count * rf_den * rf_den * dispersion, numeric
     )
     return (text, None) if text is not None else (None, "metric_out_of_representation:annualized_sharpe")
@@ -441,24 +468,19 @@ def _segment_figures(
         return None, ("daily_return_count_insufficient",)
     if any(units <= 0 for units in equity_units):
         return None, ("equity_nonpositive",)
-    risk_free = _risk_free(numeric, policy.risk_free_daily_return)
+    risk_free = historical_walk_forward_risk_free(numeric, policy.risk_free_daily_return)
     if risk_free is None:
         return None, ("risk_free_representation_invalid",)
-    previous = equity_units[:-1]
-    deltas = [equity_units[index + 1] - equity_units[index] for index in range(count)]
-    product = 1
-    for value in sorted(set(previous)):
-        product *= value
-    scaled = [delta * (product // base) for delta, base in zip(deltas, previous, strict=True)]
+    product, scaled = historical_walk_forward_scaled_daily_returns(equity_units)
     total = sum(scaled)
     squares = sum(item * item for item in scaled)
     gains = sum(item for item in scaled if item > 0)
     losses = -sum(item for item in scaled if item < 0)
-    positive = sum(1 for delta in deltas if delta > 0)
-    negative = sum(1 for delta in deltas if delta < 0)
+    positive = sum(1 for item in scaled if item > 0)
+    negative = sum(1 for item in scaled if item < 0)
 
     codes: list[str] = []
-    sharpe, sharpe_code = _annualized_sharpe(
+    sharpe, sharpe_code = historical_walk_forward_annualized_sharpe(
         total=total,
         squares=squares,
         count=count,
@@ -469,8 +491,8 @@ def _segment_figures(
     )
     if sharpe_code is not None:
         codes.append(sharpe_code)
-    hit_rate = _render_ratio(positive, count, numeric)
-    expectancy = _render_ratio(total, count * product, numeric)
+    hit_rate = historical_walk_forward_render_ratio(positive, count, numeric)
+    expectancy = historical_walk_forward_render_ratio(total, count * product, numeric)
     peak = equity_units[0]
     drawdown_num, drawdown_den = 0, 1
     for units in equity_units:
@@ -478,12 +500,12 @@ def _segment_figures(
         drop = peak - units
         if drop * drawdown_den > drawdown_num * peak:
             drawdown_num, drawdown_den = drop, peak
-    max_drawdown = _render_ratio(drawdown_num, drawdown_den, numeric)
+    max_drawdown = historical_walk_forward_render_ratio(drawdown_num, drawdown_den, numeric)
     profit_factor: str | None = None
     if losses == 0:
         codes.append("profit_factor_undefined_zero_gross_loss")
     else:
-        profit_factor = _render_ratio(gains, losses, numeric)
+        profit_factor = historical_walk_forward_render_ratio(gains, losses, numeric)
         if profit_factor is None:
             codes.append("metric_out_of_representation:profit_factor")
     for name, text in (("hit_rate", hit_rate), ("expectancy", expectancy), ("max_drawdown", max_drawdown)):
@@ -604,12 +626,17 @@ def _structural_codes(
     return codes
 
 
-def _daily_endpoints(
-    result: HistoricalExecutionEconomicsResult, policy: HistoricalWalkForwardMetricPolicy
+def historical_walk_forward_daily_endpoints(
+    result: HistoricalExecutionEconomicsResult, *, day_ns: int
 ) -> tuple[tuple[HistoricalExecutionValuation, ...] | None, str | None]:
-    """The one UTC daily endpoint sequence of a computed, geometry-checked source (or the reason it does not exist)."""
+    """The one UTC daily endpoint sequence of a computed, geometry-checked source (or the reason it does not exist).
 
-    day = policy.day_ns
+    ``initial_at_start_then_every_utc_day_boundary_then_evaluation_end_one_per_instant.v1``: exactly one ``INITIAL``
+    valuation first at the evaluation start, exactly one ``UTC_DAY_BOUNDARY`` valuation at every interior UTC day
+    boundary and exactly one ``EVALUATION_END`` valuation last at the evaluation end.
+    """
+
+    day = day_ns
     start, end = result.evaluation_start_ns, result.evaluation_end_ns
     valuations = result.valuations
     kinds = HistoricalExecutionValuationKind
@@ -637,10 +664,10 @@ def _segment_metrics(
     result: HistoricalExecutionEconomicsResult,
     policy: HistoricalWalkForwardMetricPolicy,
 ) -> tuple[HistoricalWalkForwardSegmentMetrics | None, list[str]]:
-    endpoints, endpoint_code = _daily_endpoints(result, policy)
+    endpoints, endpoint_code = historical_walk_forward_daily_endpoints(result, day_ns=policy.day_ns)
     if endpoints is None:
         return None, [endpoint_code]  # type: ignore[list-item]
-    units = [_equity_units(item.equity) for item in endpoints]
+    units = [historical_walk_forward_equity_units(item.equity) for item in endpoints]
     if any(value is None for value in units):
         return None, ["equity_noncanonical"]
     figures, codes = _segment_figures(units, policy)  # type: ignore[arg-type]
@@ -1100,9 +1127,17 @@ __all__ = [
     "HistoricalWalkForwardWindowInput",
     "HistoricalWalkForwardWindowMetrics",
     "build_historical_walk_forward_metrics",
+    "historical_walk_forward_annualized_sharpe",
+    "historical_walk_forward_daily_endpoints",
+    "historical_walk_forward_equity_units",
     "historical_walk_forward_metrics_digest",
     "historical_walk_forward_metrics_from_payload",
     "historical_walk_forward_metrics_payload_is_well_formed",
     "historical_walk_forward_metrics_to_dict",
+    "historical_walk_forward_render_ratio",
+    "historical_walk_forward_render_signed_sqrt",
+    "historical_walk_forward_risk_free",
+    "historical_walk_forward_scaled_daily_returns",
+    "historical_walk_forward_units_text",
     "verify_historical_walk_forward_metrics",
 ]

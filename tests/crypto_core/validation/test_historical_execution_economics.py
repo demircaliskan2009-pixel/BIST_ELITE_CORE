@@ -1935,6 +1935,9 @@ _METRIC_TOKENS = (
 
 
 def test_no_metric_or_later_gate_fields_exist() -> None:
+    # The Stage-3 stress scenario and outcome records are the authorized STRESS_PIT_TRANSFORM_V1 extension of this
+    # engine: they may name the stress method, never a metric, a pass/fail or a later gate.
+    stress_records = {"HistoricalExecutionStressScenario", "HistoricalExecutionStressOutcome"}
     flags = {name for name, _ in HISTORICAL_EXECUTION_NON_CLAIM_FLAGS}
     for cls in (
         HistoricalExecutionEconomicsResult,
@@ -1950,7 +1953,8 @@ def test_no_metric_or_later_gate_fields_exist() -> None:
             if item.name in flags:
                 continue
             assert not [token for token in _METRIC_TOKENS if token in item.name], (cls.__name__, item.name)
-            assert "ef5" not in item.name and "ef6" not in item.name and "stress" not in item.name
+            assert "ef5" not in item.name and "ef6" not in item.name
+            assert "stress" not in item.name or (cls.__name__ in stress_records and item.name == "stress_method_id")
 
 
 def test_structural_non_claims_are_defaults_no_builder_parameter_can_set() -> None:

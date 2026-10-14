@@ -588,7 +588,7 @@ def test_the_risk_free_return_is_exactly_zero_and_read_from_the_policy() -> None
 
 
 def test_all_zero_returns_have_zero_variance_zero_mean_and_zero_sharpe() -> None:
-    sharpe, code = metrics_module._annualized_sharpe(
+    sharpe, code = metrics_module.historical_walk_forward_annualized_sharpe(
         total=0, squares=0, count=3, product=100, risk_free=(0, 10**18), factor=365, numeric=NUMERIC
     )
     assert (sharpe, code) == ("0.000000000000000000", None)
@@ -639,9 +639,9 @@ def test_a_metric_outside_the_representation_fails_closed() -> None:
 
 
 def test_rendering_bounds_magnitude_before_text_conversion() -> None:
-    assert metrics_module._units_text(False, 10**5000, NUMERIC) is None
-    assert metrics_module._render_ratio(10**6000, 1, NUMERIC) is None
-    assert metrics_module._render_ratio(-1, 10**30, NUMERIC) == "0.000000000000000000"
+    assert metrics_module.historical_walk_forward_units_text(False, 10**5000, NUMERIC) is None
+    assert metrics_module.historical_walk_forward_render_ratio(10**6000, 1, NUMERIC) is None
+    assert metrics_module.historical_walk_forward_render_ratio(-1, 10**30, NUMERIC) == "0.000000000000000000"
 
 
 @pytest.mark.parametrize(
@@ -656,14 +656,14 @@ def test_rendering_bounds_magnitude_before_text_conversion() -> None:
     ],
 )
 def test_the_square_root_is_exact_round_half_even(numerator: int, denominator: int, expected: str) -> None:
-    assert metrics_module._render_signed_sqrt(False, numerator, denominator, NUMERIC) == expected
+    assert metrics_module.historical_walk_forward_render_signed_sqrt(False, numerator, denominator, NUMERIC) == expected
 
 
 def test_a_negative_sharpe_is_rendered_with_its_sign_and_zero_is_never_negative() -> None:
     figures, _ = _figures([100, 90, 72])  # returns -0.1 and -0.2
     assert figures.annualized_sharpe.startswith("-")
-    assert metrics_module._render_signed_sqrt(True, 0, 1, NUMERIC) == "0.000000000000000000"
-    assert metrics_module._render_ratio(-1, 10**40, NUMERIC) == "0.000000000000000000"
+    assert metrics_module.historical_walk_forward_render_signed_sqrt(True, 0, 1, NUMERIC) == "0.000000000000000000"
+    assert metrics_module.historical_walk_forward_render_ratio(-1, 10**40, NUMERIC) == "0.000000000000000000"
 
 
 # --- geometry, ordering, identity, consistency --------------------------------------------------------------------------
@@ -1148,14 +1148,16 @@ def _with_valuations(source: HistoricalExecutionEconomicsResult, valuations) -> 
 
 def _endpoint_code(valuations) -> str | None:
     source = segment(365, 90)
-    endpoints, code = metrics_module._daily_endpoints(_with_valuations(source, valuations), metric_policy())
+    endpoints, code = metrics_module.historical_walk_forward_daily_endpoints(
+        _with_valuations(source, valuations), day_ns=metric_policy().day_ns
+    )
     assert (endpoints is None) is (code is not None)
     return code
 
 
 def test_the_authenticated_ledger_yields_exactly_one_endpoint_per_utc_day() -> None:
     source = segment(365, 90)
-    endpoints, code = metrics_module._daily_endpoints(source, metric_policy())
+    endpoints, code = metrics_module.historical_walk_forward_daily_endpoints(source, day_ns=metric_policy().day_ns)
     assert code is None and len(endpoints) == 91
     assert [item.time_ns for item in endpoints] == [S0 + (365 + k) * DAY for k in range(91)]
 
@@ -1192,9 +1194,9 @@ def test_misplaced_or_repeated_initial_and_end_valuations_are_refused() -> None:
     ["1.5", "10000", "-0.000000000000000000", "+1.000000000000000000", "1e3", "9" * 43 + "." + "0" * 18, None, 7],
 )
 def test_a_non_canonical_equity_text_is_refused(text: object) -> None:
-    assert metrics_module._equity_units(text) is None
+    assert metrics_module.historical_walk_forward_equity_units(text) is None
     source = segment(365, 90)
-    endpoints, _ = metrics_module._daily_endpoints(source, metric_policy())
+    endpoints, _ = metrics_module.historical_walk_forward_daily_endpoints(source, day_ns=metric_policy().day_ns)
     index = source.valuations.index(endpoints[4])
     forged = replace(source.valuations[index], equity=text)
     tampered = _with_valuations(source, [*source.valuations[:index], forged, *source.valuations[index + 1 :]])
@@ -1203,5 +1205,5 @@ def test_a_non_canonical_equity_text_is_refused(text: object) -> None:
 
 
 def test_canonical_equity_text_converts_to_exact_scale_units() -> None:
-    assert metrics_module._equity_units("10000.000000000000000001") == 10_000 * 10**18 + 1
-    assert metrics_module._equity_units("-0.500000000000000000") == -(5 * 10**17)
+    assert metrics_module.historical_walk_forward_equity_units("10000.000000000000000001") == 10_000 * 10**18 + 1
+    assert metrics_module.historical_walk_forward_equity_units("-0.500000000000000000") == -(5 * 10**17)
