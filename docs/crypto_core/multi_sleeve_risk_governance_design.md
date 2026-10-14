@@ -1,6 +1,8 @@
 # Multi-Sleeve Risk Governance (RG) — Design Contract (Fable-authored, 2026-07-08)
 
-Status: DESIGN ONLY. Purpose: portfolio-level paper risk envelope + allocator governance over
+Status: RG-2..RG-8 IMPLEMENTED; RG-7 is v2 (`paper-portfolio-allocation-decision.v2`), consuming only EF-7 v2
+admissions and enforcing their admission cap fraction. Purpose: portfolio-level paper risk envelope + allocator
+governance over
 isolated sleeves. Extends (never replaces) the merged intra-sleeve layer
 `paper_sleeve_risk_budget_decision.py` ("reservation never execution permission",
 `total_reserved <= total_budget`). The existing `audit/portfolio_governor_*` readiness surfaces
@@ -122,6 +124,11 @@ stay OUT of scope. Everything is paper-only; allocation is evidence output, neve
      universe, a market's exposure is the exact sum across sleeves, and the total, sleeve, market,
      positive-sleeve-count and exposed-pair caps are inclusive. A rejected proposal allocates zero
      everywhere and keeps its requests and exact breach reasons as evidence;
+   - admission cap (`ADMISSION_CAP_FRACTION_V1`): the authenticated EF-7 v2 `admission_cap_fraction` (the
+     stricter of the PBO band cap and the LIMITED_S1_PAPER_V1 regime cap, at most 1/4 while the regime-conditional
+     PBO is UNPROVEN) times the sleeve's RG-2 `max_paper_risk_budget` is one more inclusive exact cap; a breach is
+     `admission_cap_exceeded:<sleeve>` and rejects the whole proposal like any other breach, never scaled. RG-2
+     keeps owning its base caps; an EF-7 v1 admission never verifies;
    - (d) READY sets every final allocation to its exact post-kill reservation. READY is accepted paper
      allocation evidence, never capital allocated, an order or execution permitted, or live, shadow or
      operational readiness.

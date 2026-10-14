@@ -23,10 +23,13 @@ Proposal (``RG7_ONE_ALLOCATION_SUBJECT_PER_SLEEVE_V1``): every envelope-declared
 subject, made of one EF-7 admission, one lifecycle-head authority over its exact EF-8 chain and one intra-sleeve
 risk-budget source. A duplicate, missing or extra sleeve is refused. Every element is re-proven:
 
-* RG-2: the envelope, through its total verifier, its rule set and its pending regime marker. It owns every cap;
-* EF-7: the ``EdgePaperAdmissionDecision``, through ``verify_edge_paper_admission_decision``. It must be READY, PASS,
-  advancing and admitted to paper, for the same sleeve, equal to the governed head's current-cycle admission and bound
-  to the exact risk-budget policy of the sleeve's proposal;
+* RG-2: the envelope, through its total verifier, its rule set and its pending regime marker. It owns every base cap;
+* EF-7: the ``EdgePaperAdmissionDecision`` v2, through ``verify_edge_paper_admission_decision`` (a v1 decision is
+  historical only and never verifies). It must be READY, PASS, advancing, admitted to paper and pre-paper validated, for
+  the same sleeve, equal to the governed head's current-cycle admission and bound to the exact risk-budget policy of
+  the sleeve's proposal. Its authenticated ``admission_cap_fraction`` (``ADMISSION_CAP_FRACTION_V1``: the stricter of
+  the PBO band cap and the LIMITED_S1_PAPER_V1 regime cap) is the only admission cap authority; no caller input carries
+  or overrides it;
 * risk budget: the ``PaperSleeveRiskBudgetDecision``, rebuilt by ``evaluate_paper_sleeve_risk_budget`` from the exact
   ``PaperSleeveState`` and ``PaperSleeveRiskBudgetPolicy`` with the decision's own correlation id and metadata, and
   canonically equal to the supplied decision. A sleeve's pre-kill proposal is exactly its reconstructed
@@ -53,9 +56,10 @@ Order of operations (the P1 invariant):
    ``WORST_CASE_UNKNOWN`` pair carries exactly one, so two simultaneously positive sleeves without an observed
    correlation always breach, while a pair with a zero sleeve creates no combined exposure. No covariance, square-root
    portfolio risk, correlation-weighted scaling, diversification credit, averaging or matrix inversion;
-5. envelope check, every limit inclusive: the total, each sleeve, each market, the positive-sleeve count and every
-   exposed pair. ANY breach makes the whole proposal ``ALLOCATION_REJECTED``, with exact sorted breach reasons, every
-   final allocation zero and the rejected proposal kept as evidence. There is no partial fit, clipping, truncation or
+5. envelope check, every limit inclusive: the total, each sleeve, each sleeve's admission cap (its EF-7 v2 cap
+   fraction times its RG-2 ``max_paper_risk_budget``, exact), each market, the positive-sleeve count and every exposed
+   pair. ANY breach makes the whole proposal ``ALLOCATION_REJECTED``, with exact sorted breach reasons, every final
+   allocation zero and the rejected proposal kept as evidence. There is no partial fit, clipping, truncation or
    scaling;
 6. otherwise READY, and every final allocation equals its post-kill reservation exactly.
 
@@ -122,7 +126,7 @@ _T = TypeVar("_T")
 _PREFIX = "paper_portfolio_allocation_decision"
 _AUTHORITY_PREFIX = "paper_lifecycle_head_authority"
 _AUTHORITY_SCHEMA = "paper-lifecycle-head-authority.v1"
-_DECISION_SCHEMA = "paper-portfolio-allocation-decision.v1"
+_DECISION_SCHEMA = "paper-portfolio-allocation-decision.v2"
 _AUTHORITY_DIGEST_FIELD = "authority_digest"
 _DECISION_DIGEST_FIELD = "allocation_decision_digest"
 _IDENTIFIER_PUNCTUATION = frozenset("-_./:")
@@ -142,7 +146,8 @@ _RULE_SET_V1: dict[str, object] = {
     "authority_verdict_rule_id": "only_an_exact_human_governance_approval_establishes_test_only_synthetic_never_does.v1",
     "subject_cardinality_rule_id": "RG7_ONE_ALLOCATION_SUBJECT_PER_SLEEVE_V1",
     "subject_rule_id": "one_ef7_admission_head_authority_and_risk_budget_source_per_declared_sleeve_none_missing.v1",
-    "admission_rule_id": "ef7_public_reproof_ready_pass_advancing_admitted_same_sleeve_cycle_and_budget_policy.v1",
+    "admission_rule_id": "ef7_v2_public_reproof_ready_pass_advancing_admitted_pre_paper_validated_same_sleeve.v2",
+    "admission_cap_rule_id": "ADMISSION_CAP_FRACTION_V1_ef7_v2_fraction_times_rg2_sleeve_cap_inclusive_never_scaled.v1",
     "proposal_rule_id": "REPROVEN_INTRA_SLEEVE_TOTAL_RESERVED_BUDGET_PASSTHROUGH_V1",
     "proposal_source_rule_id": "risk_budget_decision_rebuilt_from_exact_state_policy_correlation_id_and_metadata.v1",
     "rg6_numeric_effect": "NONE",
@@ -163,7 +168,7 @@ _RULE_SET_V1: dict[str, object] = {
     "correlation_rule_id": "RG7_CORRELATION_ACTIVE_PAIR_CAP_RULE_V1",
     "correlation_exposure_rule_id": "pair_exposed_iff_both_sleeves_positive_post_kill_effective_at_most_cap.v1",
     "unknown_correlation_rule_id": "worst_case_unknown_effective_one_breaches_every_legal_cap_never_credited.v1",
-    "envelope_check_rule_id": "inclusive_total_sleeve_market_count_and_exposed_pair_caps_any_breach_rejects_all.v1",
+    "envelope_check_rule_id": "inclusive_total_sleeve_admission_market_count_and_pair_caps_any_breach_rejects_all.v2",
     "no_scaling_rule_id": "no_partial_fit_clipping_truncation_or_scaling.v1",
     "final_allocation_rule_id": "ready_final_is_the_exact_post_kill_reservation_otherwise_every_final_is_zero.v1",
     "status_rule_id": "provenance_raises_then_needs_governance_approval_then_allocation_rejected_then_ready.v1",
@@ -410,6 +415,8 @@ class PaperPortfolioAllocationSleeveRecord:
     risk_budget_state_digest: str
     risk_budget_decision_digest: str
     sleeve_cap: str
+    admission_cap_fraction: str
+    admission_cap: str
     pre_kill_requested_budget: str
     post_kill_requested_budget: str
     final_allocated_budget: str
@@ -1024,8 +1031,8 @@ def _prove_correlation(
     return rebuilt
 
 
-def _proven_admission(value: object) -> tuple[EdgePaperAdmissionDecision, str]:
-    """The EF-7 admission re-proven through its public verifier; only a sealed PASS admission is a subject."""
+def _proven_admission(value: object) -> tuple[EdgePaperAdmissionDecision, str, Fraction]:
+    """The EF-7 v2 admission re-proven through its public verifier and its authenticated admission cap fraction."""
 
     _require_exact(value, EdgePaperAdmissionDecision, "paper_admission")
     verification = verify_edge_paper_admission_decision(value)
@@ -1038,9 +1045,13 @@ def _proven_admission(value: object) -> tuple[EdgePaperAdmissionDecision, str]:
         or admission.advances is not True
         or admission.candidate_admitted_to_paper is not True
         or admission.kill_criteria_sealed is not True
+        or admission.pre_paper_validation_passed is not True
     ):
         raise _fail("paper_admission_not_admitted")
-    return admission, verification.recomputed_digest
+    fraction = _governed_value(admission.admission_cap_fraction, "paper_admission_cap_fraction_invalid")
+    if not 0 < fraction <= 1:
+        raise _fail("paper_admission_cap_fraction_invalid")
+    return admission, verification.recomputed_digest, fraction
 
 
 def _risk_budget_metadata(decision: PaperSleeveRiskBudgetDecision) -> tuple[str, dict[str, str]]:
@@ -1062,6 +1073,8 @@ def _risk_budget_metadata(decision: PaperSleeveRiskBudgetDecision) -> tuple[str,
 class _ProvenSubject:
     sleeve_id: str
     admission_digest: str
+    admission_cap_fraction: str
+    cap_fraction: Fraction
     universe: tuple[str, ...]
     authority: PaperLifecycleHeadAuthority
     budget: PaperSleeveRiskBudgetDecision
@@ -1086,7 +1099,7 @@ def _prove_subject(item: object, *, declared: frozenset[str], evaluation_end: in
         raise _fail("lifecycle_head_authority_evaluation_end_mismatch")
     head = sleeve.lifecycle_head_authority_inputs.lifecycle_head
 
-    admission, admission_digest = _proven_admission(sleeve.paper_admission)
+    admission, admission_digest, cap_fraction = _proven_admission(sleeve.paper_admission)
     if admission.paper_sleeve_id != sleeve_id:
         raise _fail("paper_admission_sleeve_mismatch")
     if admission_digest != authority.current_cycle_admission_decision_digest:
@@ -1127,6 +1140,8 @@ def _prove_subject(item: object, *, declared: frozenset[str], evaluation_end: in
     return _ProvenSubject(
         sleeve_id=sleeve_id,
         admission_digest=admission_digest,
+        admission_cap_fraction=admission.admission_cap_fraction,
+        cap_fraction=cap_fraction,
         universe=admission.pinned_instrument_universe,
         authority=authority,
         budget=budget,
@@ -1172,6 +1187,7 @@ class _ExposureSleeve:
     sleeve_id: str
     reserved_total: str
     sleeve_cap: str
+    admission_cap: Fraction
     universe: frozenset[str]
     records: tuple[_ExposureRecord, ...]
 
@@ -1186,11 +1202,18 @@ class _Exposure:
     breaches: tuple[str, ...]
 
 
+def _admission_cap(subject: _ProvenSubject, sleeve_cap: str) -> Fraction:
+    """The sleeve's admission cap: its EF-7 v2 cap fraction times its RG-2 ``max_paper_risk_budget``, exactly."""
+
+    return subject.cap_fraction * _governed_value(sleeve_cap, "sleeve_cap_invalid")
+
+
 def _exposure_sleeve(subject: _ProvenSubject, sleeve_cap: str) -> _ExposureSleeve:
     return _ExposureSleeve(
         sleeve_id=subject.sleeve_id,
         reserved_total=subject.budget.total_reserved_budget,
         sleeve_cap=sleeve_cap,
+        admission_cap=_admission_cap(subject, sleeve_cap),
         universe=frozenset(subject.universe),
         records=tuple(
             _ExposureRecord(record.sequence, record.instrument_id, record.reserved_budget)
@@ -1241,6 +1264,8 @@ def _evaluate_exposure(
             raise _fail("risk_budget_total_reserved_not_the_record_sum")
         if sleeve_total > _governed_value(sleeve.sleeve_cap, "sleeve_cap_invalid"):
             breaches.append(_reason(f"sleeve_cap_exceeded:{sleeve.sleeve_id}"))
+        if sleeve_total > sleeve.admission_cap:
+            breaches.append(_reason(f"admission_cap_exceeded:{sleeve.sleeve_id}"))
         if sleeve_total > 0:
             positive.add(sleeve.sleeve_id)
         total += sleeve_total
@@ -1335,6 +1360,8 @@ def _sleeve_record(
         risk_budget_state_digest=budget.state_digest,
         risk_budget_decision_digest=budget.decision_digest,
         sleeve_cap=sleeve_cap,
+        admission_cap_fraction=subject.admission_cap_fraction,
+        admission_cap=_render_amount(_admission_cap(subject, sleeve_cap)),
         pre_kill_requested_budget=budget.total_reserved_budget,
         post_kill_requested_budget=post_total,
         final_allocated_budget=post_total if ready else _ZERO,

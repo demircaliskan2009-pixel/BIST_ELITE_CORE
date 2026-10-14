@@ -96,6 +96,7 @@ from tests.crypto_core.validation import test_historical_pit_dataset as pit
 try:  # the module objects pytest collects (basename import), so the authentic worlds and their memos are built once
     import test_edge_kill_quarantine_decision as ef8t
     import test_edge_paper_admission_decision as ef7t
+    import test_edge_pre_paper_validation_evidence as pret
     import test_edge_walk_forward_oos_evidence as ef6t
     import test_paper_portfolio_allocation_decision as rg7t
     import test_paper_portfolio_risk_envelope as rg2
@@ -106,6 +107,7 @@ try:  # the module objects pytest collects (basename import), so the authentic w
 except ImportError:  # imported outside a pytest session
     from tests.crypto_core.validation import test_edge_kill_quarantine_decision as ef8t
     from tests.crypto_core.validation import test_edge_paper_admission_decision as ef7t
+    from tests.crypto_core.validation import test_edge_pre_paper_validation_evidence as pret
     from tests.crypto_core.validation import test_edge_walk_forward_oos_evidence as ef6t
     from tests.crypto_core.validation import test_paper_portfolio_allocation_decision as rg7t
     from tests.crypto_core.validation import test_paper_portfolio_risk_envelope as rg2
@@ -132,9 +134,10 @@ CONSUMPTION = "RG8_PORTFOLIO_STOP_MAX_PEAK_DISTANCE_V1"
 OBSERVED_CORRELATION = ("0.6", 30, 20)
 # SYNTHETIC TEST VALUES: more overlap days than the 30-day RG-3 world has, so the (alpha, beta) pair is worst case.
 WORST_CASE_CORRELATION = ("0.6", 60, 45)
-# SYNTHETIC TEST VALUES: beta's paper intents in the RG-7 variants (an unlisted market; a larger reservation).
+# SYNTHETIC TEST VALUES: beta's paper intents in the RG-7 variants (an unlisted market; a larger reservation that still
+# fits beta's EF-7 v2 admission cap, 1/4 of its 300 sleeve cap).
 UNLISTED_ROWS = ((UNLISTED, "1", "10"),)
-LARGER_ROWS = ((INS, "2", "40"),)
+LARGER_ROWS = ((INS, "1", "70"),)
 
 
 # --- memoized re-proof of upstream artifacts (see module docstring) ---------------------------------------------------
@@ -171,8 +174,7 @@ _RG8_MEMOS = {
 @pytest.fixture(autouse=True, scope="module")
 def _memoized_verification():
     with pytest.MonkeyPatch.context() as patch:
-        for (module, name), memo in ef6t._MEMOS.items():
-            patch.setattr(module, name, memo)
+        pret.apply_memos(patch)
         for name, memo in ef7t._EF7_MEMOS.items():
             patch.setattr(ef7_module, name, memo)
         for name, memo in ef8t._EF8_MEMOS.items():
@@ -660,7 +662,7 @@ def test_the_stop_depends_only_on_the_governed_levels_and_the_rg4_maximum() -> N
     hold = decisions["rg6_alpha_holds_on_probation"].sleeves[0]
     assert (hold.ladder_transition, hold.ladder_resulting_tier) == ("HOLD", "PROBATION")
     assert reference.sleeves[0].ladder_transition == "PROMOTE"
-    assert decisions["rg7_larger_beta_reservation"].allocation_total_final_allocated_budget == "155.5"
+    assert decisions["rg7_larger_beta_reservation"].allocation_total_final_allocated_budget == "145.5"
     assert decisions["rg6_and_rg7_without_governance"].governance_reason_codes == (
         code("allocation_decision_needs_governance_approval"),
         code(f"ladder_decision_needs_governance_approval:{ALPHA}"),

@@ -38,12 +38,21 @@ precedent, not advice.
 | preregistered search-bound sizes | Wider bounds = more freedom but every variant is a multiple-testing ledger entry — the OOS bar must rise with the count |
 | min OOS window count | More windows = robustness vs time-to-decision |
 | capacity assumptions | Overstated capacity = fake scalability; understated = wasted edge |
+| pre-paper PBO bands `a < c <= e` and the capped-band fraction (consumer: `edge_pre_paper_validation_policy.py`) | PRDV4 §1.20 sets the loosest legal values (0.20 / 0.40 / 0.60, cap 1/2); stricter bands reject more honest candidates but admit fewer overfit ones |
+| LIMITED_S1_PAPER_V1 regime cap fraction | At most 1/4 while the regime-conditional PBO is UNPROVEN: PRDV4's worst case applied to every regime; a lower value shrinks every admitted sleeve's RG-7 room |
+| Monte Carlo `p_max` and closed-trade floor | `p_max <= 0.05`, at least 50 closed trades (PRDV4 Stage 1); a stricter level rejects marginal significance, a higher floor needs longer frames |
+| sensitivity retention floor | At least 0.5 (PRDV4: a drop of more than 50% within ±10% rejects); higher = demands flatter parameter landscapes |
+| Stage-3 stress multipliers | At least PRDV4 Stage 3 (slippage x2.0; depth x0.2 and slippage x3.0; gap 10%, 5-minute recovery); harsher = fewer survivors |
+| flash-crash depth, slippage and maintenance fraction | PRDV4 names none: governed modeling inputs only, never venue liquidation facts (E2 stays unproven) |
+| trial-chain genesis and E1 (consumer: `edge_trial_count_chain.py`) | E1 is the human-attested count of variants tested before the chain; an understated E1 deflates the DSR too little. Never defaulted; its digest is pinned by the policy |
+| per-evaluation currentness attestation | A human attests the chain head is current and no tested variant is off-chain; without it the DSR cannot advance |
 
 ## 5. RG — portfolio governance (consumer: `paper_portfolio_risk_envelope.py`)
 
 | Constant | Trade-off |
 |---|---|
 | total budget / per-sleeve / per-market caps | Caps define blast radius; per-market caps guard against many sleeves holding the same underlying risk |
+| admission cap fraction (not an RG-2 value; consumer: RG-7) | Carried by the authenticated EF-7 v2 admission (`min` of the PBO band cap and the LIMITED_S1 regime cap); RG-7 requires each sleeve's reservation to be at most this fraction of its RG-2 sleeve cap, inclusive, rejecting (never scaling) a breach |
 | correlation cap | With unknown-correlation=1.0 fail-closed, a tight cap effectively forces evidence production before diversification credit is granted — that is intended |
 | ladder thresholds + probation windows | Fast promotion = capital efficiency vs regime-luck promotion; slow demotion = stability vs bleed |
 | portfolio-stop levels | Hard stops protect capital but crystallize drawdowns; levels must be pre-committed to avoid discretionary panic/greed |

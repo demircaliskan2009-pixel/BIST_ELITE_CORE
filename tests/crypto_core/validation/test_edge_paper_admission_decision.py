@@ -1,23 +1,25 @@
-"""Tests for Edge Factory EF-7 governed paper admission (EF7_EDGE_PAPER_ADMISSION_DECISION_V1).
+"""Tests for Edge Factory EF-7 v2 governed paper admission (EF7_EDGE_PAPER_ADMISSION_DECISION_V2).
 
-Fixtures are the REAL authenticated EF-2 → EF-6 chains of the EF-6 test module: world A's governed walk-forward PASS (one
-registered variant surviving three PRDV4 windows), the cheap governed EF-6 over the same sealed EF-5 with no bundle
-(READY + FAIL), the one-window NEEDS_GOVERNANCE draft and a REJECTED state. That module is imported under the module name
-pytest itself collects it with (``tests/crypto_core/validation`` is not a package, so pytest imports test files by
-basename); its ``functools`` caches and memos are therefore one object, and the authentic world is built once per process
-and shared with the EF-6 tests. Every governance, capacity and budget value below is a SYNTHETIC TEST VALUE; EF-7 holds
-no production number.
+Fixtures are REAL authenticated chains. The PASS chain is world P of the pre-paper validation module: a sealed
+nine-variant ±20% / 5% star grid, its governed EF-6 PASS and its authentic pre-paper validation PASS (CSCV PBO 0, DSR
+over the attested cumulative trial count, Monte Carlo, sensitivity and Stage-3 stress), which admits exactly the base
+variant with the LIMITED_S1_PAPER_V1 cap fraction 1/4. Every other rule runs on the EF-6 module's cheap authentic chains
+(world A: the cheap governed EF-6 over the same EF-5 shape with no bundle, READY + FAIL; the one-window NEEDS_GOVERNANCE
+draft; a REJECTED state), each with its own authentic pre-paper evidence, which propagates the EF-6 verdict without
+computing anything. World A's single-variant ledger can never pass the pre-paper gate. Both modules are imported under
+the module names pytest collects them with (``tests/crypto_core/validation`` is not a package, so pytest imports test
+files by basename); their ``functools`` caches and memos are therefore one object, and every world is built once per
+process. Every governance, capacity and budget value below is a SYNTHETIC TEST VALUE; EF-7 holds no production number.
 
-CI budget: the required ``tests`` job runs the suite twice under a 20-minute timeout. Decisions over the 4.9 MB PASS
-chain are limited to the draft, the approved PASS and one post-approval change; every other rule is exercised on the
-cheap authentic chain (same EF-5, EF-4 and kill criteria), whose reason codes expose each EF-7 rule even under the
-propagated FAIL. Extra authenticated worlds (synthetic facts, two surviving variants) are ``@pytest.mark.slow``.
+CI budget: decisions over the 46 MB PASS chain are limited to the draft, the approved PASS, one post-approval change and
+the pre-paper propagation cases; every other rule is exercised on the cheap chain, whose reason codes expose each EF-7
+rule even under the propagated FAIL. An extra authenticated world with synthetic facts is ``@pytest.mark.slow``.
 
 Cost control: the pure public upstream functions EF-7 calls are memoized at EF-7's call site with the EF-6 module's memo:
-the EF-6, EF-5 and EF-4 verifiers keyed exactly (exact type and every field value, so a str-enum alias, ``True`` versus
-``1`` and a tuple versus a list never collide) and the upstream strict parsers and the EF-6 shape predicate keyed by the
-canonical JSON text of their argument (they only ever receive ``json.loads`` output here). The EF-6 module's own memos are
-applied so its world builds once. EF-7's own code is never memoized.
+the EF-6, EF-5, EF-4 and pre-paper evidence verifiers keyed exactly (exact type and every field value, so a str-enum
+alias, ``True`` versus ``1`` and a tuple versus a list never collide) and the upstream strict parsers and shape predicates
+keyed by the canonical JSON text of their argument (they only ever receive ``json.loads`` output here). The EF-6 and
+pre-paper modules' own memos are applied so their worlds build once. EF-7's own code is never memoized.
 """
 
 from __future__ import annotations
@@ -29,6 +31,7 @@ import inspect
 import json
 from dataclasses import MISSING, FrozenInstanceError, fields, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -55,6 +58,7 @@ from crypto_core.validation.edge_idea_intake_evidence import (
 )
 from crypto_core.validation.edge_paper_admission_decision import (
     EDGE_CAPACITY_EVIDENCE_STATUS,
+    EDGE_PAPER_ADMISSION_HISTORICAL_SCHEMA_V1,
     EDGE_PAPER_ADMISSION_NON_CLAIM_FLAGS,
     EDGE_PAPER_ADMISSION_RULE_SET_DIGEST,
     EDGE_PORTFOLIO_RISK_ENVELOPE_PENDING,
@@ -71,10 +75,12 @@ from crypto_core.validation.edge_paper_admission_decision import (
     edge_paper_admission_rule_set,
     verify_edge_paper_admission_decision,
 )
+from crypto_core.validation.edge_pre_paper_validation_evidence import (
+    edge_pre_paper_validation_evidence_digest,
+    verify_edge_pre_paper_validation_evidence,
+)
 from crypto_core.validation.edge_walk_forward_oos_evidence import (
-    EdgeVariantMetricsInput,
     EdgeWalkForwardOosEvidence,
-    build_edge_walk_forward_oos_evidence,
     edge_walk_forward_oos_evidence_digest,
     edge_walk_forward_oos_evidence_from_payload,
     edge_walk_forward_oos_evidence_to_dict,
@@ -86,9 +92,11 @@ from crypto_core.validation.paper_sleeve_risk_budget_decision import (
     paper_sleeve_risk_budget_policy_digest,
 )
 
-try:  # the module object pytest collects (basename import), so the authentic world and its memos are built once
+try:  # the module objects pytest collects (basename import), so the authentic worlds and memos are built once
+    import test_edge_pre_paper_validation_evidence as pret
     import test_edge_walk_forward_oos_evidence as ef6t
 except ImportError:  # imported outside a pytest session
+    from tests.crypto_core.validation import test_edge_pre_paper_validation_evidence as pret
     from tests.crypto_core.validation import test_edge_walk_forward_oos_evidence as ef6t
 
 _PREFIX = "edge_paper_admission_decision"
@@ -99,6 +107,7 @@ OTHER_INS = "ETH-USDT-PERP"
 SLEEVE = "carry-sleeve-1"
 COMMITMENTS = (
     "predecessor_digest",
+    "pre_paper_evidence_digest",
     "admission_subject_digest",
     "kill_criteria_record_digest",
     "risk_budget_policy_digest",
@@ -128,15 +137,21 @@ CAPACITY_OTHER = replace(CAPACITY, assumption_id="capacity-other", instrument=OT
 
 # --- memoized pure upstream verifiers (see module docstring) -------------------------------------------------------------
 
+# The EF-6 verifier memo is the pre-paper module's own: both call sites re-prove the same EF-6 objects.
+_EF6_VERIFIER_MEMO = pret._PRE_MEMOS[(pret.ev_module, "verify_edge_walk_forward_oos_evidence")]
+assert _EF6_VERIFIER_MEMO.real is verify_edge_walk_forward_oos_evidence  # type: ignore[attr-defined]
 _EF7_MEMOS = {
-    "verify_edge_walk_forward_oos_evidence": ef6t._Memoized(verify_edge_walk_forward_oos_evidence, ef6t._exact_key),
+    "verify_edge_walk_forward_oos_evidence": _EF6_VERIFIER_MEMO,
     "verify_edge_leakage_bias_evidence": ef6t._MEMOS[(ef6_module, "verify_edge_leakage_bias_evidence")],
     "verify_edge_strategy_spec_admission": ef6t._MEMOS[(ef6_module, "verify_edge_strategy_spec_admission")],
+    "verify_edge_pre_paper_validation_evidence": pret._CallMemo(verify_edge_pre_paper_validation_evidence),
     **{
         name: ef6t._Memoized(getattr(ef7_module, name), edge_canonical_json)
         for name in (
             "edge_walk_forward_oos_evidence_payload_is_well_formed",
             "edge_walk_forward_oos_evidence_from_payload",
+            "edge_pre_paper_validation_evidence_payload_is_well_formed",
+            "edge_pre_paper_validation_evidence_from_payload",
             "edge_leakage_bias_evidence_from_payload",
             "edge_strategy_spec_admission_from_payload",
             "edge_source_packet_evidence_from_payload",
@@ -150,8 +165,7 @@ _EF7_MEMOS = {
 @pytest.fixture(autouse=True, scope="module")
 def _memoized_verification():
     with pytest.MonkeyPatch.context() as patch:
-        for (module, name), memo in ef6t._MEMOS.items():
-            patch.setattr(module, name, memo)
+        pret.apply_memos(patch)
         for name, memo in _EF7_MEMOS.items():
             patch.setattr(ef7_module, name, memo)
         yield
@@ -174,9 +188,14 @@ def budget_policy(sleeve_id: str = SLEEVE, total_budget: str = "1000") -> PaperS
 
 
 def arguments_for(predecessor: EdgeWalkForwardOosEvidence, **overrides: object) -> dict[str, object]:
+    """Builder arguments over ``predecessor``, with its own default authentic pre-paper evidence unless overridden."""
+
     policy = budget_policy()
+    evidence = overrides.pop("pre_paper_evidence", None) or pret.evidence_for(predecessor)
     arguments: dict[str, object] = {
         "expected_predecessor_digest": predecessor.walk_forward_oos_evidence_digest,
+        "pre_paper_evidence": evidence,
+        "expected_pre_paper_evidence_digest": evidence.pre_paper_validation_evidence_digest,  # type: ignore[attr-defined]
         "expected_root_intake_digest": ef6t.world()[0].intake_digest,
         "risk_budget_policy": policy,
         "expected_risk_budget_policy_digest": policy.policy_digest,
@@ -203,16 +222,22 @@ def approval_for(decision: EdgePaperAdmissionDecision, **overrides: object) -> E
     return EdgePaperAdmissionGovernance(**arguments)  # type: ignore[arg-type]
 
 
+def passing_chain() -> EdgeWalkForwardOosEvidence:
+    """World P's governed EF-6 PASS: the chain whose pre-paper validation passes."""
+
+    return pret.ef6_p()
+
+
 @functools.cache
 def draft() -> EdgePaperAdmissionDecision:
     """The ungoverned decision over the authentic PASS chain (the record a human reviews before approving)."""
 
-    return decide(ef6t.passed())
+    return decide(passing_chain())
 
 
 @functools.cache
 def admitted() -> EdgePaperAdmissionDecision:
-    return decide(ef6t.passed(), governance=approval_for(draft()))
+    return decide(passing_chain(), governance=approval_for(draft()))
 
 
 @functools.cache
@@ -334,7 +359,8 @@ def _expected_kill_criteria_record() -> dict[str, object]:
 
 
 def _expected_subject(predecessor: EdgeWalkForwardOosEvidence, sleeve: str = SLEEVE) -> dict[str, object]:
-    ef5 = ef6t.ef5("A")
+    ef5 = pret._ef5_of(predecessor)
+    evidence = pret.evidence_for(predecessor)
     ids = {item.parameter_assignment_digest: item.variant_id for item in ef5.registered_variants}
     return {
         "root_intake_digest": ef6t.world()[0].intake_digest,
@@ -352,9 +378,21 @@ def _expected_subject(predecessor: EdgeWalkForwardOosEvidence, sleeve: str = SLE
         "admitted_variants": [
             {"variant_id": ids[digest], "parameter_assignment_digest": digest}
             for digest in predecessor.surviving_assignment_digests
+            if digest in evidence.admitted_assignment_digests
         ],
         "paper_sleeve_id": sleeve,
+        "pre_paper_evidence_digest": evidence.pre_paper_validation_evidence_digest,
+        "admission_cap_fraction": evidence.admission_cap_fraction or "",
+        "admission_scope": "LIMITED_S1_PAPER_V1",
     }
+
+
+# The cheap chain's EF-6 FAIL propagates through EF-7 and through its own pre-paper evidence.
+CHEAP_FAILS = ("pre_paper_evidence_not_advanced:FAIL", "predecessor_not_advanced:FAIL")
+
+
+def _cheap_codes(*codes: str) -> tuple[str, ...]:
+    return tuple(sorted(_code(code) for code in (*CHEAP_FAILS, *codes)))
 
 
 def _digest(payload: object) -> str:
@@ -366,9 +404,10 @@ def _digest(payload: object) -> str:
 
 def test_governed_passing_chain_is_admitted_and_seals_the_exact_final_kill_criteria() -> None:
     decision = admitted()
-    predecessor = ef6t.passed()
+    predecessor = passing_chain()
+    evidence = pret.passed()
     intake, manifest, admission, _, binding = ef6t.world()
-    ef5 = ef6t.ef5("A")
+    ef5 = pret.ef5_p()
     _assert_receipt_invariants(decision)
     assert (decision.status, decision.gate_verdict, decision.advances) == (
         EdgeEvidenceStatus.READY,
@@ -392,12 +431,23 @@ def test_governed_passing_chain_is_admitted_and_seals_the_exact_final_kill_crite
     assert decision.strategy_spec_digest == admission.strategy_spec_digest == ef5.strategy_spec_digest
     assert decision.executable_binding_digest == binding.binding_digest
     assert decision.pinned_instrument_universe == (INS,)
-    assert (decision.multiple_testing_count, decision.registered_variant_count) == (1, 1)
+    assert (decision.multiple_testing_count, decision.registered_variant_count) == (9, 9)
     assert decision.evaluation_frame_digest == predecessor.evaluation_frame_digest
     assert decision.oos_governance_digest == predecessor.governance_digest
-    # The complete surviving set, mapped through the EF-5 ledger; no selection.
+    # The pre-paper evidence is re-proven and carried exactly: LIMITED_S1_PAPER_V1, cap 1/4, regime PBO unproven.
+    assert decision.pre_paper_evidence_digest == evidence.pre_paper_validation_evidence_digest
+    assert (decision.pre_paper_evidence_gate_verdict, decision.pre_paper_validation_passed) == ("PASS", True)
+    assert (decision.pre_paper_policy_digest, decision.trial_chain_digest) == (
+        evidence.policy_digest,
+        evidence.trial_chain_digest,
+    )
+    assert (decision.pbo, decision.pbo_band) == ("0.000000000000000000", "NORMAL")
+    assert decision.admission_cap_fraction == "0.250000000000000000" == evidence.admission_cap_fraction
+    assert (decision.admission_scope, decision.regime_conditional_pbo_status) == ("LIMITED_S1_PAPER_V1", "UNPROVEN")
+    assert (decision.pbo_passed, decision.stress_passed) == (False, False)
+    # Exactly the EF-6 survivors that passed every pre-paper gate, mapped through the EF-5 ledger; no selection.
     assert decision.admitted_variants == (
-        EdgeAdmittedVariant("variant-a", predecessor.surviving_assignment_digests[0]),
+        EdgeAdmittedVariant(pret.BASE_VARIANT, evidence.admitted_assignment_digests[0]),
     )
     assert decision.admission_subject_digest == _digest(_expected_subject(predecessor))
     # The seal is exactly the authentic EF-4 admitted criteria with their lineage.
@@ -440,7 +490,7 @@ def test_missing_governance_on_a_passing_chain_needs_approval_and_seals_nothing(
 
 def test_changed_capacity_after_approval_cannot_authorize_the_admission() -> None:
     changed = replace(CAPACITY, max_value="500000.000000000000000000")
-    decision = decide(ef6t.passed(), capacity_assumptions=(changed,), governance=approval_for(draft()))
+    decision = decide(passing_chain(), capacity_assumptions=(changed,), governance=approval_for(draft()))
     _assert_shape(decision)
     assert decision.gate_verdict is EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL
     assert decision.verdict_reason_codes == (_code("admission_governance_capacity_assumption_set_digest_mismatch"),)
@@ -451,8 +501,9 @@ def test_predecessor_fail_is_valid_negative_evidence_that_is_never_admitted() ->
     decision = cheap_approved()
     _assert_receipt_invariants(decision)
     assert (decision.status, decision.gate_verdict) == (EdgeEvidenceStatus.READY, EdgeGateVerdict.FAIL)
-    assert decision.verdict_reason_codes == (_code("predecessor_not_advanced:FAIL"),)
+    assert decision.verdict_reason_codes == _cheap_codes()
     assert decision.predecessor_gate_verdict == "FAIL"
+    assert (decision.pre_paper_evidence_gate_verdict, decision.admission_cap_fraction) == ("FAIL", "")
     assert (decision.admitted_variants, decision.admitted_variant_count) == ((), 0)
     assert (decision.performance_data_consumed, decision.oos_evidence_consumed) == (False, False)
     assert decision.kill_criteria_record_digest == admitted().kill_criteria_record_digest
@@ -467,6 +518,7 @@ def test_predecessor_needing_governance_propagates_and_is_never_admitted() -> No
     assert decision.gate_verdict is EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL
     assert decision.verdict_reason_codes == (
         _code("admission_governance_missing"),
+        _code("pre_paper_evidence_not_advanced:NEEDS_GOVERNANCE_APPROVAL"),
         _code("predecessor_not_advanced:NEEDS_GOVERNANCE_APPROVAL"),
     )
     assert (decision.candidate_admitted_to_paper, decision.kill_criteria_sealed, decision.admitted_variants) == (
@@ -484,7 +536,10 @@ def test_predecessor_needing_external_facts_propagates_and_is_never_admitted() -
     decision = decide(predecessor, governance=approval_for(first))
     _assert_receipt_invariants(decision)
     assert decision.gate_verdict is EdgeGateVerdict.NEEDS_EXTERNAL_FACTS
-    assert decision.verdict_reason_codes == (_code("predecessor_not_advanced:NEEDS_EXTERNAL_FACTS"),)
+    assert decision.verdict_reason_codes == (
+        _code("pre_paper_evidence_not_advanced:NEEDS_EXTERNAL_FACTS"),
+        _code("predecessor_not_advanced:NEEDS_EXTERNAL_FACTS"),
+    )
     assert decision.candidate_admitted_to_paper is False
 
 
@@ -497,52 +552,123 @@ def test_rejected_predecessor_is_rejected() -> None:
     assert decision.final_kill_criteria == () and decision.kill_criteria_lifecycle_stage == ""
 
 
+def test_every_survivor_passing_every_pre_paper_gate_is_admitted_in_ef6_order_without_selection() -> None:
+    """The admitted set is the EF-6 canonical order of the evidence's admitted assignments, whatever their order."""
+
+    survivors = passing_chain().surviving_assignment_digests
+    chain = SimpleNamespace(ef5=pret.ef5_p(), ef6=passing_chain())
+    ids = {item.parameter_assignment_digest: item.variant_id for item in pret.ef5_p().registered_variants}
+    for chosen in (survivors[:1], survivors[2:5], tuple(reversed(survivors))):
+        result = ef7_module._admitted_variants(chain, SimpleNamespace(admitted_assignment_digests=chosen))
+        expected = tuple(EdgeAdmittedVariant(ids[digest], digest) for digest in survivors if digest in set(chosen))
+        assert result == expected
+
+
+# --- B2. the pre-paper validation precondition --------------------------------------------------------------------------
+
+
+def _v1_payload(decision: EdgePaperAdmissionDecision) -> dict:
+    """A payload in the historical v1 shape: the v1 schema id and none of the v2 pre-paper fields."""
+
+    payload = _payload(decision)
+    for name in (
+        "pre_paper_evidence_binding",
+        "pre_paper_evidence_digest",
+        "pre_paper_evidence_gate_verdict",
+        "pre_paper_policy_digest",
+        "trial_chain_digest",
+        "pbo",
+        "pbo_band",
+        "admission_scope",
+        "regime_conditional_pbo_status",
+        "admission_cap_fraction",
+        "pre_paper_validation_passed",
+    ):
+        del payload[name]
+    del payload["governance"]["approved_pre_paper_evidence_digest"]
+    payload["schema_version"] = EDGE_PAPER_ADMISSION_HISTORICAL_SCHEMA_V1
+    return payload
+
+
+def test_a_historical_v1_decision_is_refused_and_never_becomes_v2_authority() -> None:
+    payload = _v1_payload(cheap_approved())
+    with pytest.raises(EdgePaperAdmissionDecisionError, match="schema_superseded_v1_historical_only"):
+        edge_paper_admission_decision_from_payload(payload)
+    assert edge_paper_admission_decision_payload_is_well_formed(payload) is False
+    relabelled = _payload(cheap_approved())
+    relabelled["schema_version"] = EDGE_PAPER_ADMISSION_HISTORICAL_SCHEMA_V1
+    assert edge_paper_admission_decision_payload_is_well_formed(relabelled) is False
+    _assert_not_intact(_reseal(cheap_approved(), schema_version=EDGE_PAPER_ADMISSION_HISTORICAL_SCHEMA_V1))
+    assert cheap_approved().schema_version == "edge-paper-admission-decision.v2"
+
+
+def test_pre_paper_evidence_needing_governance_propagates_and_admits_nothing() -> None:
+    decision = decide(passing_chain(), pre_paper_evidence=pret.draft(), governance=approval_for(draft()))
+    _assert_shape(decision)
+    assert decision.gate_verdict is EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL
+    assert _code("pre_paper_evidence_not_advanced:NEEDS_GOVERNANCE_APPROVAL") in decision.verdict_reason_codes
+    assert (decision.admitted_variants, decision.admission_cap_fraction, decision.candidate_admitted_to_paper) == (
+        (),
+        "",
+        False,
+    )
+
+
 @functools.cache
-def _two_survivor_predecessor(reverse: bool = False) -> EdgeWalkForwardOosEvidence:
-    """Ledger AB with two three-window bundles (variant-b doubles the unit size): two survivors, no winner."""
-
-    bundle_b = ef6t.mt.build(
-        tuple(ef6t._window(index, start, ef6t.PB) for index, start in enumerate(ef6t.STARTS)), result_id="wf-B3"
-    )
-    inputs = [
-        EdgeVariantMetricsInput(ef6t.metrics("A"), ef6t.metrics("A").result_digest),
-        EdgeVariantMetricsInput(bundle_b, bundle_b.result_digest),
-    ]
-    predecessor = ef6t.ef5("AB")
-    arguments = {
-        "expected_predecessor_digest": predecessor.leakage_bias_evidence_digest,
-        "expected_root_intake_digest": ef6t.world()[0].intake_digest,
-        "variant_metrics": tuple(reversed(inputs)) if reverse else tuple(inputs),
-        "evidence_id": "ef6-ab",
-        "correlation_id": "corr-1",
-    }
-    first = build_edge_walk_forward_oos_evidence(predecessor, **arguments)  # type: ignore[arg-type]
-    return build_edge_walk_forward_oos_evidence(
-        predecessor,
-        **arguments,  # type: ignore[arg-type]
-        governance=ef6t.governance_for(first),
+def _failing_evidence():
+    record = pret.genesis(10**15)
+    chain = pret.chain_for((pret.ef5_p(),), record)
+    return pret.build(
+        passing_chain(), chain=chain, policy=pret.policy(approved_trial_chain_genesis_digest=record.genesis_digest)
     )
 
 
-@SLOW
-def test_multiple_survivors_are_all_admitted_without_selection_in_any_input_order() -> None:
-    predecessor = _two_survivor_predecessor()
-    assert predecessor.gate_verdict is EdgeGateVerdict.PASS
-    assert len(predecessor.surviving_assignment_digests) == 2
-    first = decide(predecessor)
-    decision = decide(predecessor, governance=approval_for(first))
+def test_a_failing_pre_paper_evidence_propagates_fail_and_is_never_admitted() -> None:
+    evidence = _failing_evidence()
+    assert evidence.gate_verdict is EdgeGateVerdict.FAIL
+    decision = decide(passing_chain(), pre_paper_evidence=evidence)
     _assert_receipt_invariants(decision)
-    assert decision.gate_verdict is EdgeGateVerdict.PASS
-    ids = {item.parameter_assignment_digest: item.variant_id for item in ef6t.ef5("AB").registered_variants}
-    assert decision.admitted_variants == tuple(
-        EdgeAdmittedVariant(ids[digest], digest) for digest in predecessor.surviving_assignment_digests
+    assert decision.gate_verdict is EdgeGateVerdict.FAIL
+    assert decision.verdict_reason_codes == (
+        _code("admission_governance_missing"),
+        _code("pre_paper_evidence_not_advanced:FAIL"),
     )
-    assert {item.variant_id for item in decision.admitted_variants} == {"variant-a", "variant-b"}
-    assert decision.multiple_testing_count == 2
-    reversed_predecessor = _two_survivor_predecessor(reverse=True)
-    assert reversed_predecessor == predecessor
-    again = decide(reversed_predecessor, governance=approval_for(first))
-    assert edge_paper_admission_decision_to_dict(again) == edge_paper_admission_decision_to_dict(decision)
+    assert decision.kill_criteria_sealed is False and decision.pre_paper_validation_passed is False
+
+
+def test_a_foreign_or_tampered_pre_paper_evidence_is_rejected() -> None:
+    foreign = decide(passing_chain(), pre_paper_evidence=pret.evidence_for(ef6t.cheap()))
+    _assert_shape(foreign)
+    assert foreign.status is EdgeEvidenceStatus.REJECTED
+    assert any(
+        code.startswith(_code("pre_paper_evidence_integrity_failure:")) for code in foreign.integrity_reason_codes
+    )
+    evidence = pret.passed()
+    changed = replace(evidence, admission_cap_fraction="0.500000000000000000")
+    forged = replace(changed, pre_paper_validation_evidence_digest=edge_pre_paper_validation_evidence_digest(changed))
+    tampered = decide(passing_chain(), pre_paper_evidence=forged)
+    assert tampered.status is EdgeEvidenceStatus.REJECTED
+    assert any(
+        code.startswith(_code("pre_paper_evidence_integrity_failure:")) for code in tampered.integrity_reason_codes
+    )
+    mismatch = decide(passing_chain(), pre_paper_evidence=evidence, expected_pre_paper_evidence_digest="0" * 64)
+    assert mismatch.integrity_reason_codes == (_code("pre_paper_evidence_digest_mismatch"),)
+
+
+def test_a_missing_or_malformed_pre_paper_evidence_is_a_construction_error() -> None:
+    arguments = arguments_for(ef6t.cheap())
+    for value, code in (
+        (None, "pre_paper_evidence_malformed"),
+        (ef6t.cheap(), "pre_paper_evidence_malformed"),
+        (object.__new__(type(pret.passed())), "pre_paper_evidence_not_serializable"),
+    ):
+        with pytest.raises(EdgePaperAdmissionDecisionError, match=code):
+            build_edge_paper_admission_decision(ef6t.cheap(), **{**arguments, "pre_paper_evidence": value})  # type: ignore[arg-type]
+    with pytest.raises(EdgePaperAdmissionDecisionError, match="pre_paper_evidence_expected_digest_invalid"):
+        build_edge_paper_admission_decision(
+            ef6t.cheap(),
+            **{**arguments, "expected_pre_paper_evidence_digest": "x"},  # type: ignore[arg-type]
+        )
 
 
 # --- B. EF-6 authority and the back-chain --------------------------------------------------------------------------------
@@ -765,6 +891,8 @@ def test_builder_accepts_no_kill_criteria_variant_choice_ranking_or_flag_input()
     assert set(parameters) == {
         "predecessor",
         "expected_predecessor_digest",
+        "pre_paper_evidence",
+        "expected_pre_paper_evidence_digest",
         "expected_root_intake_digest",
         "risk_budget_policy",
         "expected_risk_budget_policy_digest",
@@ -860,9 +988,7 @@ def test_every_non_pass_outcome_keeps_the_kill_criteria_unsealed() -> None:
 def test_each_approval_commitment_must_match_exactly(name: str) -> None:
     decision = decide(ef6t.cheap(), governance=approval_for(cheap_draft(), **{f"approved_{name}": "a" * 64}))
     _assert_shape(decision)
-    assert decision.verdict_reason_codes == tuple(
-        sorted((_code(f"admission_governance_{name}_mismatch"), _code("predecessor_not_advanced:FAIL")))
-    )
+    assert decision.verdict_reason_codes == _cheap_codes(f"admission_governance_{name}_mismatch")
 
 
 def test_approval_of_weakened_kill_criteria_cannot_authorize_the_authentic_seal() -> None:
@@ -876,7 +1002,7 @@ def test_approval_of_weakened_kill_criteria_cannot_authorize_the_authentic_seal(
 
 def test_old_approval_cannot_authorize_a_changed_rule_set(monkeypatch: pytest.MonkeyPatch) -> None:
     approval = approval_for(cheap_draft())
-    monkeypatch.setattr(ef7_module, "EDGE_PAPER_ADMISSION_RULE_SET_DIGEST", _digest({"rule_set_id": "rules.v2"}))
+    monkeypatch.setattr(ef7_module, "EDGE_PAPER_ADMISSION_RULE_SET_DIGEST", _digest({"rule_set_id": "rules.v3"}))
     decision = decide(ef6t.cheap(), governance=approval)
     assert _code("admission_governance_rule_set_digest_mismatch") in decision.verdict_reason_codes
 
@@ -1205,12 +1331,13 @@ def test_future_portfolio_rg_is_an_honest_pending_marker_never_a_fabricated_enve
 # --- G. the selection firewall -------------------------------------------------------------------------------------------
 
 
-def test_admitted_set_is_exactly_the_registered_ef6_survivors_and_carries_no_ranking() -> None:
+def test_admitted_set_is_exactly_the_pre_paper_admitted_ef6_survivors_and_carries_no_ranking() -> None:
     decision = admitted()
-    predecessor = ef6t.passed()
+    predecessor = passing_chain()
     admitted_digests = tuple(item.parameter_assignment_digest for item in decision.admitted_variants)
-    assert admitted_digests == predecessor.surviving_assignment_digests
-    assert set(admitted_digests) <= set(ef6t.ef5("A").registered_parameter_assignment_digests)
+    assert admitted_digests == pret.passed().admitted_assignment_digests
+    assert set(admitted_digests) < set(predecessor.surviving_assignment_digests)
+    assert set(admitted_digests) <= set(pret.ef5_p().registered_parameter_assignment_digests)
     names = {field.name for field in fields(EdgePaperAdmissionDecision)} | {
         field.name for field in fields(EdgeAdmittedVariant)
     }
@@ -1254,6 +1381,7 @@ def test_non_claim_flags_are_structural_defaults_no_builder_parameter_can_set() 
         "preregistration_sealed",
         "performance_data_consumed",
         "oos_evidence_consumed",
+        "pre_paper_validation_passed",
     }
     assert structural - computed <= set(defaults)
     assert all(field.default is MISSING for field in fields(EdgePaperAdmissionDecision) if field.name in computed)
@@ -1278,6 +1406,14 @@ def test_non_claim_flags_are_structural_defaults_no_builder_parameter_can_set() 
         {"portfolio_risk_envelope_status": "RG_ENVELOPE_APPROVED"},
         {"capacity_evidence_status": "EMPIRICALLY_PROVEN"},
         {"predecessor_gate_verdict": "PASS"},
+        {"pre_paper_validation_passed": True},
+        {"pre_paper_evidence_gate_verdict": "PASS"},
+        {"admission_cap_fraction": "1.000000000000000000"},
+        {"admission_scope": "FULL_PRDV4_COMPLIANT"},
+        {"regime_conditional_pbo_status": "PROVEN"},
+        {"pbo_band": "NORMAL"},
+        {"pbo_passed": True},
+        {"stress_passed": True},
     ],
 )
 def test_forged_flags_or_claims_never_verify(changes: dict[str, object]) -> None:
@@ -1342,6 +1478,10 @@ def test_decision_is_frozen() -> None:
         (("risk_budget_policy_binding", "expected_digest"), "A" * 64),
         (("predecessor_binding", "snapshot"), {}),
         (("predecessor_binding", "snapshot", "status"), "WINNER"),
+        (("pre_paper_evidence_binding", "snapshot"), {}),
+        (("pre_paper_evidence_binding", "snapshot", "pbo_band"), "PASSED"),
+        (("pre_paper_validation_passed",), "true"),
+        (("governance", "approved_pre_paper_evidence_digest"), _UNSET),
         (("candidate_admitted_to_paper",), 1),
         (("kill_criteria_sealed",), _UNSET),
         (("unexpected_field",), "x"),
@@ -1406,6 +1546,7 @@ class _Exploding:
         lambda: object.__new__(EdgePaperAdmissionDecision),
         lambda: ef6t.cheap(),
         lambda: _corrupted(predecessor_binding=None),
+        lambda: _corrupted(pre_paper_evidence_binding=None),
         lambda: _corrupted(risk_budget_policy_binding=object()),
         lambda: _corrupted(capacity_assumptions=_cyclic()),
         lambda: _corrupted(capacity_assumptions=(object(),)),
@@ -1460,7 +1601,8 @@ def test_rule_set_digest_commits_the_code_defined_rules() -> None:
     assert EDGE_PAPER_ADMISSION_RULE_SET_DIGEST == _digest(rules)
     rules["capacity_value_scale"] = 2
     assert edge_paper_admission_rule_set()["capacity_value_scale"] == 18
-    assert cheap_draft().rule_set_id == "edge_paper_admission_rules.v1"
+    assert cheap_draft().rule_set_id == "edge_paper_admission_rules.v2"
+    assert (rules["admission_scope"], rules["regime_conditional_pbo_status"]) == ("LIMITED_S1_PAPER_V1", "UNPROVEN")
 
 
 _FORBIDDEN_MODULES = (
@@ -1545,6 +1687,8 @@ def test_module_consumes_only_public_authenticated_substrate() -> None:
         "crypto_core.validation.edge_artifact_core",
         "crypto_core.validation.edge_idea_intake_evidence",
         "crypto_core.validation.edge_leakage_bias_evidence",
+        "crypto_core.validation.edge_pre_paper_validation_evidence",
+        "crypto_core.validation.edge_pre_paper_validation_policy",
         "crypto_core.validation.edge_source_packet_evidence",
         "crypto_core.validation.edge_strategy_spec_admission",
         "crypto_core.validation.edge_walk_forward_oos_evidence",

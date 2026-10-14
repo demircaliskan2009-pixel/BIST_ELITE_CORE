@@ -77,6 +77,31 @@ sequence. An unrepresentable derived value is ``FAIL`` (``economic_value_out_of_
 The result proves deterministic simulated historical economics under the approved policy only: not venue fill truth,
 not edge, profitability, performance metrics or readiness. One assembly path serves the builder and verifier
 reassembly; ``verify_historical_execution_economics`` re-proves every authority and re-derives every ledger. Total.
+
+Stage-3 synthetic stress (``STRESS_PIT_TRANSFORM_V1``). ``simulate_historical_execution_stress`` re-runs THIS engine —
+the same frozen decision trace, policy, fill model, fees, funding and valuation rules — over a declared, digest-bound
+transformation of the authenticated observations of one READY + PASS result. It is a modeled synthetic scenario,
+never an authenticated market event, and it never mutates or replaces the authenticated dataset. The historical
+simulation itself is unchanged: its only four hooks (the mark and book observations it is constructed over, the
+effective slippage and the observed book) are identities.
+
+* HIGH_VOLATILITY: every observed price is moved so that its log-deviation from the anchor mark ``m0`` (the latest mark
+  visible at the evaluation start) is multiplied by exactly 3/2: ``p' = p × g`` with ``g = sqrt(p / m0)`` rendered once
+  by exact integer square root at scale 18 (ROUND_HALF_EVEN with an exact tie); a book is moved by the ``g`` of its own
+  mid, so its spread in bps is unchanged; depth and funding rates are unchanged; the effective slippage is multiplied
+  by the governed slippage multiplier;
+* LOW_LIQUIDITY: every visible side depth is multiplied by the governed depth multiplier (truncated toward zero on the
+  quantity grid) and the effective slippage by the governed slippage multiplier;
+* FLASH_CRASH: the shock instant ``tau`` is the earliest UTC day-boundary valuation of the authenticated result with
+  the maximal gross leverage ``|q| × mark / equity``; every price observed in ``[tau, tau + recovery)`` is moved by the
+  governed gap against the position held at ``tau`` (long: down, short: up), every book observed there has its depth
+  multiplied by the governed depth multiplier and its effective slippage by the governed slippage multiplier, and the
+  original path resumes at ``tau + recovery``. No liquidation is executed and no venue liquidation rule is modeled: a
+  valuation inside the window whose exact equity is below the governed maintenance fraction × gross notional is
+  recorded as a maintenance-zone breach. Without any exposure at a day boundary no shock is applied.
+
+A stress outcome records the scenario, its anchors, the breach and the daily endpoint equities; it carries no pass or
+fail and proves no venue mechanics, liquidation behavior or real-market stress.
 """
 
 from __future__ import annotations
@@ -147,8 +172,15 @@ from crypto_core.validation.strategy_executable_binding import (
 )
 
 _SCHEMA_VERSION = "historical-execution-economics.v1"
+_STRESS_SCHEMA_VERSION = "historical-execution-stress-outcome.v1"
+_STRESS_METHOD_ID = "STRESS_PIT_TRANSFORM_V1"
 _REASON_PREFIX = "historical_execution_economics"
 _SELF_DIGEST_FIELD = "result_digest"
+_STRESS_DIGEST_FIELD = "outcome_digest"
+# HIGH_VOLATILITY multiplies log-price deviations from the anchor by exactly 3/2 (the PRDV4 §1.13 Stage 3 ``returns ×
+# 1.5``), implemented as one exact scale-18 square root; no other return multiplier is representable in this method.
+_HIGH_VOLATILITY_RETURN_MULTIPLIER = Fraction(3, 2)
+_STRESS_SCALE_FACTOR = 10**18
 _UTC_DAY_NS = 86_400_000_000_000
 _BPS = Fraction(10_000)
 _HUNDRED = Fraction(100)
@@ -462,6 +494,68 @@ class HistoricalExecutionEconomicsResult:
     venue_facts_proven: bool = False
     semantic_equivalence_machine_proven: bool = False
     venue_orders_created: bool = False
+
+
+class HistoricalExecutionStressScenarioKind(str, Enum):
+    HIGH_VOLATILITY = "HIGH_VOLATILITY"
+    LOW_LIQUIDITY = "LOW_LIQUIDITY"
+    FLASH_CRASH = "FLASH_CRASH"
+
+
+@dataclass(frozen=True)
+class HistoricalExecutionStressScenario:
+    """One declared synthetic Stage-3 transformation (``STRESS_PIT_TRANSFORM_V1``); never an authenticated event.
+
+    Decimals are canonical scale-18 texts. A field the kind does not use holds its neutral value: the return multiplier
+    is exactly ``1.5`` for HIGH_VOLATILITY and ``1`` otherwise, the depth multiplier is ``1`` for HIGH_VOLATILITY, and
+    the gap, recovery and maintenance fraction are zero outside FLASH_CRASH. Governed minimums belong to the consumer's
+    policy; this engine only defines and applies the transformation.
+    """
+
+    scenario_kind: HistoricalExecutionStressScenarioKind
+    return_multiplier: str
+    slippage_multiplier: str
+    depth_multiplier: str
+    gap_fraction: str
+    recovery_ns: int
+    maintenance_margin_fraction: str
+
+
+@dataclass(frozen=True)
+class HistoricalExecutionStressOutcome:
+    """The deterministic, digest-bound outcome of one synthetic stress re-simulation. Modeled only; no pass or fail.
+
+    ``daily_endpoint_equities`` are the rendered equities of the stressed run's INITIAL, every UTC day boundary and
+    EVALUATION_END valuation, in order. ``simulated`` is False exactly when the stressed run could not be computed
+    (``reason_codes`` says why); nothing is fabricated then.
+    """
+
+    schema_version: str
+    stress_method_id: str
+    scenario: HistoricalExecutionStressScenario
+    scenario_digest: str
+    baseline_result_id: str
+    baseline_result_digest: str
+    evaluation_start_ns: int
+    evaluation_end_ns: int
+    simulated: bool
+    anchor_mark_price: str | None
+    shock_time_ns: int | None
+    shock_direction: str
+    maintenance_breached: bool
+    first_breach_time_ns: int | None
+    closed_trade_count: int
+    rejected_fill_count: int
+    daily_endpoint_equities: tuple[str, ...]
+    daily_endpoint_digest: str
+    reason_codes: tuple[str, ...]
+    outcome_digest: str
+    paper_only: bool = True
+    authenticated_market_event: bool = False
+    venue_liquidation_modeled: bool = False
+    venue_facts_proven: bool = False
+    stress_passed: bool = False
+    live_ready: bool = False
 
 
 # --- helpers ------------------------------------------------------------------------------------------------------------
@@ -940,7 +1034,7 @@ class _Simulation:
             if visible is not None
         ]
         marks.sort(key=lambda mark: (mark.visibility, mark.record.event_time_ns, mark.record.sequence_id))
-        self.marks = _MarkCursor(marks, policy.max_mark_staleness_ns)
+        self.marks = self._transformed_marks(_MarkCursor(marks, policy.max_mark_staleness_ns))
         books = [
             _Book(
                 visible,
@@ -963,8 +1057,8 @@ class _Simulation:
                 book.record.record_digest,
             )
         )
-        self.books = books
-        self.book_visibilities = [book.visibility for book in books]
+        self.books = self._transformed_books(books)
+        self.book_visibilities = [book.visibility for book in self.books]
         self.position = _FLAT
         self.realized = Fraction(0)
         self.fees = Fraction(0)
@@ -973,6 +1067,16 @@ class _Simulation:
         self.segments: list[tuple[int, Fraction]] = []
         self.settled: set[tuple[str, str, int]] = set()
         self.ledgers = _Ledgers()
+
+    def _transformed_marks(self, marks: _MarkCursor) -> _MarkCursor:
+        """Construction hook: the mark observations as the simulation reads them (identity; a stress run overrides)."""
+
+        return marks
+
+    def _transformed_books(self, books: list[_Book]) -> list[_Book]:
+        """Construction hook: the book observations as the simulation reads them (identity; a stress run overrides)."""
+
+        return books
 
     # -- exact identities --
 
@@ -1154,7 +1258,18 @@ class _Simulation:
     def _unfilled(self, intent: HistoricalExecutionIntent, reason: str) -> None:
         self._fill_record(intent, outcome=HistoricalExecutionFillOutcome.UNFILLED, reason=reason)
 
+    def _effective_slippage(self, effective: Fraction, book: _Book) -> Fraction:
+        """The effective slippage of one fill; the historical model uses the governed value unchanged."""
+
+        return effective
+
+    def _observed_book(self, book: _Book) -> _Book:
+        """The book observation one fill executes against; the historical model uses the authenticated record."""
+
+        return book
+
     def _execute(self, intent: _Intent, book: _Book) -> None:
+        book = self._observed_book(book)
         record = intent.record
         observed = {
             "book_record_digest": book.record.record_digest,
@@ -1202,7 +1317,7 @@ class _Simulation:
             return
         participation = filled / depth * _HUNDRED
         impact = self.impact * participation
-        effective = max(self.floor, half_spread_bps + impact)
+        effective = self._effective_slippage(max(self.floor, half_spread_bps + impact), book)
         quoted.update(
             participation_pct=_amount(participation, "participation_pct"),
             impact_bps=_amount(impact, "impact_bps"),
@@ -1481,6 +1596,407 @@ class _Simulation:
             equity=end.equity,
         )
         return self.ledgers
+
+
+# --- Stage-3 synthetic stress (STRESS_PIT_TRANSFORM_V1) -------------------------------------------------------------
+
+
+def _integer_sqrt(value: int) -> int:
+    """``floor(sqrt(value))`` of a non-negative integer by exact integer Newton iteration (no float)."""
+
+    if value < 2:
+        return value
+    root = 1 << ((value.bit_length() + 1) // 2)
+    while True:
+        candidate = (root + value // root) // 2
+        if candidate >= root:
+            return root
+        root = candidate
+
+
+def _scaled_sqrt(value: Fraction) -> Fraction:
+    """``sqrt(value)`` rendered once at scale 18 by exact integer square root, ROUND_HALF_EVEN with an exact tie."""
+
+    radicand = value.numerator * _STRESS_SCALE_FACTOR * _STRESS_SCALE_FACTOR
+    root = _integer_sqrt(radicand // value.denominator)
+    left = 4 * radicand
+    right = value.denominator * (2 * root + 1) ** 2
+    if left > right or (left == right and root % 2 == 1):
+        root += 1
+    return Fraction(root, _STRESS_SCALE_FACTOR)
+
+
+def _scaled_depth(value: Fraction, multiplier: Fraction) -> Fraction:
+    quantized = historical_execution_quantize_quantity(value * multiplier)
+    if quantized is None:
+        raise _EconomicFailure("economic_value_out_of_representation:stress_depth")
+    return quantized[0]
+
+
+class _ShockedMarks:
+    """The mark observations of a FLASH_CRASH run: the authenticated cursor, gapped inside the shock window."""
+
+    def __init__(self, inner: _MarkCursor, start: int, end: int, factor: Fraction) -> None:
+        self._inner, self._start, self._end, self._factor = inner, start, end, factor
+
+    def at(self, time_ns: int, purpose: str) -> _Mark:
+        mark = self._inner.at(time_ns, purpose)
+        if self._start <= time_ns < self._end:
+            return _Mark(mark.visibility, mark.record, mark.price * self._factor)
+        return mark
+
+
+class _StressSimulation(_Simulation):
+    """The historical simulation over one declared synthetic transformation of its authenticated observations."""
+
+    def __init__(
+        self,
+        *,
+        scenario: HistoricalExecutionStressScenario,
+        anchor: Fraction | None,
+        shock_time_ns: int | None,
+        shock_factor: Fraction,
+        **arguments: object,
+    ) -> None:
+        # The scenario is declared before the base construction, whose hooks below read it.
+        kind = scenario.scenario_kind
+        self.kind = kind
+        self.anchor = anchor if anchor is not None and anchor > 0 else None
+        self.slippage_multiplier = Fraction(scenario.slippage_multiplier)
+        self.depth_multiplier = Fraction(scenario.depth_multiplier)
+        self.maintenance_fraction = Fraction(scenario.maintenance_margin_fraction)
+        self.shock_start = shock_time_ns
+        self.shock_end = None if shock_time_ns is None else shock_time_ns + scenario.recovery_ns
+        self.first_breach_ns: int | None = None
+        self.shock_factor = shock_factor
+        super().__init__(**arguments)  # type: ignore[arg-type]
+        if kind is HistoricalExecutionStressScenarioKind.HIGH_VOLATILITY and self.anchor is None:
+            raise _EconomicFailure("stress_anchor_mark_unavailable")
+
+    def _transformed_marks(self, marks: _MarkCursor) -> _MarkCursor:
+        if self.kind is HistoricalExecutionStressScenarioKind.HIGH_VOLATILITY:
+            anchor = self.anchor
+            if anchor is None:  # refused right after the base construction
+                return marks
+            return _MarkCursor(
+                [
+                    _Mark(mark.visibility, mark.record, mark.price * _scaled_sqrt(mark.price / anchor))
+                    if mark.price > 0
+                    else mark
+                    for mark in marks._marks
+                ],
+                self.policy.max_mark_staleness_ns,
+            )
+        if self.kind is HistoricalExecutionStressScenarioKind.FLASH_CRASH and self.shock_start is not None:
+            return _ShockedMarks(marks, self.shock_start, self.shock_end, self.shock_factor)  # type: ignore[return-value,arg-type]
+        return marks
+
+    def _transformed_books(self, books: list[_Book]) -> list[_Book]:
+        if self.kind is HistoricalExecutionStressScenarioKind.HIGH_VOLATILITY:
+            anchor = self.anchor
+            if anchor is None:  # refused right after the base construction
+                return books
+            transformed = []
+            for book in books:
+                if book.bid <= 0 or book.ask <= 0:
+                    transformed.append(book)
+                    continue
+                factor = _scaled_sqrt((book.bid + book.ask) / 2 / anchor)
+                transformed.append(
+                    _Book(
+                        book.visibility,
+                        book.record,
+                        book.bid * factor,
+                        book.ask * factor,
+                        book.bid_quantity,
+                        book.ask_quantity,
+                    )
+                )
+            return transformed
+        if self.kind is HistoricalExecutionStressScenarioKind.LOW_LIQUIDITY:
+            return [
+                _Book(
+                    book.visibility,
+                    book.record,
+                    book.bid,
+                    book.ask,
+                    _scaled_depth(book.bid_quantity, self.depth_multiplier),
+                    _scaled_depth(book.ask_quantity, self.depth_multiplier),
+                )
+                if book.bid_quantity >= 0 and book.ask_quantity >= 0
+                else book
+                for book in books
+            ]
+        return books
+
+    def _in_shock(self, time_ns: int) -> bool:
+        return self.shock_start is not None and self.shock_start <= time_ns < self.shock_end  # type: ignore[operator]
+
+    def _effective_slippage(self, effective: Fraction, book: _Book) -> Fraction:
+        if self.kind is HistoricalExecutionStressScenarioKind.FLASH_CRASH and not self._in_shock(book.visibility):
+            return effective
+        return effective * self.slippage_multiplier
+
+    def _observed_book(self, book: _Book) -> _Book:
+        if not self._in_shock(book.visibility) or book.bid_quantity < 0 or book.ask_quantity < 0:
+            return book
+        return _Book(
+            book.visibility,
+            book.record,
+            book.bid * self.shock_factor,
+            book.ask * self.shock_factor,
+            _scaled_depth(book.bid_quantity, self.depth_multiplier),
+            _scaled_depth(book.ask_quantity, self.depth_multiplier),
+        )
+
+    def _valuation(self, kind: HistoricalExecutionValuationKind, time_ns: int, trigger: str | None) -> None:
+        super()._valuation(kind, time_ns, trigger)
+        if self.position.quantity == 0 or not self._in_shock(time_ns):
+            return
+        mark = self.marks.at(time_ns, "stress_maintenance")
+        equity = self._equity(self.position.unrealized(mark.price))
+        if (
+            equity < self.maintenance_fraction * abs(self.position.quantity) * mark.price
+            and self.first_breach_ns is None
+        ):
+            self.first_breach_ns = time_ns
+
+
+def canonical_historical_execution_stress_scenario(value: object) -> HistoricalExecutionStressScenario:
+    """Validate one declared stress scenario exactly (kind, canonical decimals, neutral unused fields); raise otherwise."""
+
+    if type(value) is not HistoricalExecutionStressScenario:
+        raise _fail("stress_scenario_malformed")
+    kind = value.scenario_kind
+    if type(kind) is not HistoricalExecutionStressScenarioKind:
+        raise _fail("stress_scenario_malformed:scenario_kind")
+    names = (
+        "return_multiplier",
+        "slippage_multiplier",
+        "depth_multiplier",
+        "gap_fraction",
+        "maintenance_margin_fraction",
+    )
+    for name in names:
+        if not historical_execution_decimal_is_canonical(getattr(value, name)):
+            raise _fail(f"stress_scenario_malformed:{name}")
+    if not historical_execution_wire_int_is_valid(value.recovery_ns, minimum=0):
+        raise _fail("stress_scenario_malformed:recovery_ns")
+    returns, slippage, depth, gap, maintenance = (Fraction(getattr(value, name)) for name in names)
+    high_volatility = kind is HistoricalExecutionStressScenarioKind.HIGH_VOLATILITY
+    flash = kind is HistoricalExecutionStressScenarioKind.FLASH_CRASH
+    checks = (
+        ("return_multiplier", returns == (_HIGH_VOLATILITY_RETURN_MULTIPLIER if high_volatility else 1)),
+        ("slippage_multiplier", slippage >= 1),
+        ("depth_multiplier", 0 < depth <= 1 and (depth == 1 or not high_volatility)),
+        ("gap_fraction", 0 < gap < 1 if flash else gap == 0),
+        ("recovery_ns", value.recovery_ns > 0 if flash else value.recovery_ns == 0),
+        ("maintenance_margin_fraction", 0 < maintenance < 1 if flash else maintenance == 0),
+    )
+    for name, holds in checks:
+        if not holds:
+            raise _fail(f"stress_scenario_invalid:{name}")
+    return value
+
+
+def historical_execution_stress_scenario_digest(scenario: HistoricalExecutionStressScenario) -> str:
+    """The canonical digest of one validated stress scenario."""
+
+    return edge_sha256_text(edge_canonical_json(_to_payload(canonical_historical_execution_stress_scenario(scenario))))
+
+
+def _stress_anchor(
+    dataset: HistoricalPitDataset,
+    run: HistoricalDecisionRun,
+    mark_series: str,
+    policy: HistoricalExecutionEconomicsPolicy,
+) -> Fraction | None:
+    """The latest mark visible at the evaluation start (by event time, then sequence) within the staleness bound."""
+
+    start = run.evaluation_start_ns
+    best: HistoricalPitRecord | None = None
+    for record in dataset.records:
+        visible = (
+            _visibility(record) if record.series_id == mark_series and record.instrument == run.instrument else None
+        )
+        if visible is None or visible > start:
+            continue
+        if best is None or (record.event_time_ns, record.sequence_id) > (best.event_time_ns, best.sequence_id):
+            best = record
+    if best is None or start - best.event_time_ns > policy.max_mark_staleness_ns:
+        return None
+    price = _value(best, policy.mark_value_name)
+    return price if price > 0 else None
+
+
+def _shock(result: HistoricalExecutionEconomicsResult) -> tuple[int | None, int]:
+    """``(tau, position sign)``: the earliest UTC day boundary of maximal gross leverage, or ``(None, 0)`` when flat."""
+
+    best: tuple[Fraction, int] | None = None
+    sign = 0
+    for valuation in result.valuations:
+        if valuation.valuation_kind is not HistoricalExecutionValuationKind.UTC_DAY_BOUNDARY:
+            continue
+        quantity = Fraction(valuation.position_quantity)
+        if quantity == 0:
+            continue
+        equity = Fraction(valuation.equity)
+        if valuation.mark_price is None or equity <= 0:
+            raise _EconomicFailure("stress_baseline_exposure_unvaluable")
+        leverage = abs(quantity) * Fraction(valuation.mark_price) / equity
+        if best is None or leverage > best[0]:
+            best, sign = (leverage, valuation.time_ns), _sign(quantity)
+    return (None, 0) if best is None else (best[1], sign)
+
+
+def _stress_outcome(
+    result: HistoricalExecutionEconomicsResult,
+    scenario: HistoricalExecutionStressScenario,
+    *,
+    simulated: bool,
+    anchor: Fraction | None,
+    shock_time_ns: int | None,
+    shock_sign: int,
+    ledgers: _Ledgers,
+    first_breach_ns: int | None,
+    reasons: Sequence[str],
+) -> HistoricalExecutionStressOutcome:
+    kinds = (
+        HistoricalExecutionValuationKind.INITIAL,
+        HistoricalExecutionValuationKind.UTC_DAY_BOUNDARY,
+        HistoricalExecutionValuationKind.EVALUATION_END,
+    )
+    endpoints = tuple(item.equity for item in ledgers.valuations if item.valuation_kind in kinds) if simulated else ()
+    direction = {1: "PRICE_DOWN_AGAINST_LONG", -1: "PRICE_UP_AGAINST_SHORT"}.get(shock_sign, "NONE")
+    seed = HistoricalExecutionStressOutcome(
+        schema_version=_STRESS_SCHEMA_VERSION,
+        stress_method_id=_STRESS_METHOD_ID,
+        scenario=scenario,
+        scenario_digest=historical_execution_stress_scenario_digest(scenario),
+        baseline_result_id=result.result_id,
+        baseline_result_digest=result.result_digest,
+        evaluation_start_ns=result.evaluation_start_ns,
+        evaluation_end_ns=result.evaluation_end_ns,
+        simulated=simulated,
+        anchor_mark_price=None if anchor is None else historical_execution_render_amount(anchor),
+        shock_time_ns=shock_time_ns,
+        shock_direction=direction,
+        maintenance_breached=first_breach_ns is not None,
+        first_breach_time_ns=first_breach_ns,
+        closed_trade_count=sum(1 for item in ledgers.trades if item.status is HistoricalExecutionTradeStatus.CLOSED),
+        rejected_fill_count=sum(1 for item in ledgers.fills if item.outcome is HistoricalExecutionFillOutcome.REJECTED),
+        daily_endpoint_equities=endpoints,
+        daily_endpoint_digest=edge_sha256_text(edge_canonical_json(list(endpoints))),
+        reason_codes=_sorted_unique(reasons),
+        outcome_digest="",
+    )
+    return replace(seed, outcome_digest=edge_payload_digest(_to_payload(seed), _STRESS_DIGEST_FIELD))
+
+
+def simulate_historical_execution_stress(
+    result: HistoricalExecutionEconomicsResult,
+    *,
+    expected_result_digest: str,
+    scenario: HistoricalExecutionStressScenario,
+) -> HistoricalExecutionStressOutcome:
+    """Re-run this engine over one declared synthetic transformation of an authenticated READY + PASS result.
+
+    The result is re-proven through ``verify_historical_execution_economics`` against the caller's anchor; its run,
+    policy, approval, dataset and frozen decision trace are re-derived from its own bindings, never supplied. A
+    malformed scenario or a non-authentic, non-computed result raises ``HistoricalExecutionEconomicsError``. A stressed
+    run that cannot be computed (no anchor mark, an unrepresentable or stale value) is ``simulated=False`` with its
+    reason; nothing is fabricated. Deterministic and pure.
+    """
+
+    scenario = canonical_historical_execution_stress_scenario(scenario)
+    if type(result) is not HistoricalExecutionEconomicsResult:
+        raise _fail("stress_baseline_malformed")
+    verification = verify_historical_execution_economics(result)
+    if not verification.intact or verification.recomputed_digest != expected_result_digest:
+        raise _fail("stress_baseline_not_authentic")
+    if (
+        result.status is not EdgeEvidenceStatus.READY
+        or result.gate_verdict is not EdgeGateVerdict.PASS
+        or result.simulated_economics_computed is not True
+    ):
+        raise _fail("stress_baseline_not_computed")
+    codes, run = _run_authority(result.run_binding, correlation_id=result.correlation_id)
+    policy_codes, policy = _policy_authority(result.policy_binding)
+    context = None if run is None else _run_context(run)[1]
+    unit_size = None if run is None else _unit_size(run)
+    max_leverage = None if context is None else _max_leverage(context.spec)[0]
+    if (
+        codes
+        or policy_codes
+        or run is None
+        or policy is None
+        or context is None
+        or unit_size is None
+        or max_leverage is None
+    ):
+        raise _fail("stress_baseline_authority_unavailable")
+    kind = scenario.scenario_kind
+    anchor: Fraction | None = None
+    shock_time_ns: int | None = None
+    shock_sign = 0
+    try:
+        if kind is HistoricalExecutionStressScenarioKind.HIGH_VOLATILITY:
+            anchor = _stress_anchor(context.dataset, run, result.mark_series_id, policy)
+            if anchor is None:
+                raise _EconomicFailure("stress_anchor_mark_unavailable")
+        if kind is HistoricalExecutionStressScenarioKind.FLASH_CRASH:
+            shock_time_ns, shock_sign = _shock(result)
+        gap = Fraction(scenario.gap_fraction)
+        simulation = _StressSimulation(
+            scenario=scenario,
+            anchor=anchor,
+            shock_time_ns=shock_time_ns,
+            shock_factor=1 - gap if shock_sign > 0 else 1 + gap,
+            run=run,
+            run_digest=result.run_digest,
+            dataset=context.dataset,
+            policy=policy,
+            unit_size=unit_size,
+            max_leverage=max_leverage,
+            mark_series=result.mark_series_id,
+            book_series=result.order_book_series_id,
+        )
+        ledgers = simulation.run_all()
+    except _EconomicFailure as failure:
+        return _stress_outcome(
+            result,
+            scenario,
+            simulated=False,
+            anchor=anchor,
+            shock_time_ns=shock_time_ns,
+            shock_sign=shock_sign,
+            ledgers=_Ledgers(),
+            first_breach_ns=None,
+            reasons=(_reason(failure.code),),
+        )
+    return _stress_outcome(
+        result,
+        scenario,
+        simulated=True,
+        anchor=anchor,
+        shock_time_ns=shock_time_ns,
+        shock_sign=shock_sign,
+        ledgers=ledgers,
+        first_breach_ns=simulation.first_breach_ns,
+        reasons=(),
+    )
+
+
+def historical_execution_stress_outcome_to_dict(outcome: HistoricalExecutionStressOutcome) -> dict[str, object]:
+    """Canonical JSON-ready mapping of a stress outcome, including its self-digest."""
+
+    return _to_payload(outcome)
+
+
+def historical_execution_stress_outcome_digest(outcome: HistoricalExecutionStressOutcome) -> str:
+    """Recompute the canonical stress outcome digest, excluding only ``outcome_digest``."""
+
+    return edge_payload_digest(_to_payload(outcome), _STRESS_DIGEST_FIELD)
 
 
 # --- result -------------------------------------------------------------------------------------------------------------
@@ -2003,6 +2519,9 @@ __all__ = [
     "HistoricalExecutionIntentAction",
     "HistoricalExecutionPositionTransition",
     "HistoricalExecutionSide",
+    "HistoricalExecutionStressOutcome",
+    "HistoricalExecutionStressScenario",
+    "HistoricalExecutionStressScenarioKind",
     "HistoricalExecutionTerminalState",
     "HistoricalExecutionTrade",
     "HistoricalExecutionTradeStatus",
@@ -2010,9 +2529,14 @@ __all__ = [
     "HistoricalExecutionValuation",
     "HistoricalExecutionValuationKind",
     "build_historical_execution_economics",
+    "canonical_historical_execution_stress_scenario",
     "historical_execution_economics_digest",
     "historical_execution_economics_from_payload",
     "historical_execution_economics_payload_is_well_formed",
     "historical_execution_economics_to_dict",
+    "historical_execution_stress_outcome_digest",
+    "historical_execution_stress_outcome_to_dict",
+    "historical_execution_stress_scenario_digest",
+    "simulate_historical_execution_stress",
     "verify_historical_execution_economics",
 ]

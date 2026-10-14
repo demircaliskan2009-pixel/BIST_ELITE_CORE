@@ -1,9 +1,10 @@
 """Tests for Edge Factory EF-8 kill / quarantine lifecycle (EF8_EDGE_KILL_QUARANTINE_LIFECYCLE_V1).
 
-Fixtures are REAL authenticated chains. The admission is the EF-7 test module's governed PASS over world A (one
-registered variant surviving three PRDV4 windows whose out-of-sample horizon ends on day 635). The revalidation is a
-genuinely distinct EF-5-onward chain: the same sealed EF-5 re-proven unchanged, a NEW EF-6 over a new window frame shifted
-by one funding cycle (horizon day 637) and a NEW governed EF-7. The authentic lifecycle is ACTIVE at the day-635 horizon,
+Fixtures are REAL authenticated chains. The admission is the EF-7 test module's governed v2 PASS over world P of the
+pre-paper module (a sealed nine-variant star grid, its governed EF-6 PASS whose out-of-sample horizon ends on day 635,
+and its authentic pre-paper validation PASS). The revalidation is a genuinely distinct EF-5-onward chain: the same
+sealed EF-5 re-proven unchanged, a NEW EF-6 over a new window frame shifted by one funding cycle (horizon day 637), its
+own NEW pre-paper validation evidence and a NEW governed EF-7. The authentic lifecycle is ACTIVE at the day-635 horizon,
 DISABLED on day 636 (after the admission horizon, before the revalidation horizon), in QUARANTINE 31 days later and
 re-admitted 14 days after that, so the re-admission rests on evaluation evidence the killed admission never had. A cheap
 non-advancing lifecycle over the EF-7 module's governed FAIL admission exercises every transition's structure, parser and
@@ -89,16 +90,16 @@ from crypto_core.validation.edge_paper_admission_decision import (
     edge_paper_admission_decision_digest,
 )
 from crypto_core.validation.edge_walk_forward_oos_evidence import (
-    EdgeVariantMetricsInput,
     EdgeWalkForwardOosEvidence,
-    build_edge_walk_forward_oos_evidence,
 )
 
 try:  # the module objects pytest collects (basename import), so the authentic worlds and their memos are built once
     import test_edge_paper_admission_decision as ef7t
+    import test_edge_pre_paper_validation_evidence as pret
     import test_edge_walk_forward_oos_evidence as ef6t
 except ImportError:  # imported outside a pytest session
     from tests.crypto_core.validation import test_edge_paper_admission_decision as ef7t
+    from tests.crypto_core.validation import test_edge_pre_paper_validation_evidence as pret
     from tests.crypto_core.validation import test_edge_walk_forward_oos_evidence as ef6t
 
 _PREFIX = "edge_kill_quarantine_decision"
@@ -153,17 +154,20 @@ CURRENT_AUTHORITY_CLAIMS = ("candidate_admitted_to_paper", "current_lifecycle_he
 
 # --- memoized re-proof of other artifacts (see module docstring) ---------------------------------------------------------
 
+assert ef8_module.edge_walk_forward_oos_evidence_from_payload is ef7_module.edge_walk_forward_oos_evidence_from_payload
+
 _EF8_MEMOS = {
     "verify_edge_paper_admission_decision": ef6t._Memoized(
         ef8_module.verify_edge_paper_admission_decision, ef6t._exact_key
     ),
     "verify_edge_kill_quarantine_decision": ef6t._Memoized(verify_edge_kill_quarantine_decision, ef6t._exact_key),
+    # EF-7's own EF-6 parser memo: both call sites parse the same embedded EF-6 snapshots.
+    "edge_walk_forward_oos_evidence_from_payload": ef7t._EF7_MEMOS["edge_walk_forward_oos_evidence_from_payload"],
     **{
         name: ef6t._Memoized(getattr(ef8_module, name), edge_canonical_json)
         for name in (
             "edge_paper_admission_decision_payload_is_well_formed",
             "edge_paper_admission_decision_from_payload",
-            "edge_walk_forward_oos_evidence_from_payload",
             "edge_kill_quarantine_decision_payload_is_well_formed",
             "edge_kill_quarantine_decision_from_payload",
         )
@@ -174,8 +178,7 @@ _EF8_MEMOS = {
 @pytest.fixture(autouse=True, scope="module")
 def _memoized_verification():
     with pytest.MonkeyPatch.context() as patch:
-        for (module, name), memo in ef6t._MEMOS.items():
-            patch.setattr(module, name, memo)
+        pret.apply_memos(patch)
         for name, memo in ef7t._EF7_MEMOS.items():
             patch.setattr(ef7_module, name, memo)
         for name, memo in _EF8_MEMOS.items():
@@ -308,24 +311,11 @@ def admission() -> EdgePaperAdmissionDecision:
     return ef7t.admitted()
 
 
-@functools.cache
 def revalidation_evidence() -> EdgeWalkForwardOosEvidence:
     """A NEW governed EF-6 PASS over the same sealed EF-5 on a frame shifted by one funding cycle (horizon day 637)."""
 
-    bundle = ef6t.mt.build(
-        tuple(ef6t._window(index, start, ef6t.PA) for index, start in enumerate(REVALIDATION_STARTS)),
-        result_id="wf-A-revalidation",
-    )
-    predecessor = ef6t.ef5("A")
-    arguments = {
-        "expected_predecessor_digest": predecessor.leakage_bias_evidence_digest,
-        "expected_root_intake_digest": _root(),
-        "variant_metrics": (EdgeVariantMetricsInput(bundle, bundle.result_digest),),
-        "evidence_id": "ef6-revalidation",
-        "correlation_id": CORR,
-    }
-    draft = build_edge_walk_forward_oos_evidence(predecessor, **arguments)  # type: ignore[arg-type]
-    return build_edge_walk_forward_oos_evidence(predecessor, **arguments, governance=ef6t.governance_for(draft))  # type: ignore[arg-type]
+    assert REVALIDATION_STARTS == pret.REVALIDATION_STARTS
+    return pret.ef6_p(REVALIDATION_STARTS, "ef6-revalidation")
 
 
 @functools.cache
@@ -346,19 +336,13 @@ def revalidation() -> EdgePaperAdmissionDecision:
 def pre_kill_revalidation() -> EdgePaperAdmissionDecision:
     """A NEW EF-6/EF-7 pair over the admission's own frame (horizon day 635): new digests, no post-kill evidence.
 
-    Its evaluation frame, subject and seal equal the admitted chain's, so that chain's approvals re-apply with only the
-    new EF-6 digest re-committed.
+    Its evaluation frame and seal equal the admitted chain's and its new pre-paper evidence passes over the same frame,
+    so the new EF-7 passes under its own exact approval of the new EF-6, evidence and subject digests.
     """
 
-    predecessor = ef6t.ef5("A")
-    arguments = {**ef6t.arguments_for(predecessor, ("A",)), "evidence_id": "ef6-pre-kill"}
-    evidence = build_edge_walk_forward_oos_evidence(
-        predecessor,
-        **arguments,
-        governance=ef6t.governance_for(ef6t.passed()),  # type: ignore[arg-type]
-    )
-    approval = ef7t.approval_for(admission(), approved_predecessor_digest=evidence.walk_forward_oos_evidence_digest)
-    return ef7t.decide(evidence, decision_id="ef7-pre-kill", governance=approval)
+    evidence = pret.ef6_p(pret.STARTS, "ef6-pre-kill")
+    draft = ef7t.decide(evidence, decision_id="ef7-pre-kill")
+    return ef7t.decide(evidence, decision_id="ef7-pre-kill", governance=ef7t.approval_for(draft))
 
 
 @functools.cache
@@ -554,7 +538,7 @@ def test_authentic_passing_admission_records_a_historical_active_genesis_receipt
     # The admission authority is the actual EF-7 decision, re-proven, and its authenticated EF-6 horizon.
     assert decision.admission_decision_digest == ef7.paper_admission_decision_digest
     assert decision.admission_decision_digest == edge_paper_admission_decision_digest(ef7)
-    assert decision.admission_walk_forward_evidence_digest == ef6t.passed().walk_forward_oos_evidence_digest
+    assert decision.admission_walk_forward_evidence_digest == ef7t.passing_chain().walk_forward_oos_evidence_digest
     assert decision.admission_evaluation_horizon_end_ns == ADMISSION_HORIZON
     assert (
         decision.cycle_admission_decision_digest,
@@ -566,7 +550,7 @@ def test_authentic_passing_admission_records_a_historical_active_genesis_receipt
         None,
     )
     assert decision.consumed_admission_decision_digests == (ef7.paper_admission_decision_digest,)
-    assert decision.consumed_walk_forward_evidence_digests == (ef6t.passed().walk_forward_oos_evidence_digest,)
+    assert decision.consumed_walk_forward_evidence_digests == (ef7t.passing_chain().walk_forward_oos_evidence_digest,)
     # The immutable kill policy is exactly the EF-7 seal, recomputed independently.
     assert decision.sealed_kill_criteria == ef7.final_kill_criteria
     assert decision.final_kill_criteria_digest == edge_kill_criteria_digest(ef7.final_kill_criteria)
@@ -1377,7 +1361,7 @@ def test_governed_fresh_revalidation_readmits_as_a_new_cycle_under_the_same_seal
         reval.paper_admission_decision_digest,
     )
     assert decision.consumed_walk_forward_evidence_digests == (
-        ef6t.passed().walk_forward_oos_evidence_digest,
+        ef7t.passing_chain().walk_forward_oos_evidence_digest,
         revalidation_evidence().walk_forward_oos_evidence_digest,
     )
     # The killed candidate's seal is never replaced.

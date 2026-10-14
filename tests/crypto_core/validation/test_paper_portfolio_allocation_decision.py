@@ -3,9 +3,10 @@
 Fixtures are REAL authenticated upstream artifacts:
 
 * EF-7/EF-8: the EF-8 test module's cached lifecycle of ``carry-sleeve-1`` (ACTIVE genesis on day 635, DISABLED on day
-  636, QUARANTINE 31 days later and re-admitted to a NEW cycle 14 days after that). For portfolios, governed EF-7 PASS
-  admissions of the same authentic EF-6 chain into the RG-3 world sleeves ``sleeve-alpha`` and ``sleeve-beta`` (the
-  paper sleeve is an EF-7 caller input), each with its own EF-8 genesis, plus a disable of ``sleeve-beta``;
+  636, QUARANTINE 31 days later and re-admitted to a NEW cycle 14 days after that). For portfolios, governed EF-7 v2 PASS
+  admissions of the same authentic world P chain (EF-6 plus its pre-paper validation PASS, admission cap fraction 1/4)
+  into the RG-3 world sleeves ``sleeve-alpha`` and ``sleeve-beta`` (the paper sleeve is an EF-7 caller input), each with
+  its own EF-8 genesis, plus a disable of ``sleeve-beta``;
 * RG-5: either the genuine OBSERVED (alpha, beta) pair of the RG-5 worlds, rebuilt on each envelope, or the complete
   WORST_CASE_UNKNOWN matrix of an evidence that supplies no sleeve;
 * risk budgets: real paper trade ticks recorded into real sleeve states and evaluated by the accepted intra-sleeve
@@ -108,6 +109,7 @@ from tests.crypto_core.validation import test_historical_pit_dataset as pit
 try:  # the module objects pytest collects (basename import), so the authentic worlds and their memos are built once
     import test_edge_kill_quarantine_decision as ef8t
     import test_edge_paper_admission_decision as ef7t
+    import test_edge_pre_paper_validation_evidence as pret
     import test_edge_walk_forward_oos_evidence as ef6t
     import test_paper_portfolio_risk_envelope as rg2
     import test_paper_sleeve_daily_valuation_evidence as world
@@ -115,6 +117,7 @@ try:  # the module objects pytest collects (basename import), so the authentic w
 except ImportError:  # imported outside a pytest session
     from tests.crypto_core.validation import test_edge_kill_quarantine_decision as ef8t
     from tests.crypto_core.validation import test_edge_paper_admission_decision as ef7t
+    from tests.crypto_core.validation import test_edge_pre_paper_validation_evidence as pret
     from tests.crypto_core.validation import test_edge_walk_forward_oos_evidence as ef6t
     from tests.crypto_core.validation import test_paper_portfolio_risk_envelope as rg2
     from tests.crypto_core.validation import test_paper_sleeve_daily_valuation_evidence as world
@@ -165,8 +168,7 @@ MARKETS = ((INS, "600"), (PERP_BTC, "600"), (PERP_ETH, "500"))
 @pytest.fixture(autouse=True, scope="module")
 def _memoized_verification():
     with pytest.MonkeyPatch.context() as patch:
-        for (module, name), memo in ef6t._MEMOS.items():
-            patch.setattr(module, name, memo)
+        pret.apply_memos(patch)
         for name, memo in ef7t._EF7_MEMOS.items():
             patch.setattr(ef7_module, name, memo)
         for name, memo in ef8t._EF8_MEMOS.items():
@@ -255,8 +257,8 @@ def admission_for(sleeve_id: str) -> EdgePaperAdmissionDecision:
         "expected_risk_budget_policy_digest": policy.policy_digest,
         "decision_id": f"ef7-{sleeve_id}",
     }
-    draft = ef7t.decide(ef6t.passed(), **arguments)
-    return ef7t.decide(ef6t.passed(), **arguments, governance=ef7t.approval_for(draft))
+    draft = ef7t.decide(ef7t.passing_chain(), **arguments)
+    return ef7t.decide(ef7t.passing_chain(), **arguments, governance=ef7t.approval_for(draft))
 
 
 @functools.cache
@@ -1044,7 +1046,7 @@ def test_a_killed_sleeve_never_reaches_any_exposure_arithmetic(monkeypatch: pyte
     """The design's proof: a killed sleeve whose reservation would breach every cap gets zero, unseen by arithmetic."""
 
     env = envelope(
-        ((ALPHA, "80"), (BETA, "50")), total="100", markets=((INS, "90"), (PERP_BTC, "90"), (PERP_ETH, "90"))
+        ((ALPHA, "302"), (BETA, "50")), total="302", markets=((INS, "90"), (PERP_BTC, "90"), (PERP_ETH, "90"))
     )
     seen_amounts: list[str] = []
     seen_sleeves: list[str] = []
@@ -1086,6 +1088,7 @@ def test_a_killed_sleeve_never_reaches_any_exposure_arithmetic(monkeypatch: pyte
     assert set(active.breach_reason_codes) == {
         code("total_paper_risk_budget_exceeded"),
         code(f"sleeve_cap_exceeded:{BETA}"),
+        code(f"admission_cap_exceeded:{BETA}"),
         code(f"market_cap_exceeded:{INS}"),
         code(f"pairwise_correlation_cap_exceeded:{ALPHA}:{BETA}"),
         code(f"record_instrument_not_an_envelope_market:{BETA}:9"),
@@ -1120,9 +1123,12 @@ def test_currentness_is_exactly_the_human_attestation_never_inferred() -> None:
     ids=["equal", "above", "below"],
 )
 def test_the_total_cap_is_inclusive(total: str, expected: set[str]) -> None:
-    decision = portfolio_decision(caps_envelope(total=total, alpha="75.5", beta="40", ins=total))
-    assert decision.status is (REJECTED if expected else READY)
-    assert set(decision.breach_reason_codes) == {code(reason) for reason in expected}
+    # No RG-2 sleeve cap can exceed this total, so no admission cap (1/4 of a sleeve cap) can hold these reservations:
+    # both admission caps breach at every total, while the total and market caps are checked exactly alongside.
+    decision = portfolio_decision(caps_envelope(total=total, alpha="115", beta="115", ins=total))
+    admission = {f"admission_cap_exceeded:{ALPHA}", f"admission_cap_exceeded:{BETA}"}
+    assert decision.status is REJECTED
+    assert set(decision.breach_reason_codes) == {code(reason) for reason in expected | admission}
     assert (decision.total_paper_risk_budget, decision.total_post_kill_requested_budget) == (rg2.d(total), "115.5")
 
 
@@ -1132,9 +1138,47 @@ def test_the_total_cap_is_inclusive(total: str, expected: set[str]) -> None:
     ids=["equal", "above", "below"],
 )
 def test_a_sleeve_cap_is_inclusive(cap: str, breached: bool) -> None:
+    # The EF-7 v2 admission cap (1/4 of the sleeve cap) is always stricter, so it breaches at every one of these caps;
+    # the RG-2 sleeve cap itself is still checked exactly and inclusively.
     decision = portfolio_decision(caps_envelope(alpha=cap))
     assert decision.sleeves[0].sleeve_cap == rg2.d(cap)
-    assert decision.breach_reason_codes == ((code(f"sleeve_cap_exceeded:{ALPHA}"),) if breached else ())
+    expected = {code(f"admission_cap_exceeded:{ALPHA}")} | (
+        {code(f"sleeve_cap_exceeded:{ALPHA}")} if breached else set()
+    )
+    assert set(decision.breach_reason_codes) == expected
+
+
+@pytest.mark.parametrize(
+    "cap, breached",
+    [("302", False), ("302.000000000000000004", False), ("301.999999999999999996", True)],
+    ids=["equal", "above", "below"],
+)
+def test_the_ef7_v2_admission_cap_is_exact_inclusive_and_never_scales(cap: str, breached: bool) -> None:
+    """ALPHA reserves 75.5 under the authenticated cap fraction 1/4: 1/4 of 302 is exactly 75.5."""
+
+    decision = portfolio_decision(caps_envelope(alpha=cap))
+    alpha = decision.sleeves[0]
+    assert (alpha.admission_cap_fraction, alpha.sleeve_cap) == ("0.250000000000000000", rg2.d(cap))
+    assert Fraction(alpha.admission_cap) == Fraction(cap) / 4
+    assert decision.breach_reason_codes == ((code(f"admission_cap_exceeded:{ALPHA}"),) if breached else ())
+    assert decision.status is (REJECTED if breached else READY)
+    # Over the cap nothing is scaled, clipped or reallocated: every final allocation is zero, requests are kept.
+    if breached:
+        assert [amounts(sleeve) for sleeve in decision.sleeves] == [("75.5", "75.5", "0"), ("40", "40", "0")]
+        assert (decision.silent_scaling_applied, decision.partial_fit_applied) == (False, False)
+    else:
+        assert decision.total_final_allocated_budget == "115.5"
+
+
+def test_only_an_authenticated_ef7_v2_admission_carries_cap_authority() -> None:
+    admission = admission_for(ALPHA)
+    assert (admission.pre_paper_validation_passed, admission.admission_cap_fraction) == (True, "0.250000000000000000")
+    forged = reseal_admission(admission, admission_cap_fraction="1.000000000000000000")
+    with refused("paper_admission_not_intact"):
+        build(allocation(caps_envelope(), subject(ALPHA, paper_admission=forged), subject(BETA), observed=True))
+    historical = reseal_admission(admission, schema_version="edge-paper-admission-decision.v1")
+    with refused("paper_admission_not_intact"):
+        build(allocation(caps_envelope(), subject(ALPHA, paper_admission=historical), subject(BETA), observed=True))
 
 
 @pytest.mark.parametrize(
@@ -1162,7 +1206,9 @@ def test_the_positive_sleeve_count_is_inclusive_and_counts_only_positive_sleeves
     assert (zero.positive_exposure_sleeve_count, zero.sleeves[1].final_allocated_budget) == (1, "0")
     # RG-2 never declares more sleeves than the count, so only the exposure stage itself can exceed it.
     sleeves = tuple(
-        rg7._ExposureSleeve(sleeve_id, "10", rg2.d("400"), frozenset({INS}), (rg7._ExposureRecord(0, INS, "10"),))
+        rg7._ExposureSleeve(
+            sleeve_id, "10", rg2.d("400"), Fraction(100), frozenset({INS}), (rg7._ExposureRecord(0, INS, "10"),)
+        )
         for sleeve_id in (ALPHA, BETA, "sleeve-gamma")
     )
     exposure = rg7._evaluate_exposure(sleeves, envelope=caps_envelope(count=2), pairs=())
@@ -1219,15 +1265,22 @@ def test_an_unknown_pair_with_a_zero_or_killed_sleeve_is_not_exposed(
 def test_markets_are_summed_separately_across_sleeves() -> None:
     env = envelope(markets=((INS, "100"), (PERP_ETH, "60"), (PERP_BTC, "500")))
     universe = frozenset({INS, PERP_ETH})
+    # Admission caps of 1/4 of each sleeve cap that hold even the heavier reservation below: only the market cap binds.
     first = rg7._ExposureSleeve(
         ALPHA,
         "100",
-        rg2.d("400"),
+        rg2.d("404"),
+        Fraction(101),
         universe,
         (rg7._ExposureRecord(0, INS, "60"), rg7._ExposureRecord(1, PERP_ETH, "40")),
     )
     second = rg7._ExposureSleeve(
-        BETA, "50", rg2.d("300"), universe, (rg7._ExposureRecord(0, INS, "30"), rg7._ExposureRecord(1, PERP_ETH, "20"))
+        BETA,
+        "50",
+        rg2.d("300"),
+        Fraction(75),
+        universe,
+        (rg7._ExposureRecord(0, INS, "30"), rg7._ExposureRecord(1, PERP_ETH, "20")),
     )
     exposure = rg7._evaluate_exposure((first, second), envelope=env, pairs=())
     assert [(m.market_symbol, m.post_kill_requested_budget, m.within_cap) for m in exposure.market_exposures] == [
@@ -1279,9 +1332,9 @@ def test_a_zero_reservation_binds_no_market() -> None:
 
 
 def test_one_breach_rejects_the_whole_proposal_and_keeps_it_as_evidence() -> None:
-    decision = portfolio_decision(caps_envelope(beta="39.999999999999999999"))
+    decision = portfolio_decision(caps_envelope(beta="159.999999999999999996"))  # admission cap 39.999999999999999999
     assert (decision.status, decision.ready, decision.paper_allocation_evidence_accepted) == (REJECTED, False, False)
-    assert decision.breach_reason_codes == (code(f"sleeve_cap_exceeded:{BETA}"),)
+    assert decision.breach_reason_codes == (code(f"admission_cap_exceeded:{BETA}"),)
     # The sleeve within its own cap is not allocated either: no partial fit, no clipping.
     for sleeve in decision.sleeves:
         assert sleeve.final_allocated_budget == "0"
@@ -1319,6 +1372,8 @@ def test_breach_reasons_are_exact_sorted_and_deterministic() -> None:
                 code("total_paper_risk_budget_exceeded"),
                 code(f"sleeve_cap_exceeded:{ALPHA}"),
                 code(f"sleeve_cap_exceeded:{BETA}"),
+                code(f"admission_cap_exceeded:{ALPHA}"),
+                code(f"admission_cap_exceeded:{BETA}"),
                 code(f"market_cap_exceeded:{INS}"),
                 code(f"pairwise_correlation_cap_exceeded:{ALPHA}:{BETA}"),
             }

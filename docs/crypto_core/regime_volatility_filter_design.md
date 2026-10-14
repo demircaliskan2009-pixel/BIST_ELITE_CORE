@@ -2,6 +2,8 @@
 
 Status: RF-2..RF-5 IMPLEMENTED (V1 closure, section 7); RF-6 IMPLEMENTED with the EF-5 V2 regime filter ledger
 (section 8); RF-7 IMPLEMENTED as a descriptive report (section 9); EF-6/RG-5 regime consumption NOT integrated.
+The pre-paper validation evidence consumes no RF artifact: the regime-conditional PBO is UNPROVEN and the
+LIMITED_S1_PAPER_V1 worst-case cap (at most 1/4) stands in for it (`edge_factory_design.md` section 1a).
 Purpose: deterministic, PIT-grade regime LABELS as digest-bound evidence.
 A regime filter is NOT an edge — it labels market state so strategies can be gated and performance
 stratified; it never produces direction/profit signals. The existing `regime/tracker.py`
@@ -40,7 +42,9 @@ Module namespace: `validation/regime_*` (no collision with the runtime package).
    (exact UTC-day join of labels with sleeve returns); per-stratum count/mean/Sharpe-if-sufficient/
    per-episode max peak distance, exact; strata below min-observation are marked `insufficient_sample` and never
    trusted; NO threshold decisions here — pure report (section 9). Feeding EF-6 `regime_split_report` and RG-5
-   regime-stratified correlation is a separate, not yet authorized integration.
+   regime-stratified correlation is a separate, not yet authorized integration. RF-7 measures PAPER (RG-3) returns,
+   so it never feeds the pre-paper EF-6 or the pre-paper validation evidence (that would be circular); no RF label
+   evidence is consumed there either, so no regime-conditional PBO is computed.
 
 ## 2. Feature classes (ids pinned in policy; no current-market facts invented)
 
