@@ -17,14 +17,17 @@ the EF-5/EF-4/EF-3/EF-2 and P3 metrics verifiers and the P3 strict parser and sh
 economics verifier, strict parser and shape predicate (as P3 calls them), the decision-run verifier (as economics calls
 it) and the PIT dataset verifier (as the decision run calls it). EF-6's own code is never memoized. Keys are exact: a
 record's exact type and every field value (a str-enum alias, ``True`` versus ``1`` and a tuple versus a list never
-collide), or a JSON payload's canonical text. Semantically transparent: the same input always yields the same immutable
-result, and a raising call is never cached. Tests that change global registries disable every memo.
+collide), or a JSON payload's canonical text. A memo stores a canonical text as its SHA-256, so a payload memo never
+keeps a copy of a whole payload; a record key is stored as is (its leaves are the record's own objects). Semantically
+transparent: the same input always yields the same immutable result, and a raising call is never cached. Tests that
+change global registries disable every memo.
 """
 
 from __future__ import annotations
 
 import ast
 import functools
+import hashlib
 import importlib
 import inspect
 import json
@@ -158,6 +161,14 @@ def _exact_key(value: object) -> object:
     raise TypeError(f"no exact memo key for {kind.__name__}")
 
 
+def _stored_key(key: object) -> object:
+    """The key a memo keeps: a canonical text as its SHA-256 (the text is a fresh copy of a whole payload), else itself."""
+
+    if type(key) is str:
+        return hashlib.sha256(key.encode("utf-8", "surrogatepass")).digest()
+    return key
+
+
 class _Memoized:
     """Exact memo of one pure upstream function; an input without an exact key is evaluated directly."""
 
@@ -169,7 +180,7 @@ class _Memoized:
         if not _MEMO_ENABLED[0]:
             return self.real(value)
         try:
-            key = self.key(value)
+            key = _stored_key(self.key(value))
         except Exception:  # noqa: BLE001 - no exact key: evaluate directly
             return self.real(value)
         if key not in self.cache:
@@ -2025,3 +2036,9 @@ def test_memo_keys_are_exact() -> None:
     assert _exact_key(replace(passed())) == _exact_key(passed())
     with pytest.raises(TypeError):
         _exact_key(0.5)
+    # A payload memo keeps the SHA-256 of the canonical text, never the text; a record key is kept as it is.
+    text = edge_canonical_json({"a": 1})
+    assert _stored_key(text) == hashlib.sha256(text.encode("utf-8")).digest()
+    assert _stored_key(text) != _stored_key(edge_canonical_json({"a": True}))
+    record_key = _exact_key(passed())
+    assert _stored_key(record_key) is record_key

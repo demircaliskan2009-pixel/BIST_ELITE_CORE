@@ -1,12 +1,19 @@
-"""Edge Factory EF-7: governed paper-admission decision over an authenticated, passing EF-6 walk-forward/OOS result.
+"""Edge Factory EF-7 v2: governed paper admission over an authenticated EF-6 result AND its pre-paper validation.
 
 EF-7 is the sleeve-entry gate of ``docs/crypto_core/edge_factory_design.md`` §1.6 and the gate where the final kill
-criteria become SEALED. PASS means ONLY process-level paper candidate admission: the whole EF-2 → EF-6 chain is
-authentic and passing, the complete EF-6 surviving set is admitted without any selection, the exact authenticated EF-4
-kill criteria are sealed, the admission is linked to one re-proven paper-only intra-sleeve risk-budget policy, explicit
-bounded capacity ASSUMPTIONS are recorded, and one human governance approval commits to all of it. It never means an
-edge, profitability, paper performance, Stage-4 completion, portfolio allocation, capital reservation, execution
-permission, operational readiness or any live/shadow/Deribit authority.
+criteria become SEALED. PASS means ONLY process-level LIMITED_S1_PAPER_V1 paper candidate admission: the whole EF-2 →
+EF-6 chain is authentic and passing, the mandatory pre-paper validation evidence (CSCV/PBO, DSR over the attested
+cumulative trial count, Monte Carlo, parameter sensitivity and Stage-3 synthetic stress) is authentic and passing, the
+admitted set is exactly the EF-6 survivors that passed every preregistered pre-paper gate (no selection), the
+authenticated allocation cap fraction is carried for RG-7, the exact authenticated EF-4 kill criteria are sealed, the
+admission is linked to one re-proven paper-only intra-sleeve risk-budget policy, explicit bounded capacity ASSUMPTIONS
+are recorded, and one human governance approval commits to all of it. It never means an edge, profitability, paper
+performance, regime-conditional robustness, venue-faithful stress, Stage-4 completion, portfolio allocation, capital
+reservation, execution permission, operational readiness or any live/shadow/Deribit authority.
+
+Version. ``edge-paper-admission-decision.v2`` is the only prospective admission authority. A v1 decision is historical
+only: its payload is refused by the strict parser (``schema_superseded_v1_historical_only``), no v1 object can verify
+and no v1 authority is ever transferred to v2.
 
 Authority (shared kernel ``edge_artifact_core``):
 
@@ -22,11 +29,18 @@ Authority (shared kernel ``edge_artifact_core``):
 * Prior gates. An authentic EF-6 that is REJECTED is REJECTED here. An authentic READY EF-6 that does not advance is
   valid negative evidence: its verdict is propagated (FAIL, NEEDS_EXTERNAL_FACTS or NEEDS_GOVERNANCE_APPROVAL), so
   nothing short of an EF-6 PASS can ever be admitted.
-* Selection firewall (``COMPLETE_SURVIVING_SET_NO_SELECTION``). EF-6 ranks nothing and no accepted authority holds a
-  preregistered selector, so EF-7 selects nothing: the admission subject is the complete, canonically ordered set of
-  EF-6 surviving assignments, each mapped to its variant id through the authenticated EF-5 ledger. No caller input
-  names, orders or prefers a variant; a survivor outside the registered set, or a survivor set that disagrees with the
-  EF-6 evaluations, is REJECTED.
+* Pre-paper validation (``EDGE_PRE_PAPER_VALIDATION_EVIDENCE_V1``). A required ``EdgePrePaperValidationEvidence``
+  binding is re-proven through ``verify_edge_pre_paper_validation_evidence`` with the authenticated EF-6 as its context;
+  it must bind this EF-6 digest, root and correlation and be READY. A non-advancing evidence propagates its verdict, so
+  nothing short of a pre-paper PASS is ever admitted. Its cap fraction (``min(PBO band cap, LIMITED_S1_PAPER_V1 regime
+  cap)``) is carried exactly; the regime-conditional PBO stays UNPROVEN and no full PRDV4 compliance is claimed.
+  ``pbo_passed`` and ``stress_passed`` stay structural False: they denote the complete PRDV4 obligations (including the
+  regime-conditional PBO and venue-faithful stress), which this route does not prove.
+* Selection firewall (``SURVIVORS_OF_EVERY_PREREGISTERED_GATE_NO_SELECTION``). EF-6 and the pre-paper evidence rank
+  nothing, so EF-7 selects nothing: the admission subject is the canonically ordered set of EF-6 surviving assignments
+  that passed every per-survivor pre-paper gate, each mapped to its variant id through the authenticated EF-5 ledger. No
+  caller input names, orders or prefers a variant; an admitted assignment outside the EF-6 survivors, or a survivor
+  set that disagrees with the EF-6 evaluations, is REJECTED.
 * Kill-criteria seal. No caller input carries kill criteria. The final criteria are exactly the authenticated EF-4
   ``admitted_kill_criteria`` (the EF-2 draft strengthened superset-only and approved by the EF-4 kill-criteria policy),
   re-checked against their carried digest, the root draft, the combination policy and the approving policy. The
@@ -42,12 +56,13 @@ Authority (shared kernel ``edge_artifact_core``):
   positive canonical scale-18 inclusive upper bound) per pinned instrument; never an empirical fact, never a current
   venue fact, never unlimited. They are bound separately from the risk budget and no arithmetic relates the two. No
   assumption is NEEDS_GOVERNANCE_APPROVAL; an assumption outside the pinned universe is FAIL.
-* Governance. ``EdgePaperAdmissionGovernance`` commits to the EF-6 digest, the admission subject, the kill-criteria
-  record, the risk-budget policy, the capacity assumption set and the EF-7 rule set. Missing or non-matching is
-  NEEDS_GOVERNANCE_APPROVAL; no value is defaulted or invented.
+* Governance. ``EdgePaperAdmissionGovernance`` commits to the EF-6 digest, the pre-paper evidence digest, the
+  admission subject (which carries the cap fraction and scope), the kill-criteria record, the risk-budget policy, the
+  capacity assumption set and the EF-7 rule set. Missing or non-matching is NEEDS_GOVERNANCE_APPROVAL; no value is
+  defaulted or invented.
 * ``status`` is integrity only and ``gate_verdict`` the outcome (FAIL > NEEDS_EXTERNAL_FACTS >
   NEEDS_GOVERNANCE_APPROVAL > PASS); REJECTED implies NOT_EVALUATED; only READY + PASS advances, and
-  ``candidate_admitted_to_paper``/``kill_criteria_sealed`` are True exactly then. ``preregistration_sealed`` and the two
+  ``candidate_admitted_to_paper``/``kill_criteria_sealed``/``pre_paper_validation_passed`` are True exactly then. ``preregistration_sealed`` and the two
   consumption flags mirror authenticated EF-6 proof. One assembly path serves the builder and verifier reassembly;
   ``verify_edge_paper_admission_decision`` is total. Paper-only, deterministic, no IO/clock/network/float/decimal.
 """
@@ -95,6 +110,17 @@ from crypto_core.validation.edge_leakage_bias_evidence import (
     edge_leakage_bias_evidence_from_payload,
     verify_edge_leakage_bias_evidence,
 )
+from crypto_core.validation.edge_pre_paper_validation_evidence import (
+    EdgePrePaperValidationEvidence,
+    edge_pre_paper_validation_evidence_from_payload,
+    edge_pre_paper_validation_evidence_payload_is_well_formed,
+    edge_pre_paper_validation_evidence_to_dict,
+    verify_edge_pre_paper_validation_evidence,
+)
+from crypto_core.validation.edge_pre_paper_validation_policy import (
+    EDGE_PRE_PAPER_ADMISSION_SCOPE,
+    EDGE_REGIME_CONDITIONAL_PBO_UNPROVEN,
+)
 from crypto_core.validation.edge_source_packet_evidence import (
     EdgeSourcePacketEvidence,
     edge_source_packet_evidence_from_payload,
@@ -119,7 +145,9 @@ from crypto_core.validation.paper_sleeve_risk_budget_decision import (
     paper_sleeve_risk_budget_policy_to_dict,
 )
 
-_SCHEMA_VERSION = "edge-paper-admission-decision.v1"
+_SCHEMA_VERSION = "edge-paper-admission-decision.v2"
+# The superseded v1 schema: historical only, never parsed, verified or transferred as v2 admission authority.
+EDGE_PAPER_ADMISSION_HISTORICAL_SCHEMA_V1 = "edge-paper-admission-decision.v1"
 _GATE_ID = "EF-7"
 _PREDECESSOR_GATE_ID = "EF-6"
 _REASON_PREFIX = "edge_paper_admission_decision"
@@ -138,12 +166,17 @@ _UNBOUNDED_CAPACITY_WORDS = ("unlimited", "unbounded", "uncapped", "infinite", "
 EDGE_PORTFOLIO_RISK_ENVELOPE_PENDING = "PENDING_RG_PORTFOLIO_RISK_ENVELOPE_UNAVAILABLE"
 EDGE_CAPACITY_EVIDENCE_STATUS = "GOVERNED_ASSUMPTION_NOT_EMPIRICALLY_PROVEN"
 
-_RULE_SET_V1: dict[str, object] = {
-    "rule_set_id": "edge_paper_admission_rules.v1",
+_RULE_SET_V2: dict[str, object] = {
+    "rule_set_id": "edge_paper_admission_rules.v2",
     "predecessor_rule_id": "ef6_exact_anchor_public_reproof_rejected_rejects_non_advancing_verdict_propagates.v1",
     "backchain_rule_id": "ef6_ef5_ef4_public_verifiers_dual_anchor_correlation_and_identity_cross_binding.v1",
     "prior_gate_rule_id": "ef2_ef3_ef4_ef5_ef6_all_ready_passing_and_advancing_ef5_sealed.v1",
-    "selection_rule_id": "complete_ef6_surviving_registered_assignment_set_no_selection_no_ranking.v1",
+    "pre_paper_rule_id": "EDGE_PRE_PAPER_VALIDATION_EVIDENCE_V1_reproven_with_the_authenticated_ef6_context_pass_only.v1",
+    "selection_rule_id": "ef6_survivors_passing_every_preregistered_pre_paper_gate_no_selection_no_ranking.v2",
+    "cap_rule_id": "authenticated_pre_paper_admission_cap_fraction_carried_exactly_for_rg7.v1",
+    "admission_scope": EDGE_PRE_PAPER_ADMISSION_SCOPE,
+    "regime_conditional_pbo_status": EDGE_REGIME_CONDITIONAL_PBO_UNPROVEN,
+    "historical_v1_rule_id": "edge_paper_admission_decision_v1_is_historical_only_never_v2_authority.v1",
     "kill_criteria_seal_rule_id": "exact_authenticated_ef4_admitted_criteria_sealed_on_pass_only_no_caller_criteria.v1",
     "kill_criteria_combination_policy": _KILL_CRITERIA_COMBINATION_POLICY,
     "risk_budget_rule_id": "paper_sleeve_risk_budget_policy_public_rebuild_reproof_sleeve_bound_identity_linkage_only.v1",
@@ -152,24 +185,24 @@ _RULE_SET_V1: dict[str, object] = {
     "capacity_budget_separation_rule_id": "capacity_assumptions_and_risk_budget_bound_separately_no_arithmetic.v1",
     "capacity_value_scale": 18,
     "capacity_value_max_text_length": 60,
-    "governance_rule_id": "approval_commits_predecessor_subject_kill_record_budget_policy_capacity_set_rule_set.v1",
+    "governance_rule_id": "approval_commits_predecessor_pre_paper_evidence_subject_kill_record_budget_capacity_rules.v2",
     "gate_rule_id": "pass_iff_passing_chain_valid_linkage_governed_capacity_and_exact_approval.v1",
     "numeric_rule_id": "unsigned_canonical_fixed_scale_text_exact_integer_units_no_float_no_decimal_context.v1",
     "regime_rule_id": "regime_evidence_unavailable_until_accepted_rf_chain.v1",
 }
-_RULE_SET_ID = str(_RULE_SET_V1["rule_set_id"])
-_CAPACITY_VALUE_SCALE: int = _RULE_SET_V1["capacity_value_scale"]  # type: ignore[assignment]
-_CAPACITY_VALUE_MAX_TEXT_LENGTH: int = _RULE_SET_V1["capacity_value_max_text_length"]  # type: ignore[assignment]
-EDGE_PAPER_ADMISSION_RULE_SET_DIGEST = edge_sha256_text(edge_canonical_json(_RULE_SET_V1))
+_RULE_SET_ID = str(_RULE_SET_V2["rule_set_id"])
+_CAPACITY_VALUE_SCALE: int = _RULE_SET_V2["capacity_value_scale"]  # type: ignore[assignment]
+_CAPACITY_VALUE_MAX_TEXT_LENGTH: int = _RULE_SET_V2["capacity_value_max_text_length"]  # type: ignore[assignment]
+EDGE_PAPER_ADMISSION_RULE_SET_DIGEST = edge_sha256_text(edge_canonical_json(_RULE_SET_V2))
 
 
 def edge_paper_admission_rule_set() -> dict[str, object]:
-    """A fresh copy of the code-defined EF-7 V1 rule set committed by ``EDGE_PAPER_ADMISSION_RULE_SET_DIGEST``."""
+    """A fresh copy of the code-defined EF-7 v2 rule set committed by ``EDGE_PAPER_ADMISSION_RULE_SET_DIGEST``."""
 
-    return dict(_RULE_SET_V1)
+    return dict(_RULE_SET_V2)
 
 
-# EF-7 computes these five flags from authenticated proof; every other non-claim is a structural default.
+# EF-7 computes these six flags from authenticated proof; every other non-claim is a structural default.
 _COMPUTED_FLAGS = frozenset(
     {
         "candidate_admitted_to_paper",
@@ -177,6 +210,7 @@ _COMPUTED_FLAGS = frozenset(
         "preregistration_sealed",
         "performance_data_consumed",
         "oos_evidence_consumed",
+        "pre_paper_validation_passed",
     }
 )
 EDGE_PAPER_ADMISSION_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
@@ -221,6 +255,7 @@ class EdgePaperAdmissionGovernance:
     approval_reference: str
     approval_digest: str
     approved_predecessor_digest: str
+    approved_pre_paper_evidence_digest: str
     approved_admission_subject_digest: str
     approved_kill_criteria_record_digest: str
     approved_risk_budget_policy_digest: str
@@ -269,9 +304,19 @@ class EdgePaperAdmissionDecision:
     registered_variant_count: int
     evaluation_frame_digest: str
     oos_governance_digest: str
+    pre_paper_evidence_binding: EdgeAuthorityBinding
+    pre_paper_evidence_digest: str
+    pre_paper_evidence_gate_verdict: str
+    pre_paper_policy_digest: str
+    trial_chain_digest: str
+    pbo: str
+    pbo_band: str
+    admission_scope: str
+    regime_conditional_pbo_status: str
     paper_sleeve_id: str
     admitted_variants: tuple[EdgeAdmittedVariant, ...]
     admitted_variant_count: int
+    admission_cap_fraction: str
     admission_subject_digest: str
     root_kill_criteria_digest: str
     final_kill_criteria: tuple[EdgeKillCriterion, ...]
@@ -302,6 +347,7 @@ class EdgePaperAdmissionDecision:
     oos_evidence_consumed: bool
     candidate_admitted_to_paper: bool
     kill_criteria_sealed: bool
+    pre_paper_validation_passed: bool
     paper_admission_decision_digest: str
     paper_only: bool = True
     edge_proven: bool = False
@@ -505,6 +551,9 @@ def _canonical_governance(governance: object) -> EdgePaperAdmissionGovernance | 
         approval_digest=_require_hex64(attribute("approval_digest"), "governance_approval_digest"),
         approved_predecessor_digest=_require_hex64(
             attribute("approved_predecessor_digest"), "governance_approved_predecessor_digest"
+        ),
+        approved_pre_paper_evidence_digest=_require_hex64(
+            attribute("approved_pre_paper_evidence_digest"), "governance_approved_pre_paper_evidence_digest"
         ),
         approved_admission_subject_digest=_require_hex64(
             attribute("approved_admission_subject_digest"), "governance_approved_admission_subject_digest"
@@ -779,20 +828,69 @@ def _chain_authority(
     )
 
 
+def _pre_paper_authority(
+    binding: EdgeAuthorityBinding,
+    chain: _Chain,
+    *,
+    predecessor_digest: str,
+    root_intake_digest: str,
+    correlation_id: str,
+) -> tuple[list[str], EdgePrePaperValidationEvidence | None]:
+    """Re-prove the pre-paper evidence with the authenticated EF-6 as context; it must bind this exact chain."""
+
+    evidence = edge_pre_paper_validation_evidence_from_payload(edge_authority_binding_snapshot(binding))
+    verification = verify_edge_pre_paper_validation_evidence(evidence, walk_forward_oos_evidence=chain.ef6)
+    if not verification.intact:
+        return [_reason(f"pre_paper_evidence_integrity_failure:{code}") for code in verification.reason_codes], None
+    if verification.recomputed_digest != binding.expected_digest:
+        return [_reason("pre_paper_evidence_digest_mismatch")], None
+    if evidence.walk_forward_oos_evidence_digest != predecessor_digest:
+        return [_reason("pre_paper_evidence_predecessor_mismatch")], None
+    if evidence.correlation_id != correlation_id or evidence.root_intake_digest != root_intake_digest:
+        return [_reason("pre_paper_evidence_chain_mismatch")], None
+    if evidence.status is not EdgeEvidenceStatus.READY:
+        return [_reason("pre_paper_evidence_rejected")], None
+    codes: list[str] = []
+    if evidence.preregistration_digest != chain.ef6.predecessor_digest:
+        codes.append(_reason("pre_paper_evidence_inconsistent:preregistration"))
+    if not set(evidence.admitted_assignment_digests) <= set(chain.ef6.surviving_assignment_digests):
+        codes.append(_reason("pre_paper_evidence_inconsistent:admitted_outside_survivors"))
+    if evidence.advances is not (evidence.gate_verdict is EdgeGateVerdict.PASS) or evidence.advances is not bool(
+        evidence.admitted_assignment_digests
+    ):
+        codes.append(_reason("pre_paper_evidence_inconsistent:verdict"))
+    if (
+        evidence.admission_scope != EDGE_PRE_PAPER_ADMISSION_SCOPE
+        or evidence.regime_conditional_pbo_status != EDGE_REGIME_CONDITIONAL_PBO_UNPROVEN
+    ):
+        codes.append(_reason("pre_paper_evidence_inconsistent:scope"))
+    if codes:
+        return codes, None
+    return [], evidence
+
+
 # --- derived admission facts -------------------------------------------------------------------------------------------
 
 
-def _admitted_variants(chain: _Chain) -> tuple[EdgeAdmittedVariant, ...]:
-    """The COMPLETE EF-6 surviving set in its canonical order; no selection, ranking or caller preference."""
+def _admitted_variants(chain: _Chain, evidence: EdgePrePaperValidationEvidence) -> tuple[EdgeAdmittedVariant, ...]:
+    """The EF-6 survivors that passed every pre-paper gate, in EF-6 canonical order; no selection or preference."""
 
     variant_ids = {item.parameter_assignment_digest: item.variant_id for item in chain.ef5.registered_variants}
+    admitted = set(evidence.admitted_assignment_digests)
     return tuple(
         EdgeAdmittedVariant(variant_id=variant_ids[digest], parameter_assignment_digest=digest)
         for digest in chain.ef6.surviving_assignment_digests
+        if digest in admitted
     )
 
 
-def _subject_payload(chain: _Chain, admitted: Sequence[EdgeAdmittedVariant], paper_sleeve_id: str) -> dict[str, object]:
+def _subject_payload(
+    chain: _Chain,
+    admitted: Sequence[EdgeAdmittedVariant],
+    paper_sleeve_id: str,
+    evidence: EdgePrePaperValidationEvidence,
+    cap_fraction: str,
+) -> dict[str, object]:
     ef5 = chain.ef5
     return {
         "root_intake_digest": chain.ef6.root_intake_digest,
@@ -809,6 +907,9 @@ def _subject_payload(chain: _Chain, admitted: Sequence[EdgeAdmittedVariant], pap
         "multiple_testing_count": ef5.multiple_testing_count,
         "admitted_variants": [_to_payload(item) for item in admitted],
         "paper_sleeve_id": paper_sleeve_id,
+        "pre_paper_evidence_digest": evidence.pre_paper_validation_evidence_digest,
+        "admission_cap_fraction": cap_fraction,
+        "admission_scope": EDGE_PRE_PAPER_ADMISSION_SCOPE,
     }
 
 
@@ -829,15 +930,17 @@ def _kill_criteria_record_payload(chain: _Chain) -> dict[str, object]:
 
 def _capacity_set_payload(assumptions: Sequence[EdgeCapacityAssumption]) -> dict[str, object]:
     return {
-        "capacity_rule_id": _RULE_SET_V1["capacity_rule_id"],
+        "capacity_rule_id": _RULE_SET_V2["capacity_rule_id"],
         "evidence_status": EDGE_CAPACITY_EVIDENCE_STATUS,
         "assumptions": [_to_payload(item) for item in assumptions],
     }
 
 
-def _propagate(verdict: EdgeGateVerdict, buckets: tuple[list[str], list[str], list[str]]) -> None:
+def _propagate(
+    verdict: EdgeGateVerdict, buckets: tuple[list[str], list[str], list[str]], prefix: str = "predecessor"
+) -> None:
     fail, needs_external, needs_governance = buckets
-    code = _reason(f"predecessor_not_advanced:{verdict.value}")
+    code = _reason(f"{prefix}_not_advanced:{verdict.value}")
     if verdict is EdgeGateVerdict.NEEDS_EXTERNAL_FACTS:
         needs_external.append(code)
     elif verdict is EdgeGateVerdict.NEEDS_GOVERNANCE_APPROVAL:
@@ -883,6 +986,7 @@ def _governance_reasons(governance: EdgePaperAdmissionGovernance | None, committ
 def _assemble_decision(
     *,
     predecessor_binding: object,
+    pre_paper_evidence_binding: object,
     root_intake_digest: object,
     risk_budget_policy_binding: object,
     paper_sleeve_id: object,
@@ -898,6 +1002,13 @@ def _assemble_decision(
         shape=edge_walk_forward_oos_evidence_payload_is_well_formed,
         error=EdgePaperAdmissionDecisionError,
         code=_reason("predecessor"),
+        optional=False,
+    )
+    evidence_binding = require_edge_authority_binding(
+        pre_paper_evidence_binding,
+        shape=edge_pre_paper_validation_evidence_payload_is_well_formed,
+        error=EdgePaperAdmissionDecisionError,
+        code=_reason("pre_paper_evidence"),
         optional=False,
     )
     policy_binding = require_edge_authority_binding(
@@ -920,14 +1031,32 @@ def _assemble_decision(
         correlation_id=correlation_id,
     )
     policy_codes, policy = _risk_budget_policy_authority(policy_binding)  # type: ignore[arg-type]
-    integrity = _sorted_unique([*chain_codes, *policy_codes])
-    rejected = bool(integrity) or chain is None or policy is None
+    evidence: EdgePrePaperValidationEvidence | None = None
+    evidence_codes: list[str] = []
+    if chain is not None:
+        evidence_codes, evidence = _pre_paper_authority(
+            evidence_binding,  # type: ignore[arg-type]
+            chain,
+            predecessor_digest=chain_binding.expected_digest,  # type: ignore[union-attr]
+            root_intake_digest=root_anchor,
+            correlation_id=correlation_id,
+        )
+    integrity = _sorted_unique([*chain_codes, *policy_codes, *evidence_codes])
+    rejected = bool(integrity) or chain is None or policy is None or evidence is None
 
-    admitted = () if chain is None else _admitted_variants(chain)
-    subject_digest = "" if chain is None else _digest_of(_subject_payload(chain, admitted, paper_sleeve_id))
+    admitted = () if chain is None or evidence is None else _admitted_variants(chain, evidence)
+    cap_fraction = (
+        "" if evidence is None or evidence.admission_cap_fraction is None else evidence.admission_cap_fraction
+    )
+    subject_digest = (
+        ""
+        if chain is None or evidence is None
+        else _digest_of(_subject_payload(chain, admitted, paper_sleeve_id, evidence, cap_fraction))
+    )
     kill_record_digest = "" if chain is None else _digest_of(_kill_criteria_record_payload(chain))
     committed = {
         "predecessor_digest": chain_binding.expected_digest,  # type: ignore[union-attr]
+        "pre_paper_evidence_digest": evidence_binding.expected_digest,  # type: ignore[union-attr]
         "admission_subject_digest": subject_digest,
         "kill_criteria_record_digest": kill_record_digest,
         "risk_budget_policy_digest": policy_binding.expected_digest,  # type: ignore[union-attr]
@@ -942,6 +1071,8 @@ def _assemble_decision(
         fail, needs_external, needs_governance = buckets
         if chain.ef6.advances is not True:  # type: ignore[union-attr]
             _propagate(chain.ef6.gate_verdict, buckets)  # type: ignore[union-attr]
+        if evidence.advances is not True:  # type: ignore[union-attr]
+            _propagate(evidence.gate_verdict, buckets, "pre_paper_evidence")  # type: ignore[union-attr]
         if policy.sleeve_id != paper_sleeve_id:  # type: ignore[union-attr]
             fail.append(_reason("risk_budget_policy_sleeve_mismatch"))
         capacity_fail, capacity_needs = _capacity_reasons(assumptions, chain.ef5.pinned_instrument_universe)  # type: ignore[union-attr]
@@ -993,9 +1124,19 @@ def _assemble_decision(
         registered_variant_count=0 if ef5 is None else len(ef5.registered_variants),
         evaluation_frame_digest="" if ef6 is None else ef6.evaluation_frame_digest,
         oos_governance_digest="" if ef6 is None else ef6.governance_digest,
+        pre_paper_evidence_binding=evidence_binding,  # type: ignore[arg-type]
+        pre_paper_evidence_digest=committed["pre_paper_evidence_digest"],
+        pre_paper_evidence_gate_verdict="" if evidence is None else evidence.gate_verdict.value,
+        pre_paper_policy_digest="" if evidence is None else evidence.policy_digest,
+        trial_chain_digest="" if evidence is None else evidence.trial_chain_digest,
+        pbo="" if evidence is None or evidence.pbo is None else evidence.pbo,
+        pbo_band="" if evidence is None else evidence.pbo_band.value,
+        admission_scope=EDGE_PRE_PAPER_ADMISSION_SCOPE,
+        regime_conditional_pbo_status=EDGE_REGIME_CONDITIONAL_PBO_UNPROVEN,
         paper_sleeve_id=paper_sleeve_id,
         admitted_variants=admitted,
         admitted_variant_count=len(admitted),
+        admission_cap_fraction=cap_fraction if advances else "",
         admission_subject_digest=subject_digest,
         root_kill_criteria_digest="" if admission is None else admission.root_kill_criteria_digest,
         final_kill_criteria=() if admission is None else admission.admitted_kill_criteria,
@@ -1026,6 +1167,7 @@ def _assemble_decision(
         oos_evidence_consumed=ready and ef6 is not None and ef6.oos_evidence_consumed is True,
         candidate_admitted_to_paper=advances,
         kill_criteria_sealed=advances,
+        pre_paper_validation_passed=advances,
         paper_admission_decision_digest="",
     )
     return replace(seed, paper_admission_decision_digest=edge_payload_digest(_to_payload(seed), _SELF_DIGEST_FIELD))
@@ -1035,6 +1177,8 @@ def build_edge_paper_admission_decision(
     predecessor: EdgeWalkForwardOosEvidence,
     *,
     expected_predecessor_digest: str,
+    pre_paper_evidence: EdgePrePaperValidationEvidence,
+    expected_pre_paper_evidence_digest: str,
     expected_root_intake_digest: str,
     risk_budget_policy: PaperSleeveRiskBudgetPolicy,
     expected_risk_budget_policy_digest: str,
@@ -1044,10 +1188,10 @@ def build_edge_paper_admission_decision(
     correlation_id: str,
     governance: EdgePaperAdmissionGovernance | None = None,
 ) -> EdgePaperAdmissionDecision:
-    """Build a deterministic EF-7 paper-admission decision over an EF-6 result.
+    """Build a deterministic EF-7 v2 paper-admission decision over an EF-6 result and its pre-paper evidence.
 
-    There is deliberately no input for kill criteria, a variant choice, a ranking or any flag: the sealed criteria and
-    the admitted set are derived from authenticated authority only. Malformed caller input or a non-serializable
+    There is deliberately no input for kill criteria, a variant choice, a ranking, a cap fraction or any flag: the
+    sealed criteria, the admitted set and the cap are derived from authenticated authority only. Malformed caller input or a non-serializable
     upstream object raises ``EdgePaperAdmissionDecisionError``. A broken, spliced, rejected or inconsistent chain, or a
     risk-budget policy that fails re-proof, yields ``REJECTED``/``NOT_EVALUATED``. Otherwise the decision is ``READY``
     with ``FAIL``, ``NEEDS_EXTERNAL_FACTS``, ``NEEDS_GOVERNANCE_APPROVAL`` or ``PASS``.
@@ -1066,6 +1210,19 @@ def build_edge_paper_admission_decision(
         error=EdgePaperAdmissionDecisionError,
         code=_reason("predecessor"),
     )
+    if type(pre_paper_evidence) is not EdgePrePaperValidationEvidence:
+        raise _fail("pre_paper_evidence_malformed")
+    try:
+        evidence_payload = edge_pre_paper_validation_evidence_to_dict(pre_paper_evidence)
+    except Exception as exc:  # noqa: BLE001 - a hollow evidence object is a construction error, never a receipt
+        raise _fail("pre_paper_evidence_not_serializable") from exc
+    evidence_binding = build_edge_authority_binding(
+        snapshot_payload=evidence_payload,
+        expected_digest=expected_pre_paper_evidence_digest,
+        shape=edge_pre_paper_validation_evidence_payload_is_well_formed,
+        error=EdgePaperAdmissionDecisionError,
+        code=_reason("pre_paper_evidence"),
+    )
     if type(risk_budget_policy) is not PaperSleeveRiskBudgetPolicy:
         raise _fail("risk_budget_policy_malformed")
     try:
@@ -1081,6 +1238,7 @@ def build_edge_paper_admission_decision(
     )
     return _assemble_decision(
         predecessor_binding=chain_binding,
+        pre_paper_evidence_binding=evidence_binding,
         root_intake_digest=expected_root_intake_digest,
         risk_budget_policy_binding=policy_binding,
         paper_sleeve_id=paper_sleeve_id,
@@ -1181,6 +1339,16 @@ def _parse_predecessor_binding(value: object) -> EdgeAuthorityBinding | None:
     )
 
 
+def _parse_pre_paper_evidence_binding(value: object) -> EdgeAuthorityBinding | None:
+    return parse_edge_authority_binding(
+        value,
+        shape=edge_pre_paper_validation_evidence_payload_is_well_formed,
+        error=EdgePaperAdmissionDecisionError,
+        code=_reason("pre_paper_evidence"),
+        optional=False,
+    )
+
+
 def _parse_risk_budget_policy_binding(value: object) -> EdgeAuthorityBinding | None:
     return parse_edge_authority_binding(
         value,
@@ -1196,6 +1364,7 @@ _DECISION_CONVERTERS: dict[str, Callable[[object], object]] = {
     "gate_verdict": _as_enum(EdgeGateVerdict),
     "advances": _as_bool,
     "predecessor_binding": _parse_predecessor_binding,
+    "pre_paper_evidence_binding": _parse_pre_paper_evidence_binding,
     "pinned_instrument_universe": _as_str_tuple,
     "multiple_testing_count": _as_int,
     "registered_variant_count": _as_int,
@@ -1214,11 +1383,14 @@ _DECISION_CONVERTERS: dict[str, Callable[[object], object]] = {
 
 
 def edge_paper_admission_decision_from_payload(payload: object) -> EdgePaperAdmissionDecision:
-    """Strictly reconstruct an EF-7 decision from its serialized payload (exact fields, types and bindings).
+    """Strictly reconstruct an EF-7 v2 decision from its serialized payload (exact fields, types and bindings).
 
-    Reconstruction is not verification: consumers call ``verify_edge_paper_admission_decision`` on the result.
+    A v1 payload is historical only and refused (``schema_superseded_v1_historical_only``). Reconstruction is not
+    verification: consumers call ``verify_edge_paper_admission_decision`` on the result.
     """
 
+    if type(payload) is dict and payload.get("schema_version") == EDGE_PAPER_ADMISSION_HISTORICAL_SCHEMA_V1:
+        raise _fail("schema_superseded_v1_historical_only")
     return _parse_exact(EdgePaperAdmissionDecision, payload, _DECISION_CONVERTERS)  # type: ignore[return-value]
 
 
@@ -1235,6 +1407,7 @@ def edge_paper_admission_decision_payload_is_well_formed(payload: object) -> boo
 def _reassemble_decision(decision: object) -> EdgePaperAdmissionDecision:
     return _assemble_decision(
         predecessor_binding=decision.predecessor_binding,  # type: ignore[attr-defined]
+        pre_paper_evidence_binding=decision.pre_paper_evidence_binding,  # type: ignore[attr-defined]
         root_intake_digest=decision.root_intake_digest,  # type: ignore[attr-defined]
         risk_budget_policy_binding=decision.risk_budget_policy_binding,  # type: ignore[attr-defined]
         paper_sleeve_id=decision.paper_sleeve_id,  # type: ignore[attr-defined]
@@ -1265,6 +1438,7 @@ def verify_edge_paper_admission_decision(decision: object) -> EdgeEvidenceVerifi
 
 __all__ = [
     "EDGE_CAPACITY_EVIDENCE_STATUS",
+    "EDGE_PAPER_ADMISSION_HISTORICAL_SCHEMA_V1",
     "EDGE_PAPER_ADMISSION_NON_CLAIM_FLAGS",
     "EDGE_PAPER_ADMISSION_RULE_SET_DIGEST",
     "EDGE_PORTFOLIO_RISK_ENVELOPE_PENDING",

@@ -1170,6 +1170,25 @@ Run PBO separately for each price regime (BULL, BEAR, NEUTRAL):
 - PBO rejection → edge does NOT proceed to stress testing
 - All PBO results stored in edge audit record with full CSCV matrix
 
+#### LIMITED_S1_PAPER_V1 Exception Record
+
+Scope: only the limited S1 paper-only admission route (EF-7 v2 decisions whose `admission_scope` is
+`LIMITED_S1_PAPER_V1`). It grants nothing for shadow, live, capital or §1.13 Stages 4–5, and it relaxes no
+requirement of §1.13 or §1.20: every global requirement above stays binding as written.
+
+- Regime-Conditional Overfit Check: the pre-paper validation consumes no authenticated BULL/BEAR/NEUTRAL labelling of
+  its frame, so the per-regime PBO is recorded `UNPROVEN` (never computed, never assumed to pass). In its place the
+  check's worst-case action applies in every regime: the admission cap fraction is
+  `min(PBO band cap, governed regime fraction ≤ 0.25)`, enforced exactly by RG-7. A per-regime PBO, and lifting this
+  record, needs authenticated regime labels and separate authorization.
+- Human-authorized method readings for this route, recorded by method id in `docs/crypto_core/edge_factory_design.md`
+  section 1a: DSR as the exact decision of `DSR < 0 → REJECT` (pass iff `z > 0` and `z² ≥ 2 ln(2N)`, with
+  $\hat{SR}_{max}$ read as the maximal daily-return t-statistic); the Monte Carlo test as 10,000 sign flips of the
+  closed-trade returns (reordering trades leaves the Sharpe unchanged); Stage 3 stress as modeled transforms of the
+  accepted paper economics, the flash crash recording a maintenance breach without executing a venue liquidation.
+- Never defaulted: production policy values, the pre-genesis tested-variant count, the per-evaluation currentness
+  attestation and venue liquidation mechanics.
+
 ---
 
 ### §1.21 — Explicit NO-TRADE Conditions
