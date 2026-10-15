@@ -20,9 +20,11 @@ fail-closed; ``IMPLEMENTATION_SCOPE=SYNTHETIC_CONSTRUCTION_ONLY`` and real paper
 * the economics: the ``HistoricalExecutionEconomicsPolicy`` must be the policy the admission was evaluated under (the
   digest the authenticated EF-6 snapshot inside EF-7 carries), re-proven and advancing, for the genesis instrument. The
   ``HistoricalExecutionEconomicsApproval`` must match it with no mismatch and be ``HUMAN_GOVERNANCE``;
-* the risk-budget policy must be the one EF-7 binds; the RG-2 envelope, the RG-3 equity basis policy, the RG-4
-  performance-path policy and the RG-6 ladder seed are re-proven through their verifiers and must advance, and the time-
-  window producer source (``PaperSessionMetricsSummary``) must re-prove its public digest;
+* the risk-budget policy is rebuilt through its public builder and must equal the supplied policy exactly (its content,
+  paper-safety flags, schema and canonical digest), and that digest must be the one EF-7 binds. The RG-2 envelope, the
+  RG-3 equity basis policy, the RG-4 performance-path policy and the RG-6 ladder seed are re-proven through their
+  verifiers and must advance, and the time-window producer source (``PaperSessionMetricsSummary``) must re-prove its
+  public digest;
 * capacity: EF-7's single capacity assumption for the instrument must use the one supported measure
   ``max_open_position_notional`` / ``quote_currency_notional`` / ``per_instrument_open_position``. Any other measure is
   never equated with it and BLOCKS (C6 stays a human decision);
@@ -66,11 +68,17 @@ Phases (``GPC_BOOTSTRAP_TO_ORDINARY_V1``), first match wins:
   zero-variance, stale or otherwise not computable RG-3. The bootstrap is one-use by construction: B0 needs zero sealed
   episodes and B1 needs fewer than 30 daily buckets, so neither can recur once left.
 
-Every phase also needs RG-7 READY with a positive final allocation and the paper genesis head attested. An AUTHORIZED
-cycle grants one admission window ``W_k`` with long and short quantity ceilings from the ticks and the reservation price
-``L``; it also needs the per-cycle human approval (C3) committing to ``cycle_policy_digest``. A missing, synthetic or
-mismatching approval is NEEDS_GOVERNANCE_APPROVAL with no window. The window is a bound on a deterministic paper
-simulation: never an execution permission, a capital reservation, an order or readiness.
+Every phase also needs RG-7 READY with a positive final allocation and the paper genesis head attested. Each direction is
+authorized on its own (``GPC_PER_DIRECTION_AUTHORITY_V1``): the long (BUY) ceiling is ``unit_size`` only when the BUY
+reservation record is ELIGIBLE, reserved in full at ``unit_size * L`` and allocated in full by RG-7's own record of it (so
+no kill override and no cap reduced it), and it is zero otherwise; the short (SELL) ceiling follows the SELL record in the
+same way. The aggregate allocation never stands in for a direction, and nothing is clipped. At least one direction must
+be authorized. An AUTHORIZED cycle grants one admission window ``W_k`` with those ceilings and the reservation price
+``L``; it also needs the per-cycle human approval (C3) committing to ``cycle_policy_digest``, which covers both directions.
+A missing, synthetic or mismatching approval is NEEDS_GOVERNANCE_APPROVAL with no window. A zero ceiling refuses every
+entry in its direction inside the economics; the execution half refuses any other fill on an unauthorized side. The
+window is a bound on a deterministic paper simulation: never an execution permission, a capital reservation, an order or
+readiness.
 
 Provenance or binding defects raise ``GovernedPaperExecutionAuthorityError``. Both verifiers rebuild from the exact
 inputs and are total. Exact ``Fraction`` arithmetic, no float and no ``decimal`` context, and no IO, clock,
@@ -239,6 +247,8 @@ from crypto_core.validation.paper_sleeve_promotion_readiness import build_paper_
 from crypto_core.validation.paper_sleeve_risk_budget_decision import (
     PaperSleeveRiskBudgetDecision,
     PaperSleeveRiskBudgetPolicy,
+    PaperSleeveRiskBudgetRecordStatus,
+    build_paper_sleeve_risk_budget_policy,
     evaluate_paper_sleeve_risk_budget,
 )
 from crypto_core.validation.paper_trade_tick import build_paper_trade_tick, paper_trade_tick_to_dict
@@ -289,6 +299,8 @@ _B1_GOVERNANCE_REASONS = (
 )
 _ELIGIBLE_RESERVATION_TICKS = 2
 _NOT_DERIVED = "NOT_DERIVED"
+# The economics admission ceiling of a reservation direction that is not authorized: no entry in that direction.
+_ZERO_QUANTITY = "0.000000000000000000"
 
 _RULE_SET_V1: dict[str, object] = {
     "rule_set_id": "governed_paper_execution_authority_rules.v1",
@@ -298,6 +310,7 @@ _RULE_SET_V1: dict[str, object] = {
     "genesis_rule_id": "one_reproven_ef7_v2_admitted_variant_one_ef8_genesis_head_one_sleeve_one_instrument.v1",
     "parameter_rule_id": "assignment_digest_is_the_admitted_variant_digest_under_an_exact_parameter_approval.v1",
     "economics_identity_rule_id": "paper_economics_policy_is_the_admission_evaluation_policy_under_exact_approval.v1",
+    "risk_budget_policy_rule_id": "risk_budget_policy_rebuilt_exactly_by_its_public_builder_and_bound_to_ef7.v1",
     "capacity_measure_rule_id": "only_the_supported_open_position_notional_measure_is_consumed_any_other_blocks.v1",
     "capacity_measure": list(_SUPPORTED_CAPACITY),
     "capacity_check_rule_id": "unit_size_times_reservation_price_at_most_the_assumed_max_value_at_cycle_opening.v1",
@@ -325,7 +338,8 @@ _RULE_SET_V1: dict[str, object] = {
     "never_excepted_rule_id": "rg8_stop_rejection_or_missing_governance_and_any_other_rg3_block_are_never_excepted.v1",
     "ladder_rule_id": "rg6_genesis_from_the_seed_until_a_ready_decision_then_its_lineage.v1",
     "head_rule_id": "the_attested_rg7_head_is_the_paper_genesis_receipt_any_successor_ends_the_authority.v1",
-    "window_rule_id": "authorized_cycle_window_with_tick_quantity_ceilings_and_the_reservation_price.v1",
+    "window_rule_id": "authorized_cycle_window_with_per_direction_ceilings_and_the_reservation_price.v1",
+    "direction_rule_id": "a_direction_needs_its_own_eligible_fully_reserved_fully_allocated_record_else_zero.v1",
     "status_rule_id": "provenance_raises_then_blocked_then_needs_governance_approval_then_authorized.v1",
     "utc_day_ns": _DAY_NS,
 }
@@ -612,6 +626,12 @@ class GovernedPaperCycleAuthority:
     reservation_price: str
     max_long_quantity: str
     max_short_quantity: str
+    long_direction_authorized: bool
+    short_direction_authorized: bool
+    long_reservation_record_digest: str
+    short_reservation_record_digest: str
+    long_allocated_budget: str
+    short_allocated_budget: str
     reservation_notional: str
     capacity_max_value: str
     capacity_within_assumption: bool
@@ -938,6 +958,26 @@ def _prove_admission(
     return _Admission(spec, Fraction(units[0]), policy_digest, registry_digest)
 
 
+def _authentic_risk_budget_policy(policy: PaperSleeveRiskBudgetPolicy) -> PaperSleeveRiskBudgetPolicy:
+    """The policy only when its public builder rebuilds it exactly: content, paper-safety flags, schema and digest."""
+
+    try:
+        rebuilt = build_paper_sleeve_risk_budget_policy(
+            policy_id=policy.policy_id,
+            sleeve_id=policy.sleeve_id,
+            total_budget=policy.total_budget,
+            per_intent_budget_cap=policy.per_intent_budget_cap,
+            per_instrument_budget_cap=policy.per_instrument_budget_cap,
+            require_journal_bound=policy.require_journal_bound,
+            metadata=dict(policy.metadata),
+        )
+    except Exception as exc:  # noqa: BLE001 - an unbuildable policy is a provenance defect, never a receipt
+        raise _fail("risk_budget_policy_not_authentic") from exc
+    if rebuilt != policy:
+        raise _fail("risk_budget_policy_not_authentic")
+    return policy
+
+
 def _capacity(ef7: EdgePaperAdmissionDecision, instrument: str) -> tuple[str, str, list[str]]:
     """``(assumption id, max value, blocked reasons)``: only the supported measure is ever consumed."""
 
@@ -1009,7 +1049,7 @@ def _assemble_genesis(inputs: object) -> GovernedPaperGenesis:
     if economics_approval.approval_kind is not HistoricalExecutionApprovalKind.HUMAN_GOVERNANCE:
         governance.append(_reason("economics_approval_not_human_governance"))
 
-    budget = gi.risk_budget_policy
+    budget = _authentic_risk_budget_policy(gi.risk_budget_policy)
     if budget.policy_digest != ef7.risk_budget_policy_digest or budget.sleeve_id != sleeve_id:
         raise _fail("risk_budget_policy_not_the_admission_policy")
     capacity_id, capacity_max, capacity_codes = _capacity(ef7, instrument)
@@ -1331,6 +1371,48 @@ def _capacity_policy(
         max_units=genesis.unit_size,
         max_open_intents=_ELIGIBLE_RESERVATION_TICKS,
     )
+
+
+@dataclass(frozen=True)
+class _Direction:
+    """One reservation direction: the budget record that reserves it and that record's exact RG-7 final allocation."""
+
+    authorized: bool
+    record_decision_digest: str
+    allocated_budget: str
+
+
+_NO_DIRECTION = _Direction(False, "", "")
+
+
+def _direction(chain: GovernedPaperCycleChain, action: str, notional: Fraction) -> _Direction:
+    """Authorized only by its own ELIGIBLE record, reserved and finally allocated by RG-7 at its full ``notional``."""
+
+    records = [
+        item
+        for item in chain.risk_budget_decision.record_decisions
+        if getattr(item.action, "value", item.action) == action
+    ]
+    if len(records) != 1:
+        raise _fail("reservation_direction_record_not_unique")
+    record = records[0]
+    sleeves = chain.allocation.sleeves
+    allocated = [
+        item
+        for item in (sleeves[0].records if len(sleeves) == 1 else ())
+        if (item.sequence, item.record_decision_digest) == (record.sequence, record.record_decision_digest)
+    ]
+    if len(allocated) != 1:
+        return _Direction(False, record.record_decision_digest, "")
+    final = allocated[0].final_allocated_budget
+    authorized = (
+        record.status is PaperSleeveRiskBudgetRecordStatus.ELIGIBLE
+        and allocated[0].risk_budget_record_status == PaperSleeveRiskBudgetRecordStatus.ELIGIBLE.value
+        and Fraction(record.requested_budget) == notional
+        and Fraction(record.reserved_budget) == notional
+        and Fraction(final) == notional
+    )
+    return _Direction(authorized, record.record_decision_digest, final)
 
 
 def _derive_chain(
@@ -1706,6 +1788,7 @@ def _assemble_cycle(inputs: object) -> GovernedPaperCycleAuthority:
     mark: tuple[str, str] | None = None
     reservation = notional = Fraction(0)
     capacity_within = False
+    long_direction = short_direction = _NO_DIRECTION
     classification = _Classification(GovernedPaperCyclePhase.NONE, "NOT_ELIGIBLE", "", (), ())
     if genesis.status is not GovernedPaperGenesisStatus.READY:
         blocked.append(_reason("genesis_not_ready"))
@@ -1738,6 +1821,10 @@ def _assemble_cycle(inputs: object) -> GovernedPaperCycleAuthority:
             classification = _classify(chain, genesis, gi, opening)
             blocked.extend(classification.blocked)
             governance.extend(classification.governance)
+            long_direction = _direction(chain, "BUY", notional)
+            short_direction = _direction(chain, "SELL", notional)
+            if not blocked and not governance and not (long_direction.authorized or short_direction.authorized):
+                blocked.append(_reason("no_reservation_direction_authorized"))
     blocked_codes, governance_codes = _sorted_unique(blocked), _sorted_unique(governance)
     granted = not blocked_codes and not governance_codes
     head = None if chain is None else chain.head_authority
@@ -1764,8 +1851,16 @@ def _assemble_cycle(inputs: object) -> GovernedPaperCycleAuthority:
         opening_mark_record_digest="" if mark is None else mark[0],
         opening_mark_price="" if mark is None else mark[1],
         reservation_price="" if chain is None else _scale18(reservation, "reservation_price_not_representable"),
-        max_long_quantity="" if chain is None else genesis.unit_size,
-        max_short_quantity="" if chain is None else genesis.unit_size,
+        max_long_quantity="" if chain is None else (genesis.unit_size if long_direction.authorized else _ZERO_QUANTITY),
+        max_short_quantity=""
+        if chain is None
+        else (genesis.unit_size if short_direction.authorized else _ZERO_QUANTITY),
+        long_direction_authorized=long_direction.authorized,
+        short_direction_authorized=short_direction.authorized,
+        long_reservation_record_digest=long_direction.record_decision_digest,
+        short_reservation_record_digest=short_direction.record_decision_digest,
+        long_allocated_budget=long_direction.allocated_budget,
+        short_allocated_budget=short_direction.allocated_budget,
         reservation_notional="" if chain is None else _plain(notional),
         capacity_max_value=genesis.capacity_max_value,
         capacity_within_assumption=capacity_within,

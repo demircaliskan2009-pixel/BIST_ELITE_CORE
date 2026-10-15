@@ -29,8 +29,12 @@ Sealing day ``k`` at ``E_(k+1)`` (``GovernedPaperDaySeal``):
 * the replay must reproduce the sealed prefix exactly: the content digest of every event strictly before ``E_k``
   (run-derived identifiers removed, the previous replay's pending intent excluded) must equal the previous seal's
   closing prefix digest, or it RAISES. An intent of the last decision that only the prefix end left open is PENDING and
-  is resolved by the next replay; a fill decided in cycle ``k - 1`` and executed in cycle ``k`` needs BOTH windows and is
-  bounded by the reservation of the cycle that decided it;
+  is resolved by a later replay (``GPC_PENDING_LINEAGE_V1``). The seal carries its deciding day, the digest of the cycle
+  authority that decided it, and whether every cycle since that decision was AUTHORIZED. A pending fill executed in a
+  later cycle needs a window in the executing cycle and is bounded by the reservation of the cycle that decided it. The
+  next seal re-proves that deciding authority against the carried digest, using the previous cycle or, when it lies
+  further back, the supplied deciding cycle. A missing intervening authority BLOCKS the day of the fill. The policy's
+  ``max_execution_delay_ns`` bounds every pending interval, and a kill still invalidates the fill inside the economics;
 * projection (``GPC_EXACT_GENERIC_PROJECTION_V1``): every governed fill executed in ``W_k`` becomes one generic paper
   episode built only through the accepted public builders: capacity (the deciding cycle's journaled draft and unit-
   notional capacity policy, one distinct decision per episode), a MARKET request for the filled side with
@@ -39,14 +43,17 @@ Sealing day ``k`` at ``E_(k+1)`` (``GovernedPaperDaySeal``):
   slippage ``0``, fee = the policy taker fee, available units = the engine's filled quantity, observed at the fill
   instant), position, PnL report, realized event and the end-to-end episode. The generic hard guards all stay active and
   the projection REQUIRES exact equality: price, quantity, status, gross notional, fee (``price * filled * bps / 10 000``,
-  exact), the signed post-fill position and the realized gross PnL. Funding events carry the engine's rendered
-  settlement amount at the liability instant, bound to the projected position before it; the day close carries the
-  engine's own mark at ``E_(k+1)``. Any discrepancy RAISES; a same-side add never reaches the projection because the
-  engine refuses it at decision time.
+  exact), the signed post-fill position and the realized gross PnL. The filled side must be a direction that its
+  deciding cycle authorized (``GPC_PER_DIRECTION_AUTHORITY_V1``). Funding events carry the engine's settlement amount at
+  the liability instant, bound to the projected position before it. Each amount must be exactly the engine's exact
+  settlement ``-position * mark * rate`` (``GPC_EXACT_FUNDING_V1``), so RG-3 never accounts a rounded amount and its
+  funding total is always the engine's own. The day close carries the engine's own mark at ``E_(k+1)``. Any other
+  discrepancy RAISES; a same-side add never reaches the projection because the engine refuses it at decision time.
 
-A day whose economics cannot be computed (an unrepresentable value, a stale mark, incomplete funding, no mark for the
-close) is BLOCKED; a day without a human closing attestation NEEDS_GOVERNANCE_APPROVAL. Neither is sealed, and nothing
-after it can open.
+A day is BLOCKED when its economics cannot be computed (an unrepresentable value, a stale mark, incomplete funding, no
+mark for the close). It is also BLOCKED when a funding settlement is not exactly representable at scale 18, when a fill
+is on a direction its deciding cycle did not authorize, or when a pending fill lacks continuous cycle authority. A day
+without a human closing attestation NEEDS_GOVERNANCE_APPROVAL. Neither is sealed, and nothing after it can open.
 
 ``GovernedPaperExecutionEvidence`` is the public reproof of one whole governed paper execution: it rebuilds every
 supplied seal from its inputs in order and proves the lineage — day ``k``'s seal binds seal ``k - 1``, cycle ``k`` opens
@@ -191,14 +198,15 @@ _RULE_SET_V1: dict[str, object] = {
     "dataset_rule_id": "archive_k_extends_archive_k_minus_1_with_records_visible_after_opening_through_closing.v1",
     "prefix_rule_id": "content_digest_before_opening_equals_the_previous_closing_prefix_or_raise.v1",
     "pending_rule_id": "last_decision_left_open_by_the_prefix_end_is_pending_never_final.v1",
-    "cross_cycle_fill_rule_id": "a_fill_needs_its_deciding_and_its_executing_cycle_window_one_cycle_apart_at_most.v1",
+    "cross_cycle_fill_rule_id": "a_pending_fill_keeps_its_reproven_deciding_cycle_through_authorized_cycles_only.v1",
+    "direction_rule_id": "a_projected_fill_needs_its_side_authorized_by_its_deciding_cycle_else_blocked.v1",
     "closing_rule_id": "closing_attestation_names_the_genesis_or_its_direct_disable_inside_the_cycle.v1",
     "late_successor_rule_id": "a_successor_effective_before_the_opening_contradicts_sealed_history_and_raises.v1",
     "projection_rule_id": "GPC_EXACT_GENERIC_PROJECTION_V1_public_builders_hard_guards_active_exact_equality.v1",
     "requested_notional_rule_id": "requested_notional_is_delta_times_the_deciding_cycle_reservation_price.v1",
     "fill_policy_rule_id": "pass_through_reference_is_the_engine_price_slippage_zero_fee_taker_partial_allowed.v1",
     "fee_rule_id": "generic_fee_equals_price_times_filled_times_taker_bps_exactly_counted_once.v1",
-    "funding_rule_id": "engine_rendered_settlement_at_liability_bound_to_the_projected_position_before_it.v1",
+    "funding_rule_id": "exactly_representable_engine_settlement_at_liability_bound_to_the_prior_position.v1",
     "close_rule_id": "engine_mark_at_the_bucket_end_position_strictly_before_it.v1",
     "lineage_rule_id": "every_seal_rebuilt_in_order_and_bound_to_its_predecessor_cycle_archive_and_history.v1",
     "ladder_lineage_rule_id": "the_next_cycle_continues_a_ready_rg6_decision_else_starts_from_the_seed.v1",
@@ -295,6 +303,9 @@ class GovernedPaperDaySeal:
     opening_prefix_digest: str
     closing_prefix_digest: str
     pending_decision_sequence: int | None
+    pending_deciding_day_index: int | None
+    pending_deciding_cycle_authority_digest: str
+    pending_cycle_authority_continuous: bool
     closing_head_authority_digest: str
     closing_lifecycle_head_digest: str
     successor_effective_at_ns: int | None
@@ -339,7 +350,11 @@ class GovernedPaperDaySeal:
 
 @dataclass(frozen=True)
 class GovernedPaperDaySealInputs:
-    """Everything one seal consumes: the day's cycle, the previous cycle and seal, the archive and the closing head."""
+    """Everything one seal consumes: the day's cycle, the previous cycle and seal, the archive and the closing head.
+
+    The pending cycle is supplied exactly when the previous seal carries a pending intent decided before the previous
+    cycle: it is that intent's deciding cycle, re-proven against the digest the previous seal carries.
+    """
 
     seal_id: str
     correlation_id: str
@@ -350,6 +365,8 @@ class GovernedPaperDaySealInputs:
     prior_seal: GovernedPaperDaySeal | None
     dataset: HistoricalPitDataset
     closing_head_authority_inputs: PaperLifecycleHeadAuthorityInputs
+    pending_cycle_inputs: GovernedPaperCycleInputs | None = None
+    pending_cycle_authority: GovernedPaperCycleAuthority | None = None
 
 
 @dataclass(frozen=True)
@@ -579,6 +596,7 @@ class _Context:
     closing_ns: int
     prior_windows: tuple[HistoricalExecutionAdmissionWindow, ...]
     prior_invalidated_from_ns: int | None
+    pending_authority: GovernedPaperCycleAuthority | None
 
 
 def _require_cycle(
@@ -607,6 +625,8 @@ def _context(inputs: object) -> _Context:
     _require_exact(si.closing_head_authority_inputs, PaperLifecycleHeadAuthorityInputs, "closing_head_authority_inputs")
     prior_windows: tuple[HistoricalExecutionAdmissionWindow, ...] = ()
     prior_invalidated: int | None = None
+    pending_authority: GovernedPaperCycleAuthority | None = None
+    pending_required = False
     if day_index == 0:
         if si.prior_seal is not None or si.prior_cycle_inputs is not None or si.prior_cycle_authority is not None:
             raise _fail("genesis_day_has_no_predecessor")
@@ -636,6 +656,21 @@ def _context(inputs: object) -> _Context:
         if prior_inputs.genesis.genesis_digest != genesis.genesis_digest:
             raise _fail("prior_cycle_of_another_genesis")
         prior_windows, prior_invalidated = prior.schedule_windows, prior.invalidated_from_ns
+        deciding_day = prior.pending_deciding_day_index
+        pending_required = deciding_day is not None and deciding_day < day_index - 1
+        if pending_required:
+            pending_inputs, pending_authority = _require_cycle(
+                si.pending_cycle_inputs, si.pending_cycle_authority, "pending_cycle"
+            )
+            if (
+                pending_authority.authority_digest != prior.pending_deciding_cycle_authority_digest
+                or pending_authority.day_index != deciding_day
+                or pending_authority.genesis_digest != genesis.genesis_digest
+                or pending_inputs.genesis.genesis_digest != genesis.genesis_digest
+            ):
+                raise _fail("pending_cycle_not_the_deciding_cycle_of_the_pending_intent")
+    if not pending_required and (si.pending_cycle_inputs is not None or si.pending_cycle_authority is not None):
+        raise _fail("pending_cycle_not_required")
     opening = genesis.genesis_ns + day_index * _DAY_NS
     return _Context(
         inputs=si,
@@ -649,6 +684,7 @@ def _context(inputs: object) -> _Context:
         closing_ns=opening + _DAY_NS,
         prior_windows=prior_windows,
         prior_invalidated_from_ns=prior_invalidated,
+        pending_authority=pending_authority,
     )
 
 
@@ -762,11 +798,13 @@ class _Unsealable(Exception):
 
 @dataclass(frozen=True)
 class _Lineage:
-    """The capacity lineage of one deciding cycle: its reservation price, journaled draft and capacity policy."""
+    """One deciding cycle's reservation price, journaled draft, capacity policy and authorized directions."""
 
     reservation_price: Fraction
     allocator_draft: object
     capacity_policy: object
+    buy_authorized: bool
+    sell_authorized: bool
 
 
 def _genesis_position(genesis: GovernedPaperGenesis) -> PaperPositionState:
@@ -777,20 +815,59 @@ def _genesis_position(genesis: GovernedPaperGenesis) -> PaperPositionState:
     )
 
 
-def _deciding_cycle(ctx: _Context, decided_ns: int, cache: dict[int, _Lineage]) -> _Lineage:
-    day = (decided_ns - ctx.genesis.genesis_ns) // _DAY_NS
+def _deciding_cycle(ctx: _Context, intent: HistoricalExecutionIntent, cache: dict[int, _Lineage]) -> _Lineage:
+    """The cycle that decided a projected fill: this cycle, or the re-proven cycle of the carried pending intent."""
+
+    day = (intent.decision_time_ns - ctx.genesis.genesis_ns) // _DAY_NS
     if day not in cache:
         if day == ctx.day_index:
             authority: GovernedPaperCycleAuthority | None = ctx.authority
-        elif day == ctx.day_index - 1:
-            authority = ctx.inputs.prior_cycle_authority
         else:
-            raise _fail("pending_fill_spans_more_than_one_cycle_unsupported")
-        if authority is None or authority.authorized is not True:
+            prior = ctx.inputs.prior_seal
+            if (
+                prior is None
+                or day > ctx.day_index
+                or prior.pending_decision_sequence != intent.decision_sequence
+                or prior.pending_deciding_day_index != day
+            ):
+                raise _fail("projected_fill_not_the_carried_pending_intent")
+            if prior.pending_cycle_authority_continuous is not True:
+                raise _Unsealable("pending_fill_without_continuous_cycle_authority")
+            authority = ctx.inputs.prior_cycle_authority if day == ctx.day_index - 1 else ctx.pending_authority
+            if authority is None or authority.authority_digest != prior.pending_deciding_cycle_authority_digest:
+                raise _fail("projected_fill_not_the_carried_pending_intent")
+        if authority.authorized is not True:
             raise _fail("projected_fill_without_its_deciding_cycle_window")
         draft, policy = governed_paper_cycle_capacity(ctx.gi, ctx.genesis, authority)
-        cache[day] = _Lineage(Fraction(authority.reservation_price), draft, policy)
+        cache[day] = _Lineage(
+            Fraction(authority.reservation_price),
+            draft,
+            policy,
+            authority.long_direction_authorized,
+            authority.short_direction_authorized,
+        )
     return cache[day]
+
+
+def _pending_lineage(ctx: _Context, outcome: HistoricalExecutionGovernedPaperOutcome) -> tuple[int | None, str, bool]:
+    """``(deciding day, deciding cycle authority digest, every later cycle AUTHORIZED)`` of the replay's pending intent."""
+
+    if outcome.pending_decision_sequence is None:
+        return None, "", False
+    intents = [item for item in outcome.intents if item.intent_digest == outcome.pending_intent_digest]
+    if len(intents) != 1:
+        raise _fail("pending_intent_not_in_the_replay")
+    day = (intents[0].decision_time_ns - ctx.genesis.genesis_ns) // _DAY_NS
+    if day == ctx.day_index:
+        return day, ctx.authority.authority_digest, True
+    prior = ctx.inputs.prior_seal
+    if prior is None or (prior.pending_decision_sequence, prior.pending_deciding_day_index) != (
+        outcome.pending_decision_sequence,
+        day,
+    ):
+        raise _fail("pending_intent_not_carried_from_the_prior_seal")
+    continuous = prior.pending_cycle_authority_continuous is True and ctx.authority.authorized is True
+    return day, prior.pending_deciding_cycle_authority_digest, continuous
 
 
 def _renders_as(exact: Fraction, rendered: str) -> bool:
@@ -1020,6 +1097,12 @@ def _project(
             cashflow = settlements[index]
             if Fraction(state.signed_units) != Fraction(cashflow.position_quantity):
                 raise _fail("projection_funding_position_mismatch")
+            # The rendered amount is artifact output; it enters RG-3 accounting only when it IS the engine's exact one.
+            exact = (
+                -Fraction(cashflow.position_quantity) * Fraction(cashflow.mark_price) * Fraction(cashflow.funding_rate)
+            )
+            if Fraction(cashflow.cashflow_amount) != exact:
+                raise _Unsealable("funding_settlement_not_exactly_representable")
             funding.append(
                 PaperSleeveFundingEvent(
                     event_id=f"{gid}-funding-{cashflow.funding_sequence_id}",
@@ -1031,7 +1114,9 @@ def _project(
             continue
         fill = executed[index]
         intent = intents[fill.intent_id]
-        lineage = _deciding_cycle(ctx, intent.decision_time_ns, cache)
+        lineage = _deciding_cycle(ctx, intent, cache)
+        if not (lineage.buy_authorized if intent.side is HistoricalExecutionSide.BUY else lineage.sell_authorized):
+            raise _Unsealable("projected_fill_direction_not_authorized")
         episode = _episode(
             ctx, spec, dataset, intent, fill, transitions[fill.fill_digest], fees[fill.fill_digest], state, lineage
         )
@@ -1085,6 +1170,9 @@ def _assemble_day(inputs: object) -> GovernedPaperDay:
     projection: GovernedPaperDayProjection | None = None
     opening_prefix = closing_prefix = ""
     pending: int | None = None
+    pending_day: int | None = None
+    pending_digest = ""
+    pending_continuous = False
     if (
         economics.status is not EdgeEvidenceStatus.READY
         or economics.gate_verdict is not EdgeGateVerdict.PASS
@@ -1112,6 +1200,7 @@ def _assemble_day(inputs: object) -> GovernedPaperDay:
         if prior is not None and opening_prefix != prior.closing_prefix_digest:
             raise _fail("prefix_replay_breaks_sealed_history")
         pending = outcome.pending_decision_sequence
+        pending_day, pending_digest, pending_continuous = _pending_lineage(ctx, outcome)
         closing_prefix = historical_execution_governed_paper_prefix_digest(
             outcome, before_ns=ctx.closing_ns, excluded_decision_sequences=() if pending is None else (pending,)
         )
@@ -1174,6 +1263,9 @@ def _assemble_day(inputs: object) -> GovernedPaperDay:
         opening_prefix_digest=opening_prefix,
         closing_prefix_digest=closing_prefix,
         pending_decision_sequence=pending,
+        pending_deciding_day_index=pending_day,
+        pending_deciding_cycle_authority_digest=pending_digest,
+        pending_cycle_authority_continuous=pending_continuous,
         closing_head_authority_digest=head_authority_digest,
         closing_lifecycle_head_digest=head_digest,
         successor_effective_at_ns=successor,

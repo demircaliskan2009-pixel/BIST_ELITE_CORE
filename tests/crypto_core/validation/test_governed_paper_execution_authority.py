@@ -194,6 +194,31 @@ def test_a_synthetic_economics_approval_never_adopts_the_economics() -> None:
     assert genesis.synthetic_test_approval_used is True
 
 
+@pytest.mark.parametrize(
+    "tamper",
+    [
+        {"real_orders_enabled": True},
+        {"real_money_enabled": True},
+        {"paper_only": False},
+        {"require_journal_bound": False},
+        {"total_budget": "999999"},
+        {"per_intent_budget_cap": "1000"},
+        {"per_instrument_budget_cap": "1"},
+        {"metadata": (("review", "rewritten"),)},
+        {"schema_version": "paper-sleeve-risk-budget-policy.v0"},
+    ],
+)
+def test_the_risk_budget_policy_must_be_exactly_what_its_public_builder_rebuilds(tamper: dict[str, object]) -> None:
+    gi, genesis = gw.world_genesis()
+    forged = replace(gi.risk_budget_policy, **tamper)  # the admitted digest and sleeve are kept
+    assert (forged.policy_digest, forged.sleeve_id) == (gi.risk_budget_policy.policy_digest, SLEEVE)
+    inputs = replace(gi, risk_budget_policy=forged)
+    with refused("risk_budget_policy_not_authentic"):
+        build_governed_paper_genesis(inputs)
+    assert verify_governed_paper_genesis(genesis, inputs).intact is False
+    assert verify_governed_paper_genesis(genesis, gi).intact  # the unchanged policy still proves the genesis
+
+
 @functools.cache
 def foreign_assignment():
     return pret.params_p(pret.UNITS[0])
@@ -673,6 +698,7 @@ def test_the_rule_set_commits_every_rule() -> None:
     assert rules["bootstrap_rg3_reasons"] == list(authority_module._BOOTSTRAP_RG3_REASONS)
     assert rules["capacity_measure"] == list(authority_module._SUPPORTED_CAPACITY)
     assert rules["bootstrap_minimum_horizon_days"] == 30
+    assert {"risk_budget_policy_rule_id", "direction_rule_id"} <= set(rules)
     for key, reasons in (
         ("bootstrap_b0_rg4_reasons", authority_module._B0_DRAWDOWN_REASONS),
         ("bootstrap_b1_rg4_reasons", authority_module._B1_DRAWDOWN_REASONS),

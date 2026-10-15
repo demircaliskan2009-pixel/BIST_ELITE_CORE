@@ -2266,6 +2266,18 @@ def test_the_deciding_window_price_bounds_a_fill_executed_in_the_next_window() -
     assert outcomes(outcome)[0] == (1, "REJECTED", "governed_paper_price_ceiling_exceeded")
 
 
+def test_a_fill_two_windows_after_its_decision_consults_only_the_deciding_and_the_executing_window() -> None:
+    # The engine checks the window at the fill and the deciding window's reservation price; the windows between them
+    # never take part, so the continuity of the cycles in between is the governed execution's rule, not the engine's.
+    middle = window(BASE + 20_300, BASE + 20_400, long=d(0), short=d(0), price=d("0.000000000000000001"))
+    for deciding_price, expected in (
+        (_WIDE, ("FILLED", "filled")),
+        (d("100.1"), ("REJECTED", "governed_paper_price_ceiling_exceeded")),
+    ):
+        plan = schedule(window(START, BASE + 20_300, price=deciding_price), middle, window(BASE + 20_400, END))
+        assert outcomes(governed(value=plan))[0] == (1, *expected)
+
+
 def test_the_last_intent_left_open_by_the_evaluation_end_is_pending() -> None:
     short = economics(world(end=BASE + 50_400))
     outcome = governed(short, open_schedule(short))

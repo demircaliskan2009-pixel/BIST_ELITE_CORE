@@ -22,6 +22,13 @@ The strategy first trades on day 3, so cycles 0..3 are B0, cycles 4..29 are B1 a
 returns with non-zero variance) is the first ORDINARY cycle; world G seals 32 days so that cycle 31 continues the READY
 RG-6 lineage. Negative worlds are short variants of the same construction, or targeted defects of world G's own inputs.
 
+Two further admissions reuse world P's authentic chain:
+* the budget-50 admission: world P's EF-6 PASS with an EF-7 v2 bound to a SYNTHETIC total budget of 50, so one 43.978
+  reservation fits and the second is BLOCKED (``total_budget_exceeded``);
+* the long-delay admission: world P's whole EF-6 -> EF-7 v2 -> EF-8 chain re-evaluated under a SYNTHETIC economics policy
+  whose only difference is an execution delay of three days (the accepted policy builder allows it), so a decision can
+  stay pending across two UTC days. It is the most expensive fixture here (about two minutes) and is built once.
+
 Cost control: as in the RG-7 and RG-8 tests, the EF-6/EF-7/EF-8 memos are applied, and every pure upstream builder or
 verifier these modules call (including each module's call sites of the other's public verifiers) is memoized under an
 exact key of its whole input. A memo only returns the result of an identical earlier real call: a tampered input is a
@@ -49,6 +56,10 @@ import crypto_core.validation.paper_portfolio_allocation_decision as rg7
 import crypto_core.validation.paper_portfolio_governance_decision as rg8
 from crypto_core.data.requirements import data_requirement_registry_digest
 from crypto_core.strategy.spec import strategy_spec_to_dict, validate_strategy_spec
+from crypto_core.validation.edge_walk_forward_oos_evidence import (
+    EdgeVariantMetricsInput,
+    build_edge_walk_forward_oos_evidence,
+)
 from crypto_core.validation.governed_admitted_variant_paper_execution import (
     GovernedPaperDay,
     GovernedPaperDaySealInputs,
@@ -69,14 +80,20 @@ from crypto_core.validation.governed_paper_execution_authority import (
     GovernedPaperReservationBand,
     build_governed_paper_cycle_authority,
     build_governed_paper_genesis,
+    governed_paper_cycle_authority_digest,
+    governed_paper_cycle_capacity,
     governed_paper_cycle_chain,
+    verify_governed_paper_cycle_authority,
 )
 from crypto_core.validation.historical_execution_economics import (
+    HistoricalExecutionValuationKind,
+    build_historical_execution_economics,
     historical_execution_governed_paper_prefix_digest,
     historical_execution_latest_visible_mark,
 )
 from crypto_core.validation.historical_execution_economics_policy import (
     HistoricalExecutionApprovalKind,
+    HistoricalExecutionCitationKind,
     historical_execution_render_amount,
 )
 from crypto_core.validation.historical_pit_dataset import (
@@ -554,6 +571,9 @@ def build_world(
         )
         inputs, cycle = approve_cycle(inputs) if approve is None else approve(k, inputs)
         dataset = archive(close_ns, records)
+        # A pending intent decided before the previous cycle brings its own deciding cycle (GPC_PENDING_LINEAGE_V1).
+        carried = None if prior_seal is None else prior_seal.pending_deciding_day_index
+        deciding = cycles[carried] if carried is not None and carried < k - 1 else None
         seal_inputs = GovernedPaperDaySealInputs(
             seal_id=f"gp-s{k}",
             correlation_id=CORR,
@@ -564,6 +584,8 @@ def build_world(
             prior_seal=prior_seal,
             dataset=dataset,
             closing_head_authority_inputs=head_at(close_ns) if heads is None else heads(close_ns),  # type: ignore[arg-type]
+            pending_cycle_inputs=None if deciding is None else deciding[0],
+            pending_cycle_authority=None if deciding is None else deciding[1],
         )
         day = build_governed_paper_day(seal_inputs)
         cycles.append((inputs, cycle))
@@ -629,6 +651,131 @@ def variant_genesis(
     return inputs, build_governed_paper_genesis(inputs)
 
 
+@functools.cache
+def budget_50_genesis():
+    """World P's governed EF-7 v2 PASS bound to a SYNTHETIC total budget of 50, its EF-8 genesis and the paper genesis."""
+
+    policy = ef7t.budget_policy(SLEEVE, total_budget="50")
+    arguments = {
+        "risk_budget_policy": policy,
+        "expected_risk_budget_policy_digest": policy.policy_digest,
+        "decision_id": "ef7-b50",
+    }
+    draft = ef7t.decide(ef7t.passing_chain(), **arguments)
+    admission = ef7t.decide(ef7t.passing_chain(), **arguments, governance=ef7t.approval_for(draft))
+    head = ef8t.activate(admission, decision_id="ef8-activate-b50")
+    inputs = genesis_inputs(
+        genesis_id="gp-b50", paper_admission=admission, lifecycle_genesis=head, risk_budget_policy=policy
+    )
+    return inputs, build_governed_paper_genesis(inputs), head
+
+
+@functools.cache
+def budget_50_world(days: int, records: tuple[HistoricalPitRecord, ...] | None = None) -> World:
+    gi, gen, head = budget_50_genesis()
+    return build_world(days, genesis=(gi, gen), records=records, heads=lambda instant: head_at(instant, head))
+
+
+# SYNTHETIC: a three-day execution delay; every other value is world P's evaluation policy (pret.economics_policy_p).
+LONG_DELAY_NS = 3 * DAY
+
+
+@functools.cache
+def long_delay_policy():
+    return polt.cited_policy(
+        kind=HistoricalExecutionCitationKind.DEEP_RESEARCH_CITED,
+        funding_interval_ns=FUNDING,
+        max_mark_staleness_ns=11 * DAY,
+        taker_fee_bps=d(5),
+        impact_coefficient_bps_per_participation_pct=d(2),
+        max_execution_delay_ns=LONG_DELAY_NS,
+    )
+
+
+def long_delay_approval(strategy_spec_digest: str):
+    _, _, _, registry, _ = ef6t.world()
+    return polt.approval_for(
+        long_delay_policy(),
+        strategy_spec_digest=strategy_spec_digest,
+        data_requirement_registry_digest=data_requirement_registry_digest(registry),
+        approval_kind=HistoricalExecutionApprovalKind.HUMAN_GOVERNANCE,
+    )
+
+
+@functools.cache
+def long_delay_economics(start_day: int, days: int, unit: str):
+    """One world P segment (its dataset, decision run and parameters) under the long-delay policy."""
+
+    _, _, _, _, binding = ef6t.world()
+    run_id = f"run-p-{start_day}-{days}-{unit}"
+    run = pret.runt.decision_run(
+        pret.dataset_p(start_day, days),
+        binding,
+        instrument=INS,
+        evaluation_start_ns=S0 + start_day * DAY,
+        evaluation_end_ns=S0 + (start_day + days) * DAY,
+        parameter_assignment=pret.params_p(unit),
+        run_id=run_id,
+    )
+    policy = long_delay_policy()
+    return build_historical_execution_economics(
+        run,
+        expected_run_digest=run.run_digest,
+        economics_policy=policy,
+        expected_economics_policy_digest=policy.policy_digest,
+        economics_approval=long_delay_approval(run.strategy_spec_digest),
+        result_id=f"{run_id}-economics-long-delay",
+        correlation_id=pret.CORR,
+    )
+
+
+@functools.cache
+def long_delay_admission():
+    """World P's sealed EF-5, its EF-6 over the long-delay economics, the governed EF-7 v2 PASS and the EF-8 genesis."""
+
+    def metrics(unit: str):
+        windows = tuple(
+            pret.mt.window(
+                f"wf-{index + 1}", long_delay_economics(start, 365, unit), long_delay_economics(start + 365, 90, unit)
+            )
+            for index, start in enumerate(pret.STARTS)
+        )
+        return pret.mt.build(windows, result_id=f"wf-long-delay-{unit}")
+
+    predecessor = pret.ef5_p()
+    arguments = {
+        "expected_predecessor_digest": predecessor.leakage_bias_evidence_digest,
+        "expected_root_intake_digest": ef6t.world()[0].intake_digest,
+        "variant_metrics": tuple(
+            EdgeVariantMetricsInput(item, item.result_digest) for item in map(metrics, pret.UNITS)
+        ),
+        "evidence_id": "ef6-long-delay",
+        "correlation_id": pret.CORR,
+    }
+    draft6 = build_edge_walk_forward_oos_evidence(predecessor, **arguments)  # type: ignore[arg-type]
+    ef6 = build_edge_walk_forward_oos_evidence(predecessor, **arguments, governance=ef6t.governance_for(draft6))  # type: ignore[arg-type]
+    draft = ef7t.decide(ef6, decision_id="ef7-long-delay")
+    admission = ef7t.decide(ef6, decision_id="ef7-long-delay", governance=ef7t.approval_for(draft))
+    return admission, ef8t.activate(admission, decision_id="ef8-activate-long-delay")
+
+
+@functools.cache
+def long_delay_genesis() -> tuple[GovernedPaperGenesisInputs, GovernedPaperGenesis]:
+    admission, head = long_delay_admission()
+    inputs = genesis_inputs(
+        genesis_id="gp-long-delay",
+        paper_admission=admission,
+        lifecycle_genesis=head,
+        economics_policy=long_delay_policy(),
+        economics_approval=long_delay_approval(admission.strategy_spec_digest),
+    )
+    return inputs, build_governed_paper_genesis(inputs)
+
+
+def long_delay_heads(instant: int) -> PaperLifecycleHeadAuthorityInputs:
+    return head_at(instant, long_delay_admission()[1])
+
+
 def renumbered_books(*extra: tuple[int, int]) -> tuple[HistoricalPitRecord, ...]:
     """World G's books numbered ``2k``, plus ``(event, sequence)`` extras that keep sequence order with event time."""
 
@@ -658,6 +805,52 @@ def cross_day_records() -> tuple[HistoricalPitRecord, ...]:
         funding={319: funding_record(319, visible_at=E(4) - 1_000)},
         books=renumbered_books((E(4) + 500, 2 * 319 + 1)),
     )
+
+
+@functools.cache
+def delayed_entry_records() -> tuple[HistoricalPitRecord, ...]:
+    """Funding cycle 319's book moved from day 3 to just before day 5's decision (the next decision instant).
+
+    Under the long-delay policy, the SHORT entry decided on day 3 stays pending through day 4 and fills on day 5.
+    """
+
+    return records_with(
+        books=tuple(book_record(k, event=E(5) + 5 if k == 319 else None) for k in range(FIRST_FUNDING, LAST_FUNDING))
+    )
+
+
+@functools.cache
+def long_delay_world(days: int = 6) -> World:
+    return build_world(days, genesis=long_delay_genesis(), records=delayed_entry_records(), heads=long_delay_heads)
+
+
+# SYNTHETIC: at a 45 bps rate this mark makes a one-unit settlement need 20 decimal places (0.18000000000000000045).
+INEXACT_MARK = Fraction("40.0000000000000001")
+
+
+@functools.cache
+def funding_variant(
+    rates: tuple[tuple[int, str], ...], marks: tuple[tuple[int, Fraction], ...] = ()
+) -> tuple[HistoricalPitRecord, ...]:
+    """World G's archive with SYNTHETIC rates for chosen funding windows and SYNTHETIC marks for chosen days."""
+
+    prices = dict(marks)
+    return records_with(
+        funding={k: funding_record(k, rate=rate) for k, rate in rates},
+        marks=tuple(mark_record(day, price=prices.get(day)) for day in range(620, 672)),
+    )
+
+
+@functools.cache
+def long_entry_records() -> tuple[HistoricalPitRecord, ...]:
+    """A SYNTHETIC negative signal: the strategy enters LONG on day 3 (a BUY) and exits on day 5 (a SELL)."""
+
+    return funding_variant(((319, d("-0.003")),))
+
+
+def reseal_cycle(cycle: GovernedPaperCycleAuthority, **changes: object) -> GovernedPaperCycleAuthority:
+    changed = replace(cycle, **changes)
+    return replace(changed, authority_digest=governed_paper_cycle_authority_digest(changed))
 
 
 def unapproved_at(day: int) -> Callable[[int, GovernedPaperCycleInputs], tuple[object, object]]:
@@ -941,6 +1134,8 @@ def test_after_a_kill_no_later_cycle_opens_and_the_position_is_never_forced() ->
     assert (
         "governed_paper_execution_authority:lifecycle_head_not_the_paper_genesis" in w.cycles[4][1].blocked_reason_codes
     )
+    # the kill override leaves no direction authorized: RG-7 allocates nothing to either reservation record
+    assert not any(cycle.long_direction_authorized or cycle.short_direction_authorized for _, cycle in w.cycles[4:])
     assert all(day.seal.sealed and day.seal.invalidated_from_ns == E(3) + 503 for day in w.days[3:])
     assert w.days[-1].outcome.terminal_state.position_quantity == d(-1)  # type: ignore[union-attr]
 
@@ -1175,6 +1370,254 @@ def test_a_cycle_cannot_consume_a_provisional_day() -> None:
     assert len(provisional) == len(cycle_inputs.sealed_episodes) + 1
     with pytest.raises(authority_module.GovernedPaperExecutionAuthorityError, match="sealed_history_after_opening"):
         build_governed_paper_cycle_authority(replace(cycle_inputs, sealed_episodes=provisional))
+
+
+# --- the consolidated repair: B1 policy reproof, B2 directions, B3 pending lineage, B4 exact funding -----------------
+
+
+def _records(chain) -> dict[str, object]:
+    return {getattr(item.action, "value", item.action): item for item in chain.risk_budget_decision.record_decisions}
+
+
+def test_the_evidence_refuses_a_risk_budget_policy_that_its_public_builder_does_not_rebuild() -> None:
+    w = short_world()
+    evidence = build_governed_paper_execution_evidence(w.execution_inputs())
+    for tamper in ({"real_orders_enabled": True}, {"total_budget": "999999"}):
+        forged = replace(w.genesis_inputs.risk_budget_policy, **tamper)  # the admitted digest and sleeve are kept
+        assert forged.policy_digest == w.genesis_inputs.risk_budget_policy.policy_digest
+        tampered = replace(w.genesis_inputs, risk_budget_policy=forged)
+        with refused("genesis_not_authentic"):
+            build_governed_paper_execution_evidence(w.execution_inputs(genesis_inputs=tampered))
+        assert (
+            execution.verify_governed_paper_execution_evidence(
+                evidence, w.execution_inputs(genesis_inputs=tampered)
+            ).intact
+            is False
+        )
+        day = replace(w.seals[2], cycle_inputs=replace(w.seals[2].cycle_inputs, genesis_inputs=tampered))
+        with refused("cycle_authority_not_authentic"):
+            build_governed_paper_day(day)
+
+
+def test_both_directions_are_authorized_exactly_when_each_is_eligible_and_fully_allocated() -> None:
+    for inputs, cycle in world_g().cycles:
+        chain = governed_paper_cycle_chain(inputs)
+        assert chain is not None
+        records = _records(chain)
+        notional = Fraction(cycle.reservation_notional)
+        assert (cycle.long_direction_authorized, cycle.short_direction_authorized) == (True, True)
+        assert (cycle.max_long_quantity, cycle.max_short_quantity) == (d(1), d(1))
+        assert Fraction(cycle.long_allocated_budget) == Fraction(cycle.short_allocated_budget) == notional
+        assert (cycle.long_reservation_record_digest, cycle.short_reservation_record_digest) == (
+            records["BUY"].record_decision_digest,  # type: ignore[attr-defined]
+            records["SELL"].record_decision_digest,  # type: ignore[attr-defined]
+        )
+
+
+def test_a_blocked_reservation_direction_never_fills_and_the_eligible_one_keeps_its_quantity() -> None:
+    w = budget_50_world(6)
+    inputs, cycle = w.cycles[3]
+    chain = governed_paper_cycle_chain(inputs)
+    assert chain is not None
+    buy, sell = _records(chain)["BUY"], _records(chain)["SELL"]
+    assert (buy.status.value, Fraction(buy.reserved_budget)) == ("ELIGIBLE", Fraction("43.978"))  # type: ignore[attr-defined]
+    assert (sell.status.value, sell.blockers, Fraction(sell.reserved_budget)) == (  # type: ignore[attr-defined]
+        "BLOCKED",
+        ("total_budget_exceeded",),
+        0,
+    )
+    assert (cycle.status, cycle.long_direction_authorized, cycle.short_direction_authorized) == (
+        GovernedPaperCycleStatus.AUTHORIZED,
+        True,
+        False,
+    )
+    assert (cycle.max_long_quantity, cycle.max_short_quantity) == (d(1), d(0))
+    assert Fraction(cycle.long_allocated_budget) == Fraction(cycle.allocation_final_budget) == Fraction("43.978")
+    assert Fraction(cycle.short_allocated_budget) == 0
+    window = authority_module.governed_paper_cycle_admission_window(cycle)
+    assert window is not None and (window.max_long_quantity, window.max_short_quantity) == (d(1), d(0))
+    # The SELL entry is refused at decision time: no fill, fee, transition, position or PnL.
+    assert all_fills(w, 3)[-1][1:] == ("REJECTED", "governed_paper_unit_ceiling_exceeded")
+    assert all(day.seal.sealed and day.projection.episodes == () for day in w.days)  # type: ignore[union-attr]
+    terminal = w.days[-1].outcome.terminal_state  # type: ignore[union-attr]
+    assert (terminal.position_quantity, terminal.cumulative_fees, terminal.cumulative_realized_gross_pnl) == (
+        d(0),
+        d(0),
+        d(0),
+    )
+    evidence = build_governed_paper_execution_evidence(w.execution_inputs())
+    assert (evidence.status.value, evidence.episode_count) == ("READY", 0)
+
+
+def test_a_fill_on_a_direction_its_deciding_cycle_did_not_authorize_blocks_its_day() -> None:
+    w = budget_50_world(6, long_entry_records())
+    assert all_fills(w, 3)[-1][1] == "FILLED"  # the authorized BUY entry
+    assert [len(day.projection.episodes) for day in w.days[:5]] == [0, 0, 0, 1, 0]  # type: ignore[union-attr]
+    entry = w.days[3].projection.episodes[0]  # type: ignore[union-attr]
+    assert getattr(entry.order_intent.side, "value", entry.order_intent.side) == "BUY"
+    exit_cycle = w.cycles[5][1]
+    assert exit_cycle.authorized and exit_cycle.short_direction_authorized is False
+    # The economics admits the closing SELL (a zero ceiling bounds entries only); its projection is never accepted.
+    seal = w.days[5].seal
+    assert (seal.status.value, seal.reason_codes) == ("BLOCKED", (code("projected_fill_direction_not_authorized"),))
+    evidence = build_governed_paper_execution_evidence(w.execution_inputs())
+    assert (evidence.status.value, evidence.sealed_day_count) == ("BLOCKED", 5)
+
+
+def test_a_forged_direction_authority_is_refused_by_the_verifier_and_the_seal() -> None:
+    w = budget_50_world(6)
+    seal_inputs = w.seals[3]
+    cycle = seal_inputs.cycle_authority
+    for changes in (
+        {"short_direction_authorized": True, "max_short_quantity": d(1)},
+        {"short_allocated_budget": cycle.long_allocated_budget},
+        {"short_reservation_record_digest": cycle.long_reservation_record_digest},
+        {"long_allocated_budget": "50"},
+        {"long_direction_authorized": False, "max_long_quantity": d(0)},
+    ):
+        forged = reseal_cycle(cycle, **changes)
+        result = verify_governed_paper_cycle_authority(forged, seal_inputs.cycle_inputs)
+        assert result.intact is False and result.reason_codes
+        with refused("cycle_authority_not_authentic"):
+            build_governed_paper_day(replace(seal_inputs, cycle_authority=forged))
+
+
+def test_a_fill_pending_through_an_authorized_cycle_keeps_its_reproven_deciding_reservation() -> None:
+    assert pret.economics_policy_p().max_execution_delay_ns < DAY < long_delay_policy().max_execution_delay_ns
+    w = long_delay_world()
+    assert [day.seal.status.value for day in w.days] == ["SEALED"] * 6
+    decided = w.days[3].seal.pending_decision_sequence
+    deciding = w.cycles[3][1]
+    assert decided is not None and deciding.authorized
+    for k in (3, 4):
+        seal = w.days[k].seal
+        assert (seal.pending_decision_sequence, seal.pending_deciding_day_index) == (decided, 3)
+        assert seal.pending_deciding_cycle_authority_digest == deciding.authority_digest
+        assert seal.pending_cycle_authority_continuous is True
+    assert [item for item in all_fills(w, 4) if item[0] == decided] == [
+        (decided, "UNFILLED", "no_eligible_book_observation")
+    ]
+    assert (w.seals[4].pending_cycle_authority, w.seals[5].pending_cycle_authority) == (None, deciding)
+    assert [item for item in all_fills(w, 5) if item[0] == decided] == [(decided, "FILLED", "filled")]
+    assert w.days[5].seal.pending_decision_sequence is None
+    (episode,) = w.days[5].projection.episodes  # type: ignore[union-attr]
+    assert Fraction(episode.order_intent_request.requested_notional) == Fraction(deciding.reservation_price)
+    gi, gen = long_delay_genesis()
+    assert (episode.allocator_draft, episode.capacity_policy) == governed_paper_cycle_capacity(gi, gen, deciding)
+    fill = next(item for item in w.days[5].outcome.fills if item.outcome.value == "FILLED")  # type: ignore[union-attr]
+    assert Fraction(episode.fill_result.fill_price) == Fraction(fill.fill_price)  # type: ignore[arg-type]
+    assert E(5) <= fill.execution_time_ns < E(5) + 10  # type: ignore[operator]
+    inputs = w.execution_inputs()
+    evidence = build_governed_paper_execution_evidence(inputs)
+    assert (evidence.status.value, evidence.sealed_day_count, evidence.episode_count) == ("READY", 6, 1)
+    assert execution.verify_governed_paper_execution_evidence(evidence, inputs).intact
+
+
+def test_a_pending_fill_without_continuous_cycle_authority_fails_closed() -> None:
+    gap = build_world(
+        6,
+        genesis=long_delay_genesis(),
+        records=delayed_entry_records(),
+        heads=long_delay_heads,
+        approve=unapproved_at(4),
+    )
+    assert gap.cycles[4][1].status is GovernedPaperCycleStatus.NEEDS_GOVERNANCE_APPROVAL
+    assert gap.days[4].seal.sealed and gap.days[4].seal.pending_cycle_authority_continuous is False
+    seal = gap.days[5].seal
+    assert (seal.status.value, seal.reason_codes) == (
+        "BLOCKED",
+        (code("pending_fill_without_continuous_cycle_authority"),),
+    )
+    evidence = build_governed_paper_execution_evidence(gap.execution_inputs())
+    assert (evidence.status.value, evidence.sealed_day_count) == ("BLOCKED", 5)
+    _, head = long_delay_admission()
+    disable = ef8t.disable(head, effective_at_ns=E(4) + 100, decision_id="ef8-disable-long-delay")
+    killed = build_world(
+        6,
+        genesis=long_delay_genesis(),
+        records=delayed_entry_records(),
+        heads=lambda instant: head_at(instant, disable if instant >= E(5) else head),
+    )
+    decided = killed.days[3].seal.pending_decision_sequence
+    assert killed.days[4].seal.invalidated_from_ns == E(4) + 100
+    assert killed.cycles[5][1].status is GovernedPaperCycleStatus.BLOCKED
+    assert [item for item in all_fills(killed, 5) if item[0] == decided] == [
+        (decided, "REJECTED", "governed_paper_no_cycle_authority_at_fill")
+    ]
+    assert killed.days[5].seal.sealed and killed.days[5].projection.episodes == ()  # type: ignore[union-attr]
+    assert killed.days[5].outcome.terminal_state.position_quantity == d(0)  # type: ignore[union-attr]
+
+
+def test_the_deciding_cycle_of_a_pending_fill_is_reproven_from_the_sealed_lineage() -> None:
+    w = long_delay_world()
+    base = w.seals[5]
+    forged = reseal_cycle(base.pending_cycle_authority, reservation_price=d(50))  # type: ignore[arg-type]
+    with refused("pending_cycle_authority_not_authentic"):
+        build_governed_paper_day(replace(base, pending_cycle_authority=forged))
+    with refused("pending_cycle_not_the_deciding_cycle_of_the_pending_intent"):
+        build_governed_paper_day(
+            replace(base, pending_cycle_inputs=w.cycles[2][0], pending_cycle_authority=w.cycles[2][1])
+        )
+    with refused("pending_cycle_inputs_malformed"):
+        build_governed_paper_day(replace(base, pending_cycle_inputs=None, pending_cycle_authority=None))
+    rewritten = reseal_seal(base.prior_seal, pending_deciding_cycle_authority_digest=w.cycles[2][1].authority_digest)  # type: ignore[arg-type]
+    with refused("pending_cycle_not_the_deciding_cycle_of_the_pending_intent"):
+        build_governed_paper_day(replace(base, prior_seal=rewritten))
+    with refused("pending_cycle_not_required"):
+        build_governed_paper_day(
+            replace(w.seals[4], pending_cycle_inputs=w.cycles[3][0], pending_cycle_authority=w.cycles[3][1])
+        )
+
+
+def test_a_funding_settlement_not_exactly_representable_blocks_its_day() -> None:
+    rates = ((320, d("0.0045")), (321, d("0.0045")))
+    w = build_world(8, records=funding_variant(rates, ((640, INEXACT_MARK), (642, INEXACT_MARK))))
+    assert [day.seal.status.value for day in w.days] == ["SEALED"] * 5 + ["BLOCKED"]
+    assert w.days[5].seal.reason_codes == (code("funding_settlement_not_exactly_representable"),)
+    evidence = build_governed_paper_execution_evidence(w.execution_inputs())
+    assert (evidence.status.value, evidence.sealed_day_count) == ("BLOCKED", 5)
+
+
+@pytest.mark.parametrize(
+    ("rates", "marks", "blocked_day"),
+    [
+        # only the second settlement carries a remainder
+        (((320, d("0.0045")), (321, d("0.0045"))), ((642, INEXACT_MARK),), 7),
+        # opposite remainders that would cancel in the cumulative total never excuse the first one
+        (((320, d("0.0045")), (321, d("-0.0045"))), ((640, INEXACT_MARK), (642, INEXACT_MARK)), 5),
+    ],
+)
+def test_any_fractional_funding_remainder_blocks_even_when_a_later_one_would_cancel_it(
+    rates, marks, blocked_day: int
+) -> None:
+    w = build_world(blocked_day + 1, records=funding_variant(rates, marks))
+    assert [day.seal.sealed for day in w.days] == [True] * blocked_day + [False]
+    assert w.days[blocked_day].seal.reason_codes == (code("funding_settlement_not_exactly_representable"),)
+
+
+def test_every_sealed_funding_total_is_exactly_the_engine_cumulative_at_each_utc_boundary() -> None:
+    worlds = (
+        world_g(),  # SHORT positions: positive and zero settlements
+        build_world(8, records=funding_variant(((321, d("-0.003")),))),  # a SHORT pays a negative rate
+        build_world(6, records=long_entry_records()),  # a LONG position settles: the sign reverses
+    )
+    for w in worlds:
+        assert all(day.seal.sealed for day in w.days)
+        total = Fraction(0)
+        for k, day in enumerate(w.days):
+            for event in day.projection.funding_events:  # type: ignore[union-attr]
+                assert E(k) <= event.settlement_at_ns < E(k + 1) and (event.settlement_at_ns - G) % DAY == 0
+                total += Fraction(event.funding_amount)
+            end = [
+                item
+                for item in day.outcome.valuations  # type: ignore[union-attr]
+                if item.valuation_kind is HistoricalExecutionValuationKind.EVALUATION_END
+            ]
+            assert end[-1].time_ns == E(k + 1) and Fraction(end[-1].cumulative_funding) == total
+        assert Fraction(w.days[-1].outcome.terminal_state.cumulative_funding) == total  # type: ignore[union-attr]
+    flows = [[item for item in w.days[-1].outcome.funding_cashflows] for w in worlds[1:]]  # type: ignore[union-attr]
+    assert any(Fraction(item.cashflow_amount) < 0 and Fraction(item.position_quantity) < 0 for item in flows[0])
+    assert any(Fraction(item.position_quantity) > 0 for item in flows[1])
 
 
 # --- memos, purity --------------------------------------------------------------------------------------------------
