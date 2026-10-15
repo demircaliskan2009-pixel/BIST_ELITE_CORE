@@ -36,21 +36,33 @@ from crypto_core.validation.edge_source_packet_evidence import EdgeInputSeries, 
 from crypto_core.validation.edge_strategy_spec_admission import build_edge_strategy_spec_admission
 from crypto_core.validation.historical_decision_run import HistoricalDecisionRun, historical_decision_run_digest
 from crypto_core.validation.historical_execution_economics import (
+    HISTORICAL_EXECUTION_GOVERNED_PAPER_NON_CLAIM_FLAGS,
     HISTORICAL_EXECUTION_NON_CLAIM_FLAGS,
+    HistoricalExecutionAdmissionSchedule,
+    HistoricalExecutionAdmissionWindow,
     HistoricalExecutionEconomicsError,
     HistoricalExecutionEconomicsResult,
     HistoricalExecutionFillOutcome,
+    HistoricalExecutionGovernedPaperOutcome,
     HistoricalExecutionSide,
     HistoricalExecutionTradeStatus,
     HistoricalExecutionTransitionKind,
     HistoricalExecutionValuation,
     HistoricalExecutionValuationKind,
     build_historical_execution_economics,
+    canonical_historical_execution_admission_schedule,
+    historical_execution_admission_schedule_digest,
     historical_execution_economics_digest,
     historical_execution_economics_from_payload,
     historical_execution_economics_payload_is_well_formed,
     historical_execution_economics_to_dict,
+    historical_execution_governed_paper_outcome_digest,
+    historical_execution_governed_paper_outcome_to_dict,
+    historical_execution_governed_paper_prefix_digest,
+    historical_execution_latest_visible_mark,
+    simulate_historical_execution_governed_paper,
     verify_historical_execution_economics,
+    verify_historical_execution_governed_paper_outcome,
 )
 from crypto_core.validation.historical_execution_economics_policy import (
     HistoricalExecutionApprovalKind,
@@ -2076,4 +2088,323 @@ def test_single_assembly_path_serves_builder_and_verifier() -> None:
         "_assemble_result",
         "build_historical_execution_economics",
         "_reassemble_result",
+    )
+
+
+# --- governed paper admission hooks (GOVERNED_PAPER_ADMISSION_HOOKS_V1) -----------------------------------------------
+#
+# Timeline of the default world, relative to BASE: SELL (open short) decided at 20 020 and filled at 20 502, BUY (close)
+# decided at 50 020 and filled at 50 502, BUY (open long) decided at 60 020 and filled at 60 502; a UTC day boundary at
+# 50 000 and the evaluation end at 85 020. Every ceiling below is a SYNTHETIC TEST VALUE.
+
+# The accepted main (9e58d548) digests of historical results, recorded before the admission hooks existed: the
+# historical engine stays byte-identical.
+_ACCEPTED_MAIN_RESULT_DIGESTS = {
+    "default": "799b649c2c7078460000d07ef107250f4746a1e121dc3732c847ec785dccd0a8",
+    "partial_short": "5b1ed8455dafca9cef7efad9717813cc1e6678d0b1c71ff74d9d946aadaf449f",
+    "partial_long": "7814e7e0bf426ef8bfa41598d5e5b89d82729f6f4f9816a6c9311b7bdcb542b7",
+    "exact_long": "63e65a76fcb455a22d82abb910599b7d3a5b0334a3264d37f923a7fbe0d3efb2",
+    "exact_short": "d7af7794e4d80bfa69e7d241956008da819da2b7ab732f866a2c930ea7852f4b",
+}
+_WIDE = d(10**9)
+_LEDGERS = (
+    "intents",
+    "fills",
+    "position_transitions",
+    "fee_cashflows",
+    "funding_cashflows",
+    "valuations",
+    "trades",
+    "terminal_state",
+)
+
+
+def window(start: int, end: int, *, long: str = _WIDE, short: str = _WIDE, price: str = _WIDE):
+    return HistoricalExecutionAdmissionWindow(start, end, long, short, price)
+
+
+def schedule(*windows: HistoricalExecutionAdmissionWindow, invalidated: int | None = None, schedule_id: str = "s-1"):
+    return HistoricalExecutionAdmissionSchedule(
+        "historical-execution-admission-schedule.v1", schedule_id, tuple(windows), invalidated
+    )
+
+
+def open_schedule(result: HistoricalExecutionEconomicsResult | None = None, **options: object):
+    result = default_result() if result is None else result
+    return schedule(window(result.evaluation_start_ns, result.evaluation_end_ns, **options))  # type: ignore[arg-type]
+
+
+def governed(
+    result: HistoricalExecutionEconomicsResult | None = None, value=None
+) -> HistoricalExecutionGovernedPaperOutcome:
+    result = default_result() if result is None else result
+    plan = open_schedule(result) if value is None else value
+    outcome = simulate_historical_execution_governed_paper(
+        result, expected_result_digest=result.result_digest, schedule=plan
+    )
+    verification = verify_historical_execution_governed_paper_outcome(
+        outcome, result=result, expected_result_digest=result.result_digest
+    )
+    assert (verification.intact, verification.reason_codes) == (True, ())
+    assert verification.recomputed_digest == outcome.outcome_digest
+    return outcome
+
+
+def outcomes(outcome: HistoricalExecutionGovernedPaperOutcome) -> list[tuple[int, str, str]]:
+    decided = {item.intent_id: item for item in outcome.intents}
+    return [(decided[item.intent_id].decision_sequence, item.outcome.value, item.reason) for item in outcome.fills]
+
+
+def test_historical_results_are_byte_identical_to_accepted_main() -> None:
+    results = {
+        "default": default_result(),
+        "partial_short": partial_result("short"),
+        "partial_long": partial_result("long"),
+        "exact_long": exact_basis_result("long"),
+        "exact_short": exact_basis_result("short"),
+    }
+    assert {name: item.result_digest for name, item in results.items()} == _ACCEPTED_MAIN_RESULT_DIGESTS
+
+
+def test_the_admission_hooks_are_identities_of_the_historical_simulation() -> None:
+    simulation = economics_module._Simulation.__new__(economics_module._Simulation)
+    intent = object()
+    assert economics_module._Simulation._intent_admission(simulation, intent) is None  # type: ignore[arg-type]
+    assert economics_module._Simulation._fill_admission(simulation, intent, 1, Fraction(1), Fraction(1)) is None  # type: ignore[arg-type]
+
+
+def test_an_all_admitting_schedule_reproduces_the_historical_ledgers_exactly() -> None:
+    result = default_result()
+    for plan in (
+        open_schedule(),
+        schedule(window(START, BASE + 50_000), window(BASE + 50_000, END)),
+    ):
+        outcome = governed(result, plan)
+        assert outcome.simulated is True and outcome.reason_codes == ()
+        assert {name: getattr(outcome, name) for name in _LEDGERS} == {name: getattr(result, name) for name in _LEDGERS}
+        assert (outcome.governance_rejected_fill_digests, outcome.pending_decision_sequence) == ((), None)
+        assert (outcome.baseline_result_digest, outcome.run_digest) == (result.result_digest, result.run_digest)
+        assert outcome.schedule_digest == historical_execution_admission_schedule_digest(plan)
+        flags = dict(HISTORICAL_EXECUTION_GOVERNED_PAPER_NON_CLAIM_FLAGS)
+        assert {name: getattr(outcome, name) for name in flags} == flags
+
+
+def test_no_window_refuses_every_intent_at_decision_time_without_a_book() -> None:
+    outcome = governed(value=schedule())
+    assert {reason for _, kind, reason in outcomes(outcome)} == {"governed_paper_no_cycle_authority"}
+    assert all(item.outcome is HistoricalExecutionFillOutcome.REJECTED for item in outcome.fills)
+    assert all(item.book_record_digest is None and item.execution_time_ns is None for item in outcome.fills)
+    assert (outcome.position_transitions, outcome.fee_cashflows, outcome.funding_cashflows) == ((), (), ())
+    assert outcome.terminal_state.position_quantity == d(0)  # type: ignore[union-attr]
+    assert outcome.governance_rejected_fill_digests == tuple(item.fill_digest for item in outcome.fills)
+
+
+def test_a_unit_ceiling_refuses_only_the_intents_whose_post_position_exceeds_it() -> None:
+    outcome = governed(value=open_schedule(short=d("0.5")))
+    assert outcomes(outcome)[0] == (1, "REJECTED", "governed_paper_unit_ceiling_exceeded")
+    assert outcomes(outcome)[-1] == (5, "FILLED", "filled")
+    exact = governed(value=open_schedule(short=d(1)))
+    assert outcomes(exact)[0] == (1, "FILLED", "filled")
+
+
+def test_a_same_side_add_is_refused_at_decision_time_after_a_partial_fill() -> None:
+    result = partial_result("short")
+    outcome = governed(result, open_schedule(result))
+    assert outcomes(outcome)[:2] == [
+        (1, "PARTIALLY_FILLED", "visible_depth_cap_partial_remainder_cancelled"),
+        (2, "REJECTED", "governed_paper_same_side_add_unsupported"),
+    ]
+    assert Fraction(outcome.position_transitions[0].post_quantity) == Fraction(-1, 5)
+
+
+@pytest.mark.parametrize(
+    ("invalidated", "expected"),
+    [
+        (BASE + 20_020, (1, "REJECTED", "governed_paper_lifecycle_invalidated")),
+        (BASE + 20_300, (1, "REJECTED", "governed_paper_lifecycle_invalidated_before_fill")),
+        (BASE + 20_502, (1, "REJECTED", "governed_paper_lifecycle_invalidated_before_fill")),
+        (BASE + 20_503, (1, "FILLED", "filled")),
+    ],
+)
+def test_an_invalidation_refuses_from_its_instant_and_a_pending_fill_never_advances(invalidated: int, expected) -> None:
+    outcome = governed(value=schedule(window(START, END), invalidated=invalidated))
+    assert outcomes(outcome)[0] == expected
+    if expected[1] == "REJECTED":
+        assert outcome.position_transitions == () or outcome.position_transitions[0].time_ns >= invalidated
+        assert all(item.time_ns < invalidated for item in outcome.fee_cashflows)
+        assert outcome.terminal_state.position_quantity == d(0)  # type: ignore[union-attr]
+    if expected[2] == "governed_paper_lifecycle_invalidated_before_fill":
+        refused = outcome.fills[0]
+        assert refused.book_record_digest is not None and refused.execution_time_ns == BASE + 20_502
+        assert (refused.filled_quantity, refused.fill_price) == (d(0), None)
+
+
+def test_a_fill_outside_every_window_is_refused_at_fill_time() -> None:
+    outcome = governed(value=schedule(window(START, BASE + 20_502), window(BASE + 30_000, END)))
+    assert outcomes(outcome)[0] == (1, "REJECTED", "governed_paper_no_cycle_authority_at_fill")
+
+
+@pytest.mark.parametrize(
+    ("price", "expected"),
+    [
+        (d("100.14499"), "FILLED"),
+        (d(Fraction(10_014_499, 100_000) - ULP), "REJECTED"),
+    ],
+)
+def test_the_reservation_price_bounds_filled_notional_by_requested_times_price(price: str, expected: str) -> None:
+    outcome = governed(value=open_schedule(price=price))
+    first = outcomes(outcome)[0]
+    assert first[:2] == (1, expected)
+    if expected == "REJECTED":
+        assert first[2] == "governed_paper_price_ceiling_exceeded"
+        assert outcome.fee_cashflows == () or outcome.fee_cashflows[0].time_ns != BASE + 20_502
+
+
+def test_the_deciding_window_price_bounds_a_fill_executed_in_the_next_window() -> None:
+    decided, executed = window(START, BASE + 20_500, price=d("100.1")), window(BASE + 20_500, END)
+    outcome = governed(value=schedule(decided, executed))
+    assert outcomes(outcome)[0] == (1, "REJECTED", "governed_paper_price_ceiling_exceeded")
+
+
+def test_the_last_intent_left_open_by_the_evaluation_end_is_pending() -> None:
+    short = economics(world(end=BASE + 50_400))
+    outcome = governed(short, open_schedule(short))
+    assert outcome.pending_decision_sequence == 4
+    assert outcome.pending_intent_digest == outcome.intents[-1].intent_digest
+    assert outcomes(outcome)[-1] == (4, "UNFILLED", "execution_window_closed")
+    assert governed().pending_decision_sequence is None
+
+
+def test_a_longer_replay_preserves_the_prefix_content_of_a_shorter_one() -> None:
+    short_result, long_result = economics(world(end=BASE + 50_400)), default_result()
+    short, long = governed(short_result, open_schedule(short_result)), governed()
+    assert short_result.run_digest != long_result.run_digest
+    before = BASE + 50_400
+
+    def prefix(outcome: HistoricalExecutionGovernedPaperOutcome) -> str:
+        return historical_execution_governed_paper_prefix_digest(
+            outcome, before_ns=before, excluded_decision_sequences=(4,)
+        )
+
+    assert prefix(short) == prefix(long)
+    assert historical_execution_governed_paper_prefix_digest(short, before_ns=before) != prefix(short)
+    refused = governed(value=schedule(window(START, END), invalidated=BASE + 20_300))
+    assert prefix(refused) != prefix(long)
+    with pytest.raises(HistoricalExecutionEconomicsError, match="governed_paper_prefix_instant_invalid"):
+        historical_execution_governed_paper_prefix_digest(long, before_ns=-1)
+
+
+def test_the_visible_mark_is_the_valuation_rule() -> None:
+    w = default_world()
+    policy = default_policy()
+    for valuation in default_result().valuations:
+        if valuation.mark_price is not None:
+            assert historical_execution_latest_visible_mark(
+                w.dataset, policy=policy, instrument=INS, at_ns=valuation.time_ns
+            ) == (valuation.mark_record_digest, valuation.mark_price)
+    assert historical_execution_latest_visible_mark(w.dataset, policy=policy, instrument=INS, at_ns=BASE) is None
+    assert (
+        historical_execution_latest_visible_mark(w.dataset, policy=policy, instrument=INS, at_ns=BASE + 10**6) is None
+    )
+    with pytest.raises(HistoricalExecutionEconomicsError, match="visible_mark_input_malformed"):
+        historical_execution_latest_visible_mark(object(), policy=policy, instrument=INS, at_ns=BASE)  # type: ignore[arg-type]
+
+
+@pytest.mark.parametrize(
+    ("value", "code"),
+    [
+        (object(), "admission_schedule_malformed"),
+        (replace(schedule(), schema_version="v0"), "admission_schedule_malformed:schema_version"),
+        (replace(schedule(), schedule_id=""), "schedule_id_invalid"),
+        (replace(schedule(), windows=[window(START, END)]), "admission_schedule_malformed:windows"),
+        (schedule(window(START, START)), "admission_schedule_invalid:window_empty"),
+        (
+            schedule(window(START, END), window(END - 1, END + 5)),
+            "admission_schedule_invalid:windows_not_ordered_disjoint",
+        ),
+        (schedule(window(START, END, long=d(-1))), "admission_schedule_invalid:quantity_ceiling_negative"),
+        (schedule(window(START, END, price=d(0))), "admission_schedule_invalid:reservation_price_not_positive"),
+        (schedule(window(START, END, price="1.5")), "admission_schedule_malformed:reservation_price"),
+        (schedule(window(START, True)), "admission_schedule_malformed:window_end_ns"),  # type: ignore[arg-type]
+        (schedule(invalidated=-1), "admission_schedule_malformed:invalidated_from_ns"),
+    ],
+)
+def test_a_malformed_or_inconsistent_schedule_is_refused(value: object, code: str) -> None:
+    with pytest.raises(HistoricalExecutionEconomicsError, match=code):
+        canonical_historical_execution_admission_schedule(value)
+
+
+def test_only_an_authentic_computed_baseline_inside_the_schedule_is_governed() -> None:
+    result = default_result()
+    cases = (
+        (object(), result.result_digest, open_schedule(), "governed_paper_baseline_malformed"),
+        (result, "0" * 64, open_schedule(), "governed_paper_baseline_not_authentic"),
+        (economics(economics_approval=None), None, open_schedule(), "governed_paper_baseline_not_computed"),
+        (
+            result,
+            result.result_digest,
+            schedule(window(START - 1, END)),
+            "admission_schedule_outside_evaluation_window",
+        ),
+        (
+            result,
+            result.result_digest,
+            schedule(window(START, END + 1)),
+            "admission_schedule_outside_evaluation_window",
+        ),
+    )
+    for baseline, digest, plan, code in cases:
+        anchor = baseline.result_digest if digest is None else digest  # type: ignore[union-attr]
+        with pytest.raises(HistoricalExecutionEconomicsError, match=code):
+            simulate_historical_execution_governed_paper(baseline, expected_result_digest=anchor, schedule=plan)  # type: ignore[arg-type]
+
+
+def test_the_governed_outcome_is_deterministic_digest_bound_and_reproven_totally() -> None:
+    result = default_result()
+    outcome = governed(value=open_schedule(short=d("0.5")))
+    again = governed(value=open_schedule(short=d("0.5")))
+    assert historical_execution_governed_paper_outcome_to_dict(
+        outcome
+    ) == historical_execution_governed_paper_outcome_to_dict(again)
+    assert historical_execution_governed_paper_outcome_digest(outcome) == outcome.outcome_digest
+    assert json.loads(edge_canonical_json(historical_execution_governed_paper_outcome_to_dict(outcome)))
+    forged = replace(outcome, fills=outcome.fills[1:])
+    resealed = replace(forged, outcome_digest=historical_execution_governed_paper_outcome_digest(forged))
+    for candidate, code in (
+        (forged, "governed_paper_outcome_self_digest_mismatch"),
+        (resealed, "governed_paper_outcome_field_mismatch:fills"),
+        (replace(outcome, execution_authorized=True), "governed_paper_outcome_self_digest_mismatch"),
+    ):
+        verification = verify_historical_execution_governed_paper_outcome(
+            candidate, result=result, expected_result_digest=result.result_digest
+        )
+        assert verification.intact is False and _code(code) in verification.reason_codes
+    for garbage in (None, object(), result):
+        assert (
+            verify_historical_execution_governed_paper_outcome(
+                garbage, result=result, expected_result_digest=result.result_digest
+            ).intact
+            is False
+        )
+    assert verify_historical_execution_governed_paper_outcome(
+        outcome, result=object(), expected_result_digest=result.result_digest
+    ).reason_codes == (_code("governed_paper_outcome_rebuild_failed"),)
+
+
+def test_a_governed_run_that_cannot_be_computed_is_not_simulated_and_fabricates_nothing() -> None:
+    # No mark is visible in (50 001, 60 001): the historical run is flat there, but refusing the close (its price is
+    # above the second window's reservation price) keeps the short open across the 60 000 settlement: a stale mark.
+    records = market_records(mark=lambda j: None if 51 <= j <= 59 else default_mark(j))
+    result = economics(world(records=records))
+    assert result.simulated_economics_computed is True
+    plan = schedule(window(START, BASE + 50_000), window(BASE + 50_000, END, price=d("100.5")))
+    stale = simulate_historical_execution_governed_paper(
+        result, expected_result_digest=result.result_digest, schedule=plan
+    )
+    assert stale.simulated is False and stale.reason_codes == (_code("mark_stale:funding_settlement"),)
+    assert {name: getattr(stale, name) for name in _LEDGERS[:-1]} == dict.fromkeys(_LEDGERS[:-1], ())
+    assert (stale.terminal_state, stale.pending_decision_sequence, stale.governance_rejected_fill_digests) == (
+        None,
+        None,
+        (),
     )
