@@ -6,7 +6,8 @@ governance over
 isolated sleeves. Extends (never replaces) the merged intra-sleeve layer
 `paper_sleeve_risk_budget_decision.py` ("reservation never execution permission",
 `total_reserved <= total_budget`). The existing `audit/portfolio_governor_*` readiness surfaces
-stay OUT of scope. Everything is paper-only; allocation is evidence output, never an order.
+stay OUT of scope. Everything is paper-only; allocation is evidence output, never an order. The governed
+admitted-variant paper execution (section 7) consumes RG-2..RG-8 unchanged.
 
 ## 1. Artifact sequence (RG-2..RG-8)
 
@@ -204,3 +205,50 @@ governance numbers. EF-7 admissions are allocator inputs — EF chain should lan
 
 Any temptation to scale silently; any allocation to an unproven/killed sleeve; any envelope number
 invented by a model; any coupling into `audit/portfolio_governor_*` readiness surfaces.
+
+## 7. Governed admitted-variant paper execution (`GOVERNED_ADMITTED_VARIANT_PAPER_EXECUTION_V1`, `GPC_V1R`)
+
+Status: SYNTHETIC CONSTRUCTION ONLY. Real paper execution stays BLOCKED until every human commitment C1–C9 and the
+venue-fact currency research D1 exist (`governance_decision_framework.md` §6a). RG-2..RG-8 are consumed unchanged.
+
+- **One economics source.** `historical_execution_economics` gains two admission hooks that are identities in the
+  historical engine (the accepted historical results stay byte-identical):
+  - decision time: no cycle window, a lifecycle invalidation at or before the decision, a same-side add or a post
+    position above the window's unit ceiling refuse the intent before any book is selected;
+  - fill time: no window at the fill, an invalidation at or before the fill, or `filled × price > requested × L` of
+    the deciding window refuse the fill like a risk refusal: no fee, no transition, no state change.
+  `simulate_historical_execution_governed_paper` applies one neutral `HistoricalExecutionAdmissionSchedule`; the
+  engine never learns which governance produced it.
+- **Prospective cycle authority** (`governed_paper_execution_authority.py`). Cycle `k` opens at `E_k = G + k` UTC days
+  and is derived only from what exists at `E_k`:
+  - the archive as of `E_k` and its opening mark `m` under the engine's own mark rule;
+  - the sealed generic RG-3 history, from which RG-3, RG-4, RG-5, RG-6 (from the seed until a READY decision, then
+    its lineage), RG-7 and RG-8 are rebuilt through their public builders;
+  - the human head attestation `H_k`.
+  The reservation is one BUY and one SELL LIMIT tick of `unit_size` at `L = m × (1 + beta)`, HALF_EVEN on the price
+  grid; it is journaled with the budget decision, candidate and readiness into the cycle's allocator draft. The EF-7
+  capacity check `unit_size × L <= max_value` applies to the one supported measure only. An AUTHORIZED cycle grants
+  one window `[E_k, E_(k+1))` under its own human approval (C3).
+- **Bootstrap to ordinary.**
+  - ORDINARY: RG-3, RG-4, RG-6 and RG-8 READY.
+  - B0: no sealed episode exists, so RG-8 cannot be constructed.
+  - B1: RG-3 is NOT_COMPUTABLE for exactly the insufficient-sample reasons and RG-8 is NOT_COMPUTABLE by its rule 2.
+  - Either bootstrap phase needs the one-use, single-sleeve `GovernedPaperBootstrapAuthority` (horizon of at least 30
+    UTC days) and the RG-2 stop levels applied strictly to the RG-3 valuation index.
+  - An RG-8 STOP, ALLOCATION_REJECTED or NEEDS_GOVERNANCE_APPROVAL, a zero-variance or otherwise uncomputable RG-3
+    and an expired horizon are never excepted.
+- **Sealed days** (`governed_admitted_variant_paper_execution.py`). Day `k` is replayed from `G` to `E_(k+1)` over
+  the archive as of `E_(k+1)`. That archive extends the previous one only with records visible in
+  `(E_k, E_(k+1)]`. The replay must reproduce the previous seal's prefix content digest exactly. An intent left open
+  only by the prefix end is PENDING; a cross-day fill needs both cycle windows and keeps its deciding reservation.
+  The closing attestation `H_(k+1)` can only validate or invalidate: a direct KILL_DISABLE successor inside the day
+  invalidates the schedule from its instant, and an earlier one contradicts sealed history and raises. Every fill
+  is projected through the accepted generic chain with the generic hard guards active and exact equality required:
+  price, quantity, gross notional, fee, signed position and realized PnL. Funding and day closes carry the engine's
+  own settlements and marks.
+- **Evidence.** `GovernedPaperExecutionEvidence` rebuilds every seal in order, proves the lineage (seal, archive,
+  sealed history, head attestation, RG-6 lineage) and re-proves the terminal RG-3 over the whole sealed window. A cycle
+  or seal alone is never current authority.
+- **Scope limits.** One sleeve and one instrument per genesis. Same-side adds after a partial fill are refused,
+  because the generic average-entry division is not exact. A tight band can defer an exit; nothing is forced. No
+  scheduler, connector, live path, order or capital exists, and no machine time is proven.

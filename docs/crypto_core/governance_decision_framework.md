@@ -72,6 +72,25 @@ precedent, not advice.
 | stability minimum overlap days / minimum as-of gap days (RF-5) | A short overlap or a small gap proves little about repaint; long ones delay stability evidence |
 | regime filters preregistered per spec (EF-5 V2 ledger, consumer: `regime_filter_admission_decision.py`) | The preregistration approval commits the exact set of governed RF-2 policies a spec may later admit. Each one is one more preregistered hypothesis, so a wide set widens the search a regime-conditioned evaluation must count, and an empty set leaves RF-6 nothing to admit. Adding a filter after results needs a new preregistration |
 
+## 6a. GP — governed paper execution (consumers: `governed_paper_execution_authority.py`, `governed_admitted_variant_paper_execution.py`)
+
+None of these is needed to construct the code or its synthetic tests. Every one is needed before any real governed
+paper evidence exists; until then real paper execution stays BLOCKED. Tests record them only as `test-fixture:`
+values.
+
+| Commitment | Trade-off |
+|---|---|
+| C1 paper adoption of the economics and parameter approvals | The economics and parameter approvals carry no time or purpose field; adopting them for a paper period is a separate decision, never an implicit extension of a backtest approval |
+| C2 bootstrap authority and horizon H (at least 30 UTC days) | A longer H gives a zero-history sleeve more time to reach 30 daily returns, but it also extends the period run without RG-8. One-use, one sleeve, one genesis |
+| C3 per-cycle approval | Approves exactly one derived cycle (reservation, RG chain, phase). Approval fatigue against unreviewed cycles; no blanket approval exists |
+| C4 head attestation per cycle opening and close | Only a human can attest that no later lifecycle successor exists at an instant. A stale or missing attestation stops the day |
+| C5 equity-basis reference notional equal to the economics initial equity | Structural equality; if the policies disagree, aligning them is a human decision, never a default |
+| C6 capacity measures other than the supported open-position notional | Equating measures with different units or scopes fakes capacity; each new measure needs its own semantics decision |
+| C7 governor policy thresholds of the time-window chain | The RG-3 time window rebuilds from a metrics summary whose governor thresholds are human values |
+| C8 reservation band beta | A tight band refuses fills (including exits) on ordinary price drift; a loose band reserves more risk budget per unit. It bounds the fill notional the generic overfill guard checks |
+| C9 RG-6 ladder seed | The seed's tier entry is the paper genesis; ORDINARY needs a READY RG-6 from it |
+| D1 venue-fact currency (Deep Research) | The economics policy's cited venue facts (taker fee, funding interval, contract and quantity semantics, latency) must be current for the paper period's dates before any non-synthetic period |
+
 ## 7. Pilot — funding/basis/carry (values post-DR, PRM-16)
 
 Venue fee/funding mechanics constants (from DR citations only); per-candidate go/no-go (S1 passive

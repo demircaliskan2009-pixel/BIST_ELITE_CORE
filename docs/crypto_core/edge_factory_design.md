@@ -96,6 +96,24 @@ tested-variant count), the per-evaluation currentness attestation and venue liqu
 world uses explicit `test-fixture:` approvals and SYNTHETIC values; nothing proves an edge, profitability, readiness or
 Stage-4 completion.
 
+## 1b. Paper execution of an admitted variant (`GOVERNED_ADMITTED_VARIANT_PAPER_EXECUTION_V1`)
+
+SYNTHETIC CONSTRUCTION ONLY; real paper execution stays BLOCKED (`governance_decision_framework.md` §6a). A
+`GovernedPaperGenesis` (`governed_paper_execution_authority.py`) re-proves one EF-7 v2 PASS admission and one
+admitted variant:
+
+- the executable binding, canonical assignment and parameter approval must be exactly the admitted variant's;
+- the economics policy must be the one its EF-6 evaluation used, under an exact HUMAN_GOVERNANCE approval;
+- the EF-8 INITIAL_ACTIVATION of that admission is the paper genesis head;
+- the admission cap fraction and `LIMITED_S1_PAPER_V1` stay RG-7's to enforce.
+
+The paper-period decisions are `historical_decision_run`s of that binding over an authenticated PIT archive of the
+same EF-3 manifest. The paper economics are `historical_execution_economics` under that policy: no second decision
+or economics authority exists. EF-8 receipts stay historical: a later lifecycle head is attested per cycle (RG-7
+head authority), and a KILL_DISABLE of the paper genesis invalidates the paper schedule from its effective instant.
+A capacity assumption with any measure other than `max_open_position_notional` / `quote_currency_notional` /
+`per_instrument_open_position` blocks the genesis instead of being equated with it (C6).
+
 ## 2. Cross-cutting invariants
 
 - **status vs gate_verdict separation**: `status ∈ {READY, REJECTED}` = trust/digest integrity

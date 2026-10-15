@@ -313,3 +313,22 @@ head-pinned merges; `main` @ `e278293cd5537cfa7174db79a1238a686199275a` after #3
   funding pilot slices → completion decision **v3 only if all required proofs exist** (machine-proven
   30-day gate + enforced secondary metrics + explicit human authorization). Contract details:
   `docs/crypto_core/fable_exit_contract_index.md` (archived design doctrine, never current-state proof).
+
+## 12. Governed admitted-variant paper execution (`GOVERNED_ADMITTED_VARIANT_PAPER_EXECUTION_V1`, recorded 2026-10-15)
+
+Status: SYNTHETIC CONSTRUCTION ONLY, `REAL_PAPER_EXECUTION=BLOCKED`, `CONSTRUCTION_STATUS=OPEN`. This is not Stage-4
+completion, operational readiness, machine-time proof or a profitability claim. It is the first path on which paper
+signals come from the EF-7 admitted variant's own `historical_decision_run`. Fill prices come from the one
+historical execution economics engine instead of caller-supplied references, and RG-7/RG-8 gate each paper cycle
+prospectively instead of only reviewing past results.
+
+- Contract: `multi_sleeve_risk_governance_design.md` section 7 (`GPC_V1R`); the human commitments that real paper
+  use still needs are `governance_decision_framework.md` §6a (C1–C9, D1).
+- Modules: `historical_execution_economics.py` (governed admission hooks, identities in the historical engine),
+  `governed_paper_execution_authority.py` (genesis, cycle authority and bootstrap) and
+  `governed_admitted_variant_paper_execution.py` (sealed days, generic projection and lineage evidence).
+- Proven by construction on synthetic test values only. A 32-day world, built over world P's admission, moves through
+  B0 (4 cycles), B1 (26 cycles) and ORDINARY (2 cycles). The terminal RG-3 is READY over 32 daily returns.
+- Still not proven: archive completeness and rights for a real paper period, venue-fact currency (D1), machine-time
+  origin of every `E_k`, kill observations produced from governed metrics (EF-8 observations remain caller
+  declarations), multi-sleeve portfolios, and every human commitment C1–C9.
