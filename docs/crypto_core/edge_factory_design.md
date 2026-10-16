@@ -96,6 +96,22 @@ tested-variant count), the per-evaluation currentness attestation and venue liqu
 world uses explicit `test-fixture:` approvals and SYNTHETIC values; nothing proves an edge, profitability, readiness or
 Stage-4 completion.
 
+## 1b. Paper consumption of the EF-7 admission (`GOVERNED_PAPER_TYPED_PROVENANCE_V2`)
+
+The governed paper period (`multi_sleeve_risk_governance_design.md` §7) consumes EF-7 v2 and EF-8 unchanged:
+
+- the genesis re-proves the EF-7 decision through its public verifier and uses only its strict reconstruction. The
+  risk-budget policy, the EF-6 economics-policy anchor, the executable binding digest, the spec digest, the admitted
+  variant set, the admission cap and the capacity assumptions are all read from that authenticated decision; the
+  risk-budget policy is rebuilt from the EF-7 binding and never supplied;
+- one admitted variant runs, under its exact registered assignment and its parameter approval; a non-admitted variant
+  or another assignment is refused;
+- only the supported capacity measure is enforced (`u x L_k <= max_value` at each cycle opening); any other measure for
+  the instrument blocks the genesis, because its semantics are not equivalent;
+- the EF-8 INITIAL_ACTIVATION of that admission is the genesis head; a later EF-8 receipt (kill, quarantine) is a
+  successor whose effective instant invalidates every later decision and fill inside the economics. A readmitted head
+  is a different admission cycle and never continues a genesis.
+
 ## 2. Cross-cutting invariants
 
 - **status vs gate_verdict separation**: `status ∈ {READY, REJECTED}` = trust/digest integrity

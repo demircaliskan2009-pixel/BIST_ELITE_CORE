@@ -204,3 +204,94 @@ governance numbers. EF-7 admissions are allocator inputs — EF chain should lan
 
 Any temptation to scale silently; any allocation to an unproven/killed sleeve; any envelope number
 invented by a model; any coupling into `audit/portfolio_governor_*` readiness surfaces.
+
+## 7. Governed admitted-variant paper execution (`GOVERNED_PAPER_TYPED_PROVENANCE_V2`)
+
+One authenticated EF-7 v2 admitted variant runs as a governed, paper-only, synthetic-construction paper period. RG-2..RG-8
+are consumed unchanged; nothing here sizes, scales, allocates capital, routes an order or proves venue truth.
+
+**Trust rule** (`DERIVE_NOT_ACCEPT + CANONICAL_TYPED_IDENTITY + RECOMPUTED_DIGEST + PUBLIC_VERIFIER_REPROOF`):
+
+- every consumed upstream artifact is re-proven by its own public verifier; its self-digest is recomputed and must equal
+  its upstream anchor; only its strict canonical reconstruction flows downstream;
+- an authority an authenticated upstream already binds is derived from that binding, never accepted again. The
+  risk-budget policy is NOT a genesis input: it is rebuilt from the EF-7 `risk_budget_policy_binding` (exact snapshot
+  shape, public builder, canonical JSON equal to the bound snapshot, recomputed digest equal to the snapshot, the
+  binding anchor and the EF-7 digest). Each cycle's reservation chain (ticks → journal → sleeve state → risk-budget
+  decision → promotion candidate → readiness → allocator draft) is derived by the public builders;
+- `governed_paper_typed_identity.py` (`TCI_V1`) is the contract-local typed identity: an image records the exact type
+  of every node (`None`, exact `bool`, exact `int`, exact `str`, `tuple` vs `list`, exact-str-key `dict`, approved Enum
+  by class identity, approved dataclass by class identity, references re-proven to their recomputed digest) and refuses
+  everything else (float, `Fraction`, `Decimal`, bytes, sets, primitive subclasses, foreign or spoofed classes).
+  Python equality is never a trust decision, so `False`/`0`, `True`/`1` and str-Enum/str substitutions never verify,
+  even resealed. The wire serialization of every artifact is unchanged;
+- every owned artifact (governed outcome, genesis, cycle, day seal, lineage evidence) is verified by
+  `governed_paper_verify_rebuilt`: exact type, typed image, carried self-digest recomputation, typed identity field by
+  field against its single assembly path. Total: it never raises.
+
+**Artifacts.**
+
+1. *Engine* (`historical_execution_economics.py`, `GOVERNED_PAPER_ADMISSION_HOOKS_V1`). Two refuse-only hooks are
+   identities in every historical run (the accepted-main result digests are pinned byte-identical).
+   `simulate_historical_execution_governed_paper` re-runs an authenticated READY + PASS result under a neutral
+   `HistoricalExecutionAdmissionSchedule` (ordered disjoint windows with long/short post-fill ceilings and a
+   reservation price, plus one invalidation instant). Decision time refuses: no window, invalidated, a zero-ceiling
+   side (exits included), a same-side addition, a ceiling breach. Fill time refuses: no window, invalidated,
+   non-contiguous windows from the deciding window to the fill window, `filled x price > requested x L_deciding`. A
+   refusal is `REJECTED` with no fee, transition or state change. The last intent left unfilled only by the evaluation
+   end is PENDING.
+2. *Genesis* (`GovernedPaperGenesis`, one per sleeve, single-sleeve). It binds the EF-7 v2 admission (READY, PASS,
+   admitted) and its EF-8 INITIAL_ACTIVATION, the executable binding, one admitted variant and its exact canonical
+   assignment, the parameter approval, the EF-6 economics policy (its recomputed digest must equal the EF-6
+   `economics_policy_digest`) and approval, the RG-2 envelope, the equity-basis policy (reference notional ==
+   `initial_equity`), the RG-6 seed, the RG-4 path policy, G (a UTC day at or after the activation), H (>= 30 UTC
+   days) and the band beta. Only the supported EF-7 capacity measure (`max_open_position_notional` /
+   `quote_currency_notional` / `per_instrument_open_position`) is consumed; any other measure for the instrument blocks.
+   `genesis_inputs_identity_digest` is the typed identity of the whole input record. AUTHORIZED needs an exact
+   HUMAN_GOVERNANCE approval of the genesis policy.
+3. *Cycle* (`GovernedPaperCycleAuthority`, UTC day k, window `[E_k, E_k+1)`): opened on `E_k`-visible facts only —
+   the typed digest of the history sealed before `E_k`, `m(E_k)` by the engine's own visible-mark rule, RG-7 (and RG-4
+   from day 1) at `E_k` on the genesis envelope and, once episodes exist, RG-8. `L_k = m(E_k) x (1 + beta)` on the price
+   grid; one MARKETABLE_LIMIT reservation tick per direction (BUY u, SELL u at `L_k`); `u x L_k <=` the capacity value.
+   **B2:** a direction is authorized only by its own record (ELIGIBLE, requested == reserved == `u x L_k`) and its own
+   RG-7 record (ELIGIBLE, `final_allocated_budget == u x L_k`) on a READY allocation with an attested ACTIVE head and
+   no kill override; otherwise its ceiling is zero. There is no aggregate-to-symmetric shortcut. Phases:
+   - `BOOTSTRAP_B0`: no sealed episode; RG-8 cannot be built; RG-4 (absent on day 0, whose window is empty)
+     NOT_COMPUTABLE for exactly the missing sleeve;
+   - `BOOTSTRAP_B1`: episodes exist; RG-8, RG-4, RG-6 (seeded from the genesis seed) and RG-3 NOT_COMPUTABLE with
+     exactly the pinned reason sets of the bootstrap sleeve's insufficient sample; the bootstrap stop (max peak
+     distance of the RG-3 index path strictly above any RG-2 stop level) not triggered;
+   - `ORDINARY`: RG-3 and RG-8 READY and the RG-8 terminal allocation equal to RG-7's.
+   Bootstrap phases need `E_k < G + H` and no other sleeve with a post-kill reservation. A stop, a rejected
+   allocation, a governance gap or a kill is never excepted. AUTHORIZED needs an exact HUMAN_GOVERNANCE cycle approval.
+4. *Day seal* (`GovernedPaperDaySeal`, sealed at `E_k+1`): the decision run over `[G, E_k+1)` and its economics are
+   built from the archive and the genesis's canonical authorities and re-run under the schedule of every AUTHORIZED
+   cycle. Rules:
+   - **X1:** the archive holds only records known at `E_k+1`, is READY, and reproduces `m(E_k)`; the engine content
+     before `E_k` must equal the previous seal's prefix (the previous pending intent excluded from both);
+   - **X3:** the closing head attestation at `E_k+1` must be HUMAN-attested; it validates or invalidates, never
+     authorizes. A changed head needs the re-proven successor receipts effective inside `(E_k, E_k+1]`; a successor in
+     an already sealed day is a contradiction;
+   - **X2:** the earliest successor instant invalidates every later decision and fill inside the economics, and an
+     invalidation is never undone;
+   - **B3:** a pending intent keeps its deciding day and cycle digest; the next seal must be given exactly that cycle,
+     re-proven; its fill uses that cycle's derived reservation, and every window from deciding to fill must exist;
+   - **X4:** each executed fill is projected through the accepted generic chain (capacity gate, request, bridge,
+     admission, intent, pass-through fill, position, PnL, run, realized event, end-to-end episode); price, units, fee,
+     position and realized PnL must equal the engine exactly; a fill on a side its deciding cycle did not authorize
+     blocks the day;
+   - **B4:** a settlement whose rendered amount is not exactly `-q x m x r` over the engine's own factors blocks the
+     day; the sealed funding events must sum exactly to the engine's cumulative funding at the day boundary.
+   A blocked seal carries no history and ends the lineage.
+5. *Lineage evidence* (`GovernedPaperExecutionEvidence`): every cycle and seal is re-proven by typed identity against
+   its rebuild and bound pairwise (prior seal digest, sealed history, closing attestation, archive growth with no
+   backfill before the day, pending lineage, invalidation). A seal alone is a local derivation; only the evidence proves
+   a lineage.
+
+**Synthetic worlds** (`tests/crypto_core/validation/test_governed_admitted_variant_paper_execution.py`): world G (32
+days: B0 x4, B1 x26, ORDINARY x2, 10 episodes, terminal RG-3 READY over 32 returns), budget-50 (BUY only), a long mirror,
+a 3-day-delay EF-6..EF-7 chain (decided k, pending k+1, filled k+2), kills at four offsets, an inexact-funding archive,
+a sign flip, a bootstrap stop and a rejected cap.
+
+**Blocked for real paper use** until C1-C9 and D1 (see `governance_decision_framework.md` §6a) exist. No synthetic
+artifact proves venue, capital or machine-time authority.

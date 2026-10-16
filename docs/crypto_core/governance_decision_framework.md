@@ -72,6 +72,21 @@ precedent, not advice.
 | stability minimum overlap days / minimum as-of gap days (RF-5) | A short overlap or a small gap proves little about repaint; long ones delay stability evidence |
 | regime filters preregistered per spec (EF-5 V2 ledger, consumer: `regime_filter_admission_decision.py`) | The preregistration approval commits the exact set of governed RF-2 policies a spec may later admit. Each one is one more preregistered hypothesis, so a wide set widens the search a regime-conditioned evaluation must count, and an empty set leaves RF-6 nothing to admit. Adding a filter after results needs a new preregistration |
 
+## 6a. GP — governed paper execution (consumers: `governed_paper_execution_authority.py`, `governed_admitted_variant_paper_execution.py`)
+
+| Constant | Trade-off |
+|---|---|
+| C1 adoption of the EF-6 economics policy, its approval and the parameter approval (the genesis approval) | The approvals carry no purpose or time scope, so reuse for paper is an explicit human adoption of the exact digests, never implied |
+| C2 genesis instant G and bootstrap horizon H (>= 30 UTC days) | A long H tolerates a slow first sample; a short one expires the bootstrap before RG-3 can become READY. Below 30 days RG-3 can never be READY, so it is refused |
+| C3 per-cycle approval | One exact human approval per UTC day of the computed cycle policy (reservation, per-direction ceilings, phase); a missing or synthetic one leaves the day without authority |
+| C4 closing head attestation | The RG-7 head mechanism at each `E_k+1`; it validates or invalidates the day and opens the next one, never authorizes retroactively |
+| C5 equity-basis reference notional | Must equal the economics `initial_equity` exactly; a different value is a structural block, not a tolerance |
+| C6 EF-7 capacity measures without a paper equivalent | Fail-closed by default (the genesis is blocked); only a separate human decision (a PIT data contract or an explicit not-applicable record) could change that, never a silent pass |
+| C7 governor thresholds of the RG-3 time-window chain | The accepted metrics-summary chain needs them; the tests use the accepted fixture's synthetic values |
+| C8 reservation band beta | `L_k = m(E_k) x (1 + beta)`: wide = more fills inside the price ceiling but a larger reservation against the budget; narrow = deferred exits when the market moves past it |
+| C9 RG-6 ladder seed | The seed every B1 and ORDINARY ladder decision starts from |
+| D1 venue-fact currency (Deep Research) | The cited fee, funding-interval and contract facts must be current for the paper dates before any non-synthetic period |
+
 ## 7. Pilot — funding/basis/carry (values post-DR, PRM-16)
 
 Venue fee/funding mechanics constants (from DR citations only); per-candidate go/no-go (S1 passive
