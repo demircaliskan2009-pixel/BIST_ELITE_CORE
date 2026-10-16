@@ -82,8 +82,8 @@ Stage-3 synthetic stress (``STRESS_PIT_TRANSFORM_V1``). ``simulate_historical_ex
 the same frozen decision trace, policy, fill model, fees, funding and valuation rules — over a declared, digest-bound
 transformation of the authenticated observations of one READY + PASS result. It is a modeled synthetic scenario,
 never an authenticated market event, and it never mutates or replaces the authenticated dataset. The historical
-simulation itself is unchanged: its only four hooks (the mark and book observations it is constructed over, the
-effective slippage and the observed book) are identities.
+simulation itself is unchanged: its only six hooks (the mark and book observations it is constructed over, the
+effective slippage, the observed book and the two admission hooks below) are identities.
 
 * HIGH_VOLATILITY: every observed price is moved so that its log-deviation from the anchor mark ``m0`` (the latest mark
   visible at the evaluation start) is multiplied by exactly 3/2: ``p' = p × g`` with ``g = sqrt(p / m0)`` rendered once
@@ -102,6 +102,34 @@ effective slippage and the observed book) are identities.
 
 A stress outcome records the scenario, its anchors, the breach and the daily endpoint equities; it carries no pass or
 fail and proves no venue mechanics, liquidation behavior or real-market stress.
+
+Governed paper admission (``GOVERNED_PAPER_ADMISSION_HOOKS_V1``). ``simulate_historical_execution_governed_paper``
+re-runs THIS engine over one authenticated READY + PASS result under one neutral ``HistoricalExecutionAdmissionSchedule``
+(ordered disjoint windows, each with long and short post-fill ceilings and a reservation price, and an optional
+invalidation instant); the engine never learns which governance produced the schedule. The two hooks only refuse:
+
+* at the decision instant ``t0``: no window contains ``t0`` (``governed_paper_no_cycle_authority``), the schedule is
+  invalidated at or before ``t0`` (``governed_paper_lifecycle_invalidated``), the window's ceiling on the intent's own
+  side is zero, so that side is not permitted at all, exits included (``governed_paper_direction_not_authorized``), the
+  intent adds to an open position on its own side (``governed_paper_same_side_add_unsupported``), or its post-fill
+  position exceeds the window's long or short ceiling (``governed_paper_unit_ceiling_exceeded``); the intent is
+  ``REJECTED`` before any book is selected;
+* at the fill instant ``tf``: no window contains ``tf`` (``governed_paper_no_cycle_authority_at_fill``), the schedule is
+  invalidated at or before ``tf`` (``governed_paper_lifecycle_invalidated_before_fill``), the windows from the one that
+  contained ``t0`` to the one that contains ``tf`` are not contiguous, so some intervening instant had no authority
+  (``governed_paper_cycle_authority_discontinuous``), or ``filled × fill_price`` exceeds ``requested × L``, where ``L``
+  is the reservation price of the window that contained ``t0`` (``governed_paper_price_ceiling_exceeded``); the fill is
+  ``REJECTED`` exactly like a risk refusal: no fee, no transition and no state change.
+
+Every ceiling and instant is the caller's declared value. The intent of the LAST decision, left ``UNFILLED`` only
+because the evaluation end closed its window (``execution_window_closed``) or no later book exists in the dataset
+(``no_eligible_book_observation``), is reported as PENDING: the evaluation end, not the market, ended it.
+``historical_execution_governed_paper_prefix_digest`` is the content identity of every event strictly before one instant
+with the run-derived identifiers removed, so a longer replay can prove that it preserved a shorter one. This engine
+stays independent of every consumer: the governed outcome's public verifier belongs to the governed paper execution
+contract, which re-proves it by typed identity against a re-run. ``build_historical_execution_economics`` and
+``verify_historical_execution_economics`` never consult a schedule, and a governed outcome proves no venue fill,
+execution permission or readiness.
 """
 
 from __future__ import annotations
@@ -165,6 +193,7 @@ from crypto_core.validation.historical_pit_dataset import (
     HistoricalPitDataset,
     HistoricalPitRecord,
     historical_pit_dataset_from_payload,
+    verify_historical_pit_dataset,
 )
 from crypto_core.validation.strategy_executable_binding import (
     StrategyExecutableParameterApproval,
@@ -1268,6 +1297,16 @@ class _Simulation:
 
         return book
 
+    def _intent_admission(self, intent: _Intent) -> str | None:
+        """Admission hook at the decision instant: a refusal reason, or None (the historical model admits every one)."""
+
+        return None
+
+    def _fill_admission(self, intent: _Intent, execution_time_ns: int, price: Fraction, filled: Fraction) -> str | None:
+        """Admission hook at the fill instant: a refusal reason, or None (the historical model admits every fill)."""
+
+        return None
+
     def _execute(self, intent: _Intent, book: _Book) -> None:
         book = self._observed_book(book)
         record = intent.record
@@ -1331,6 +1370,10 @@ class _Simulation:
         price, price_text = _price_on_grid(raw_price, "fill_price")
         if price <= 0:
             reject("fill_price_non_positive", **quoted)
+            return
+        refused = self._fill_admission(intent, book.visibility, price, filled)
+        if refused is not None:
+            reject(refused, **quoted)
             return
         transition = _preview_transition(self.position, signed, price)
         fee_amount = price * filled * self.fee_bps / _BPS
@@ -1555,6 +1598,10 @@ class _Simulation:
             elif priority == _PRIORITY_DECISION:
                 intent = self._intent(decisions[index])
                 if intent is None:
+                    continue
+                refused = self._intent_admission(intent)
+                if refused is not None:
+                    self._fill_record(intent.record, outcome=HistoricalExecutionFillOutcome.REJECTED, reason=refused)
                     continue
                 boundary_ns = decisions[index + 1].decision_time_ns if index + 1 < len(decisions) else end_ns
                 book, reason = self._select_book(intent.record, boundary_ns)
@@ -1997,6 +2044,515 @@ def historical_execution_stress_outcome_digest(outcome: HistoricalExecutionStres
     """Recompute the canonical stress outcome digest, excluding only ``outcome_digest``."""
 
     return edge_payload_digest(_to_payload(outcome), _STRESS_DIGEST_FIELD)
+
+
+# --- governed paper admission (GOVERNED_PAPER_ADMISSION_HOOKS_V1) -----------------------------------------------------
+
+HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v1"
+_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION
+_GOVERNED_SCHEMA_VERSION = "historical-execution-governed-paper-outcome.v1"
+_GOVERNED_DIGEST_FIELD = "outcome_digest"
+_GOVERNED_REASON_PREFIX = "governed_paper_"
+# The intent of the last decision is PENDING only when the evaluation end, not the market, left it unfilled.
+_PENDING_REASONS = frozenset({"execution_window_closed", "no_eligible_book_observation"})
+
+
+@dataclass(frozen=True)
+class HistoricalExecutionAdmissionWindow:
+    """One declared admission window ``[window_start_ns, window_end_ns)``; decimals are canonical scale-18 texts.
+
+    The ceilings bound the post-fill position of an intent decided inside the window (long: ``max_long_quantity``,
+    short: ``max_short_quantity``). ``reservation_price`` bounds ``filled × price`` by ``requested × reservation_price``
+    for every fill of an intent this window decided, wherever that fill executes.
+    """
+
+    window_start_ns: int
+    window_end_ns: int
+    max_long_quantity: str
+    max_short_quantity: str
+    reservation_price: str
+
+
+@dataclass(frozen=True)
+class HistoricalExecutionAdmissionSchedule:
+    """One neutral declared admission schedule: ordered, disjoint windows and an optional invalidation instant."""
+
+    schema_version: str
+    schedule_id: str
+    windows: tuple[HistoricalExecutionAdmissionWindow, ...]
+    invalidated_from_ns: int | None
+
+
+HISTORICAL_EXECUTION_GOVERNED_PAPER_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
+    ("paper_only", True),
+    ("execution_authorized", False),
+    ("venue_fill_truth_proven", False),
+    ("venue_orders_created", False),
+    ("real_orders_enabled", False),
+    ("real_money_enabled", False),
+    ("live_ready", False),
+    ("shadow_ready", False),
+    ("operational_readiness", False),
+    ("edge_proven", False),
+    ("profitability_proven", False),
+)
+
+
+@dataclass(frozen=True)
+class HistoricalExecutionGovernedPaperOutcome:
+    """This engine's re-run of one authenticated READY + PASS result under one declared admission schedule.
+
+    ``simulated`` is False exactly when the governed run could not be computed (``reason_codes`` says why); its ledgers
+    are then empty. ``governance_rejected_fill_digests`` are the fills the schedule refused, and
+    ``pending_decision_sequence`` names the last decision when only the evaluation end left its intent unfilled. A
+    deterministic simulation: never a venue fill, an execution permission or readiness.
+    """
+
+    schema_version: str
+    schedule: HistoricalExecutionAdmissionSchedule
+    schedule_digest: str
+    baseline_result_id: str
+    baseline_result_digest: str
+    run_digest: str
+    dataset_digest: str
+    economics_policy_digest: str
+    instrument: str
+    evaluation_start_ns: int
+    evaluation_end_ns: int
+    simulated: bool
+    intents: tuple[HistoricalExecutionIntent, ...]
+    fills: tuple[HistoricalExecutionFill, ...]
+    position_transitions: tuple[HistoricalExecutionPositionTransition, ...]
+    fee_cashflows: tuple[HistoricalExecutionFeeCashflow, ...]
+    funding_cashflows: tuple[HistoricalExecutionFundingCashflow, ...]
+    valuations: tuple[HistoricalExecutionValuation, ...]
+    trades: tuple[HistoricalExecutionTrade, ...]
+    terminal_state: HistoricalExecutionTerminalState | None
+    intent_ledger_digest: str
+    fill_ledger_digest: str
+    position_transition_ledger_digest: str
+    fee_ledger_digest: str
+    funding_ledger_digest: str
+    valuation_ledger_digest: str
+    trade_ledger_digest: str
+    governance_rejected_fill_digests: tuple[str, ...]
+    pending_decision_sequence: int | None
+    pending_intent_digest: str | None
+    reason_codes: tuple[str, ...]
+    outcome_digest: str
+    paper_only: bool = True
+    execution_authorized: bool = False
+    venue_fill_truth_proven: bool = False
+    venue_orders_created: bool = False
+    real_orders_enabled: bool = False
+    real_money_enabled: bool = False
+    live_ready: bool = False
+    shadow_ready: bool = False
+    operational_readiness: bool = False
+    edge_proven: bool = False
+    profitability_proven: bool = False
+
+
+@dataclass(frozen=True)
+class _Window:
+    start: int
+    end: int
+    max_long: Fraction
+    max_short: Fraction
+    reservation_price: Fraction
+
+
+class _GovernedPaperSimulation(_Simulation):
+    """The historical simulation with one declared admission schedule applied at its two admission hooks."""
+
+    def __init__(self, *, schedule: HistoricalExecutionAdmissionSchedule, **arguments: object) -> None:
+        self.windows = tuple(
+            _Window(
+                item.window_start_ns,
+                item.window_end_ns,
+                Fraction(item.max_long_quantity),
+                Fraction(item.max_short_quantity),
+                Fraction(item.reservation_price),
+            )
+            for item in schedule.windows
+        )
+        self.window_starts = [item.start for item in self.windows]
+        self.invalidated_from = schedule.invalidated_from_ns
+        super().__init__(**arguments)  # type: ignore[arg-type]
+
+    def _window_index(self, time_ns: int) -> int | None:
+        index = bisect.bisect_right(self.window_starts, time_ns) - 1
+        if index < 0 or time_ns >= self.windows[index].end:
+            return None
+        return index
+
+    def _invalidated(self, time_ns: int) -> bool:
+        return self.invalidated_from is not None and self.invalidated_from <= time_ns
+
+    def _intent_admission(self, intent: _Intent) -> str | None:
+        decided = intent.record.decision_time_ns
+        index = self._window_index(decided)
+        if index is None:
+            return "governed_paper_no_cycle_authority"
+        if self._invalidated(decided):
+            return "governed_paper_lifecycle_invalidated"
+        window = self.windows[index]
+        buying = intent.record.side is HistoricalExecutionSide.BUY
+        if (window.max_long if buying else window.max_short) <= 0:
+            return "governed_paper_direction_not_authorized"
+        actual = self.position.quantity
+        post = actual + intent.requested if buying else actual - intent.requested
+        if actual != 0 and abs(post) > abs(actual):
+            return "governed_paper_same_side_add_unsupported"
+        if post > window.max_long or -post > window.max_short:
+            return "governed_paper_unit_ceiling_exceeded"
+        return None
+
+    def _fill_admission(self, intent: _Intent, execution_time_ns: int, price: Fraction, filled: Fraction) -> str | None:
+        index = self._window_index(execution_time_ns)
+        if index is None:
+            return "governed_paper_no_cycle_authority_at_fill"
+        if self._invalidated(execution_time_ns):
+            return "governed_paper_lifecycle_invalidated_before_fill"
+        deciding = self._window_index(intent.record.decision_time_ns)
+        if deciding is None or any(
+            self.windows[item].end != self.windows[item + 1].start for item in range(deciding, index)
+        ):
+            return "governed_paper_cycle_authority_discontinuous"
+        if filled * price > intent.requested * self.windows[deciding].reservation_price:
+            return "governed_paper_price_ceiling_exceeded"
+        return None
+
+
+def canonical_historical_execution_admission_schedule(value: object) -> HistoricalExecutionAdmissionSchedule:
+    """Validate one declared admission schedule exactly: types, canonical decimals and ordered disjoint windows."""
+
+    if type(value) is not HistoricalExecutionAdmissionSchedule:
+        raise _fail("admission_schedule_malformed")
+    if type(value.schema_version) is not str or value.schema_version != _SCHEDULE_SCHEMA_VERSION:
+        raise _fail("admission_schedule_malformed:schema_version")
+    _require_text(value.schedule_id, "schedule_id")
+    if type(value.windows) is not tuple:
+        raise _fail("admission_schedule_malformed:windows")
+    previous_end: int | None = None
+    for window in value.windows:
+        if type(window) is not HistoricalExecutionAdmissionWindow:
+            raise _fail("admission_schedule_malformed:window")
+        for name in ("window_start_ns", "window_end_ns"):
+            if not historical_execution_wire_int_is_valid(getattr(window, name), minimum=0):
+                raise _fail(f"admission_schedule_malformed:{name}")
+        for name in ("max_long_quantity", "max_short_quantity", "reservation_price"):
+            if not historical_execution_decimal_is_canonical(getattr(window, name)):
+                raise _fail(f"admission_schedule_malformed:{name}")
+        if window.window_end_ns <= window.window_start_ns:
+            raise _fail("admission_schedule_invalid:window_empty")
+        if previous_end is not None and window.window_start_ns < previous_end:
+            raise _fail("admission_schedule_invalid:windows_not_ordered_disjoint")
+        if Fraction(window.max_long_quantity) < 0 or Fraction(window.max_short_quantity) < 0:
+            raise _fail("admission_schedule_invalid:quantity_ceiling_negative")
+        if Fraction(window.reservation_price) <= 0:
+            raise _fail("admission_schedule_invalid:reservation_price_not_positive")
+        previous_end = window.window_end_ns
+    invalidated = value.invalidated_from_ns
+    if invalidated is not None and not historical_execution_wire_int_is_valid(invalidated, minimum=0):
+        raise _fail("admission_schedule_malformed:invalidated_from_ns")
+    return value
+
+
+def historical_execution_admission_schedule_digest(schedule: HistoricalExecutionAdmissionSchedule) -> str:
+    """The canonical digest of one validated admission schedule."""
+
+    return edge_sha256_text(
+        edge_canonical_json(_to_payload(canonical_historical_execution_admission_schedule(schedule)))
+    )
+
+
+@dataclass(frozen=True)
+class _GovernedBaseline:
+    """The authorities a governed re-run consumes, re-derived from the authenticated result's own bindings."""
+
+    run: HistoricalDecisionRun
+    policy: HistoricalExecutionEconomicsPolicy
+    dataset: HistoricalPitDataset
+    unit_size: Fraction
+    max_leverage: Fraction
+
+
+def _governed_baseline(result: object, expected_result_digest: object) -> _GovernedBaseline:
+    if type(result) is not HistoricalExecutionEconomicsResult:
+        raise _fail("governed_paper_baseline_malformed")
+    verification = verify_historical_execution_economics(result)
+    if (
+        not verification.intact
+        or type(expected_result_digest) is not str
+        or verification.recomputed_digest != expected_result_digest
+    ):
+        raise _fail("governed_paper_baseline_not_authentic")
+    if (
+        result.status is not EdgeEvidenceStatus.READY
+        or result.gate_verdict is not EdgeGateVerdict.PASS
+        or result.simulated_economics_computed is not True
+    ):
+        raise _fail("governed_paper_baseline_not_computed")
+    codes, run = _run_authority(result.run_binding, correlation_id=result.correlation_id)
+    policy_codes, policy = _policy_authority(result.policy_binding)
+    context = None if run is None else _run_context(run)[1]
+    unit_size = None if run is None else _unit_size(run)
+    max_leverage = None if context is None else _max_leverage(context.spec)[0]
+    if (
+        codes
+        or policy_codes
+        or run is None
+        or policy is None
+        or context is None
+        or unit_size is None
+        or max_leverage is None
+    ):
+        raise _fail("governed_paper_baseline_authority_unavailable")
+    return _GovernedBaseline(run, policy, context.dataset, unit_size, max_leverage)
+
+
+def _pending_intent(run: HistoricalDecisionRun, ledgers: _Ledgers) -> HistoricalExecutionIntent | None:
+    """The intent of the LAST decision when only the evaluation end left it unfilled; otherwise None."""
+
+    if not run.decisions or not ledgers.intents:
+        return None
+    intent = ledgers.intents[-1]
+    if intent.decision_sequence != run.decisions[-1].decision_sequence:
+        return None
+    outcomes = [item for item in ledgers.fills if item.intent_id == intent.intent_id]
+    if (
+        not outcomes
+        or outcomes[-1].outcome is not HistoricalExecutionFillOutcome.UNFILLED
+        or outcomes[-1].reason not in _PENDING_REASONS
+    ):
+        return None
+    return intent
+
+
+def _governed_outcome(
+    result: HistoricalExecutionEconomicsResult,
+    schedule: HistoricalExecutionAdmissionSchedule,
+    *,
+    simulated: bool,
+    ledgers: _Ledgers,
+    pending: HistoricalExecutionIntent | None,
+    reasons: Sequence[str],
+) -> HistoricalExecutionGovernedPaperOutcome:
+    refused = tuple(
+        item.fill_digest
+        for item in ledgers.fills
+        if item.outcome is HistoricalExecutionFillOutcome.REJECTED and item.reason.startswith(_GOVERNED_REASON_PREFIX)
+    )
+    seed = HistoricalExecutionGovernedPaperOutcome(
+        schema_version=_GOVERNED_SCHEMA_VERSION,
+        schedule=schedule,
+        schedule_digest=historical_execution_admission_schedule_digest(schedule),
+        baseline_result_id=result.result_id,
+        baseline_result_digest=result.result_digest,
+        run_digest=result.run_digest,
+        dataset_digest=result.dataset_digest,
+        economics_policy_digest=result.economics_policy_digest,
+        instrument=result.instrument,
+        evaluation_start_ns=result.evaluation_start_ns,
+        evaluation_end_ns=result.evaluation_end_ns,
+        simulated=simulated,
+        intents=tuple(ledgers.intents),
+        fills=tuple(ledgers.fills),
+        position_transitions=tuple(ledgers.transitions),
+        fee_cashflows=tuple(ledgers.fees),
+        funding_cashflows=tuple(ledgers.funding),
+        valuations=tuple(ledgers.valuations),
+        trades=tuple(ledgers.trades),
+        terminal_state=ledgers.terminal,
+        intent_ledger_digest=_ledger_digest(ledgers.intents),
+        fill_ledger_digest=_ledger_digest(ledgers.fills),
+        position_transition_ledger_digest=_ledger_digest(ledgers.transitions),
+        fee_ledger_digest=_ledger_digest(ledgers.fees),
+        funding_ledger_digest=_ledger_digest(ledgers.funding),
+        valuation_ledger_digest=_ledger_digest(ledgers.valuations),
+        trade_ledger_digest=_ledger_digest(ledgers.trades),
+        governance_rejected_fill_digests=refused,
+        pending_decision_sequence=None if pending is None else pending.decision_sequence,
+        pending_intent_digest=None if pending is None else pending.intent_digest,
+        reason_codes=_sorted_unique(reasons),
+        outcome_digest="",
+    )
+    return replace(seed, outcome_digest=edge_payload_digest(_to_payload(seed), _GOVERNED_DIGEST_FIELD))
+
+
+def simulate_historical_execution_governed_paper(
+    result: HistoricalExecutionEconomicsResult,
+    *,
+    expected_result_digest: str,
+    schedule: HistoricalExecutionAdmissionSchedule,
+) -> HistoricalExecutionGovernedPaperOutcome:
+    """Re-run this engine under one declared admission schedule over an authenticated READY + PASS result.
+
+    The result is re-proven against the caller's anchor and its run, policy, dataset and frozen decision trace are
+    re-derived from its own bindings, never supplied. A malformed schedule, a window outside the evaluation window or a
+    non-authentic, non-computed result raises ``HistoricalExecutionEconomicsError``. A governed run that cannot be
+    computed (an unrepresentable or stale value on its own path) is ``simulated=False`` with its reason. Pure.
+    """
+
+    schedule = canonical_historical_execution_admission_schedule(schedule)
+    baseline = _governed_baseline(result, expected_result_digest)
+    if any(
+        item.window_start_ns < result.evaluation_start_ns or item.window_end_ns > result.evaluation_end_ns
+        for item in schedule.windows
+    ):
+        raise _fail("admission_schedule_outside_evaluation_window")
+    try:
+        ledgers = _GovernedPaperSimulation(
+            schedule=schedule,
+            run=baseline.run,
+            run_digest=result.run_digest,
+            dataset=baseline.dataset,
+            policy=baseline.policy,
+            unit_size=baseline.unit_size,
+            max_leverage=baseline.max_leverage,
+            mark_series=result.mark_series_id,
+            book_series=result.order_book_series_id,
+        ).run_all()
+    except _EconomicFailure as failure:
+        return _governed_outcome(
+            result, schedule, simulated=False, ledgers=_Ledgers(), pending=None, reasons=(_reason(failure.code),)
+        )
+    return _governed_outcome(
+        result, schedule, simulated=True, ledgers=ledgers, pending=_pending_intent(baseline.run, ledgers), reasons=()
+    )
+
+
+def historical_execution_governed_paper_outcome_to_dict(
+    outcome: HistoricalExecutionGovernedPaperOutcome,
+) -> dict[str, object]:
+    """Canonical JSON-ready mapping of a governed outcome, including its self-digest."""
+
+    return _to_payload(outcome)
+
+
+def historical_execution_governed_paper_outcome_digest(outcome: HistoricalExecutionGovernedPaperOutcome) -> str:
+    """Recompute the canonical governed outcome digest, excluding only ``outcome_digest``."""
+
+    return edge_payload_digest(_to_payload(outcome), _GOVERNED_DIGEST_FIELD)
+
+
+# Identifiers derived from the run digest: a longer replay is another run, so they differ by construction.
+_RUN_DERIVED_FIELDS: dict[type, tuple[str, ...]] = {
+    HistoricalExecutionIntent: ("intent_id", "intent_digest"),
+    HistoricalExecutionFill: ("fill_id", "intent_id", "intent_digest", "fill_digest"),
+    HistoricalExecutionPositionTransition: ("transition_id", "fill_digest", "transition_digest"),
+    HistoricalExecutionFeeCashflow: ("fee_id", "fill_digest", "fee_digest"),
+    HistoricalExecutionFundingCashflow: ("cashflow_id", "cashflow_digest"),
+    HistoricalExecutionValuation: ("trigger_digest", "valuation_digest"),
+    HistoricalExecutionTrade: ("trade_id", "terminal_valuation_digest", "trade_digest"),
+}
+_TRADE_DIGEST_LISTS = ("entry_fill_digests", "exit_fill_digests", "fee_digests", "funding_cashflow_digests")
+
+
+def _content(record: object) -> dict[str, object]:
+    """One economic record without its run-derived identifiers; a trade keeps only the counts of its digest lists."""
+
+    payload = _to_payload(record)
+    for name in _RUN_DERIVED_FIELDS[type(record)]:
+        del payload[name]
+    if type(record) is HistoricalExecutionTrade:
+        for name in _TRADE_DIGEST_LISTS:
+            payload[name] = len(getattr(record, name))
+    return payload
+
+
+def historical_execution_governed_paper_prefix_digest(
+    outcome: HistoricalExecutionGovernedPaperOutcome,
+    *,
+    before_ns: int,
+    excluded_decision_sequences: tuple[int, ...] = (),
+) -> str:
+    """The content identity of every governed economic event strictly before ``before_ns``.
+
+    Intents decided, fill outcomes recorded (at their execution, else their decision instant), transitions, fees,
+    funding settlements and valuations strictly before the instant, and the trades closed before it, each without its
+    run-derived identifiers. Every fill outcome of an excluded decision is left out: that is the intent the shorter
+    replay's end left pending. Open trades and the terminal state are never part of a prefix.
+    """
+
+    if type(outcome) is not HistoricalExecutionGovernedPaperOutcome or outcome.simulated is not True:
+        raise _fail("prefix_outcome_invalid")
+    if not historical_execution_wire_int_is_valid(before_ns, minimum=0):
+        raise _fail("prefix_instant_invalid")
+    if type(excluded_decision_sequences) is not tuple or any(
+        type(item) is not int for item in excluded_decision_sequences
+    ):
+        raise _fail("prefix_excluded_decisions_malformed")
+    excluded = set(excluded_decision_sequences)
+    decided = {item.intent_id: item for item in outcome.intents}
+    fills = []
+    for item in outcome.fills:
+        intent = decided[item.intent_id]
+        instant = intent.decision_time_ns if item.execution_time_ns is None else item.execution_time_ns
+        if intent.decision_sequence not in excluded and instant < before_ns:
+            fills.append(_content(item))
+    prefix = {
+        "intents": [_content(item) for item in outcome.intents if item.decision_time_ns < before_ns],
+        "fills": fills,
+        "position_transitions": [_content(item) for item in outcome.position_transitions if item.time_ns < before_ns],
+        "fee_cashflows": [_content(item) for item in outcome.fee_cashflows if item.time_ns < before_ns],
+        "funding_cashflows": [
+            _content(item) for item in outcome.funding_cashflows if item.liability_time_ns < before_ns
+        ],
+        "valuations": [_content(item) for item in outcome.valuations if item.time_ns < before_ns],
+        "closed_trades": [
+            _content(item)
+            for item in outcome.trades
+            if item.status is HistoricalExecutionTradeStatus.CLOSED
+            and item.end_time_ns is not None
+            and item.end_time_ns < before_ns
+        ],
+    }
+    return edge_sha256_text(edge_canonical_json(prefix))
+
+
+def historical_execution_latest_visible_mark(
+    dataset: HistoricalPitDataset,
+    *,
+    policy: HistoricalExecutionEconomicsPolicy,
+    instrument: str,
+    at_ns: int,
+) -> tuple[str, str] | None:
+    """``(mark record digest, mark price)`` under this engine's own valuation rule at ``at_ns``, or None.
+
+    The latest mark of the dataset's one governed mark series visible at or before ``at_ns`` (by event time, then
+    sequence); None when there is none, it is older than ``max_mark_staleness_ns`` or its price is not positive.
+    Malformed or non-authentic inputs raise ``HistoricalExecutionEconomicsError``.
+    """
+
+    if type(dataset) is not HistoricalPitDataset or not verify_historical_pit_dataset(dataset).intact:
+        raise _fail("visible_mark_input_malformed")
+    if (
+        type(policy) is not HistoricalExecutionEconomicsPolicy
+        or not verify_historical_execution_economics_policy(policy).intact
+    ):
+        raise _fail("visible_mark_input_malformed")
+    if type(instrument) is not str or not historical_execution_wire_int_is_valid(at_ns, minimum=0):
+        raise _fail("visible_mark_instant_invalid")
+    codes, series = _select_series(dataset, key=policy.mark_data_key, instrument=instrument, policy=policy)
+    if codes:
+        raise _fail("visible_mark_series_unavailable")
+    best: HistoricalPitRecord | None = None
+    for record in dataset.records:
+        visible = _visibility(record) if record.series_id == series and record.instrument == instrument else None
+        if visible is None or visible > at_ns:
+            continue
+        if best is None or (record.event_time_ns, record.sequence_id) > (best.event_time_ns, best.sequence_id):
+            best = record
+    if best is None or at_ns - best.event_time_ns > policy.max_mark_staleness_ns:
+        return None
+    values = [item.value for item in best.values if item.name == policy.mark_value_name]
+    if len(values) != 1 or not historical_execution_decimal_is_canonical(values[0]):
+        raise _fail("visible_mark_value_malformed")
+    if Fraction(values[0]) <= 0:
+        return None
+    return best.record_digest, values[0]
 
 
 # --- result -------------------------------------------------------------------------------------------------------------
@@ -2508,13 +3064,18 @@ def verify_historical_execution_economics(result: object) -> EdgeEvidenceVerific
 
 
 __all__ = [
+    "HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION",
+    "HISTORICAL_EXECUTION_GOVERNED_PAPER_NON_CLAIM_FLAGS",
     "HISTORICAL_EXECUTION_NON_CLAIM_FLAGS",
+    "HistoricalExecutionAdmissionSchedule",
+    "HistoricalExecutionAdmissionWindow",
     "HistoricalExecutionEconomicsError",
     "HistoricalExecutionEconomicsResult",
     "HistoricalExecutionFeeCashflow",
     "HistoricalExecutionFill",
     "HistoricalExecutionFillOutcome",
     "HistoricalExecutionFundingCashflow",
+    "HistoricalExecutionGovernedPaperOutcome",
     "HistoricalExecutionIntent",
     "HistoricalExecutionIntentAction",
     "HistoricalExecutionPositionTransition",
@@ -2529,14 +3090,21 @@ __all__ = [
     "HistoricalExecutionValuation",
     "HistoricalExecutionValuationKind",
     "build_historical_execution_economics",
+    "canonical_historical_execution_admission_schedule",
     "canonical_historical_execution_stress_scenario",
+    "historical_execution_admission_schedule_digest",
     "historical_execution_economics_digest",
     "historical_execution_economics_from_payload",
     "historical_execution_economics_payload_is_well_formed",
     "historical_execution_economics_to_dict",
+    "historical_execution_governed_paper_outcome_digest",
+    "historical_execution_governed_paper_outcome_to_dict",
+    "historical_execution_governed_paper_prefix_digest",
+    "historical_execution_latest_visible_mark",
     "historical_execution_stress_outcome_digest",
     "historical_execution_stress_outcome_to_dict",
     "historical_execution_stress_scenario_digest",
+    "simulate_historical_execution_governed_paper",
     "simulate_historical_execution_stress",
     "verify_historical_execution_economics",
 ]

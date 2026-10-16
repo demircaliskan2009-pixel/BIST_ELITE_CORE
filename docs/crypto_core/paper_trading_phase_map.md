@@ -313,3 +313,17 @@ head-pinned merges; `main` @ `e278293cd5537cfa7174db79a1238a686199275a` after #3
   funding pilot slices → completion decision **v3 only if all required proofs exist** (machine-proven
   30-day gate + enforced secondary metrics + explicit human authorization). Contract details:
   `docs/crypto_core/fable_exit_contract_index.md` (archived design doctrine, never current-state proof).
+
+## 12. Governed paper execution (recorded 2026-10-16)
+
+`GOVERNED_PAPER_TYPED_PROVENANCE_V2` connects the authenticated EF-7 v2 admitted variant to governed, sealed, paper-only
+days on the one economics engine (design: `multi_sleeve_risk_governance_design.md` §7):
+
+- built (SYNTHETIC CONSTRUCTION ONLY): the engine's two refuse-only admission hooks and governed outcome, the typed
+  identity module, the genesis and per-cycle authority, the day seal and the lineage evidence;
+- the generic paper chain is a verified pass-through projection of the engine, never a second economics; RG-3 consumes
+  exactly the sealed projected history;
+- REAL_PAPER_EXECUTION stays BLOCKED until the human commitments C1-C9 and the Deep Research result D1 exist
+  (`governance_decision_framework.md` §6a); every test value is synthetic and every test approval a fixture;
+- non-claims: no order, capital, venue fill, scheduler, live or shadow path, readiness or Stage-4 completion, and the
+  `E_k` instants are injected UTC coordinates, not machine-time proof.
