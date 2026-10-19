@@ -22,6 +22,11 @@ What it enforces:
   marker and a new snapshot; a snapshot without a preceding disconnect, a regression, a replay, a malformed native id
   triple, a crossed book or an invalid level rejects the whole ingress. Native update ids are taken from the source,
   never generated: the book record identity IS the native final update id;
+* native identity across segments - a resync never erases authenticated evidence: every applied native identity keeps
+  its native content, so any later delta reusing it with different content rejects BEFORE it can touch the book, and an
+  equivalent replay of the identity a resync snapshot already reflects never re-mutates the book or emits a record;
+  snapshot ids never regress, and a snapshot at the retained native id must equal the retained state wherever both are
+  exact (inside both horizons);
 * genuine depth - a book state is admitted only with at least 50 bid and 50 ask levels whose 50th level lies inside the
   anchoring snapshot's price horizon (levels beyond it are unknown, never assumed empty);
 * time - source event time, provider receipt time and finality stay separate inputs. A record is never available
@@ -116,6 +121,8 @@ _CONTINUITY_PROFILE: dict[str, str] = {
     "chain_rule": "previous_final_update_id_eq_prior_applied_final_update_id",
     "delta_id_rule": "previous_final_update_id_lt_first_update_id_le_final_update_id",
     "regression_rule": "final_update_id_le_prior_applied_rejects",
+    "replay_rule": "a_reused_applied_native_id_must_be_content_equivalent_and_never_remutates_the_book",
+    "snapshot_identity_rule": "snapshot_ids_never_regress_and_one_at_the_retained_id_must_equal_it_inside_both_horizons",
     "gap_rule": "predecessor_mismatch_invalidates_until_disconnect_then_snapshot",
     "resync_rule": "snapshot_only_at_input_start_or_after_disconnect",
     "quantity_rule": "absolute_quantity_zero_removes_absent_removal_is_noop",
@@ -783,6 +790,17 @@ class _Segment:
 
 
 @dataclass
+class _Retained:
+    """The natively authenticated book state kept across a disconnect: its native id, levels and exact horizon."""
+
+    native_id: int
+    bids: _BookSide
+    asks: _BookSide
+    horizon_bid: Fraction
+    horizon_ask: Fraction
+
+
+@dataclass
 class _BookOutcome:
     records: list[HistoricalPitRecord] = field(default_factory=list)
     segments: list[ObservedBookSegment] = field(default_factory=list)
@@ -809,9 +827,13 @@ class _BookReplay:
         self.horizon_bid = Fraction(0)
         self.horizon_ask = Fraction(0)
         self.last_applied = -1
-        self.last_emitted = -1
         self.last_event_time = 0
         self.last_receipt = 0
+        # Cross-segment native evidence that a resync must never erase: every applied native identity with its native
+        # content, the native id of the latest authenticated book state, and that state kept across a disconnect.
+        self.applied: dict[int, str] = {}
+        self.authenticated_id = -1
+        self.retained: _Retained | None = None
 
     def fail(self, code: str) -> bool:
         self.outcome.codes.append(_reason(code))
@@ -850,6 +872,7 @@ class _BookReplay:
         self.outcome.disconnects += 1
         if self.segment is not None:
             self.close("gap_then_disconnect" if self.segment.mode == _INVALIDATED else "disconnect")
+            self.retained = _Retained(self.authenticated_id, self.bids, self.asks, self.horizon_bid, self.horizon_ask)
         self.outcome.unanchored += len(self.buffer)
         self.buffer = []
         self.bids, self.asks = _BookSide(), _BookSide()
@@ -864,12 +887,20 @@ class _BookReplay:
         invalid = _snapshot_invalid(bids, asks)
         if invalid is not None:
             return self.fail(f"book_snapshot_invalid:{index}:{invalid}")
-        if snapshot.last_update_id < self.last_applied:
+        if snapshot.last_update_id < self.authenticated_id:
             return self.fail(f"book_snapshot_regression:{index}")
+        retained = self.retained
+        if (
+            retained is not None
+            and snapshot.last_update_id == retained.native_id
+            and _conflicts_with_retained(retained, bids, asks)
+        ):
+            return self.fail(f"book_snapshot_conflict:{index}")
         for side, levels in ((self.bids, bids), (self.asks, asks)):
             for price, price_text, quantity, quantity_text in levels:
                 side.put(price, price_text, quantity, quantity_text)
         self.horizon_bid, self.horizon_ask = self.bids.keys[0], self.asks.keys[-1]
+        self.authenticated_id = snapshot.last_update_id
         segment = _Segment(anchor=snapshot)
         self.segment = segment
         buffered, self.buffer = self.buffer, []
@@ -878,6 +909,9 @@ class _BookReplay:
     def delta(self, index: int, delta: ObservedBookDelta) -> bool:
         if not (delta.previous_final_update_id < delta.first_update_id <= delta.final_update_id):
             return self.fail(f"book_delta_sequence_malformed:{index}")
+        known = self.applied.get(delta.final_update_id)
+        if known is not None and known != _native_delta_digest(delta):
+            return self.fail(f"book_native_replay_conflict:{index}")
         if self.segment is None:
             self.buffer.append((index, delta))
             return True
@@ -893,6 +927,12 @@ class _BookReplay:
                 return True
             if not (delta.first_update_id <= segment.anchor.last_update_id <= delta.final_update_id):
                 return self.fail(f"book_snapshot_alignment_failed:{index}")
+            if delta.final_update_id in self.applied:
+                # A content-equivalent replay (proven at entry) of the applied native identity the snapshot already
+                # reflects: it re-aligns the chain and never mutates the reconstructed book or emits a record.
+                segment.mode = _APPLYING
+                segment.reobserved += 1
+                return True
         elif delta.final_update_id <= self.last_applied:
             return self.fail(f"book_sequence_regression:{index}")
         elif delta.previous_final_update_id != self.last_applied:
@@ -919,6 +959,8 @@ class _BookReplay:
             return self.fail(f"book_crossed:{index}")
         segment.mode = _APPLYING
         self.last_applied, self.last_event_time = delta.final_update_id, delta.event_time_ns
+        self.applied[delta.final_update_id] = _native_delta_digest(delta)
+        self.authenticated_id = delta.final_update_id
         segment.applied += 1
         segment.first = delta.final_update_id if segment.first is None else segment.first
         segment.last = delta.final_update_id
@@ -927,8 +969,6 @@ class _BookReplay:
             segment.depth += 1
         elif self.bids.keys[-depth] < self.horizon_bid or self.asks.keys[depth - 1] > self.horizon_ask:
             segment.horizon += 1
-        elif delta.final_update_id <= self.last_emitted:
-            segment.reobserved += 1
         else:
             self.emit(delta, segment)
         return True
@@ -948,7 +988,6 @@ class _BookReplay:
                 values=self.book_values(),
             )
         )
-        self.last_emitted = delta.final_update_id
         segment.emitted += 1
 
     def book_values(self) -> tuple[HistoricalPitValue, ...]:
@@ -992,6 +1031,39 @@ class _BookReplay:
             )
         )
         self.segment = None
+
+
+def _native_delta_digest(delta: ObservedBookDelta) -> str:
+    """The native content of one diff event: its update ids, exchange event time and level sets (receipt is not native)."""
+
+    return edge_sha256_text(
+        edge_canonical_json(
+            {
+                "first_update_id": delta.first_update_id,
+                "final_update_id": delta.final_update_id,
+                "previous_final_update_id": delta.previous_final_update_id,
+                "event_time_ns": delta.event_time_ns,
+                "bids": sorted([level.price, level.quantity] for level in delta.bids),
+                "asks": sorted([level.price, level.quantity] for level in delta.asks),
+            }
+        )
+    )
+
+
+def _conflicts_with_retained(
+    retained: _Retained,
+    bids: tuple[tuple[Fraction, str, Fraction, str], ...],
+    asks: tuple[tuple[Fraction, str, Fraction, str], ...],
+) -> bool:
+    """A snapshot at the retained native id must equal the retained state wherever both are exact (both horizons)."""
+
+    floor = max(retained.horizon_bid, min(price for price, _, _, _ in bids))
+    ceiling = min(retained.horizon_ask, max(price for price, _, _, _ in asks))
+    kept_bids = {price: retained.bids.texts[price][1] for price in retained.bids.keys if price >= floor}
+    kept_asks = {price: retained.asks.texts[price][1] for price in retained.asks.keys if price <= ceiling}
+    new_bids = {price: quantity_text for price, _, _, quantity_text in bids if price >= floor}
+    new_asks = {price: quantity_text for price, _, _, quantity_text in asks if price <= ceiling}
+    return kept_bids != new_bids or kept_asks != new_asks
 
 
 def _snapshot_invalid(

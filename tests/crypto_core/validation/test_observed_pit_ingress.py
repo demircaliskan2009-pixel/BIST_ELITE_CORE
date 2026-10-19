@@ -388,7 +388,7 @@ def test_same_inputs_replay_to_identical_evidence_and_dataset() -> None:
 
 
 def test_the_evidence_binds_the_exact_capture_not_only_its_emitted_records() -> None:
-    tail = chain_steps(3, start=STEPS)
+    tail = chain_steps(3, start=STEPS, anchor=5_000)  # fresh native ids: never anchored, never applied
     altered = (replace(tail[0], bids=(lvl(Fraction("99.95"), 7),)), *tail[1:])
     events = (snapshot(), *chain_steps(), ObservedDisconnect(BOOK))
     first, second = with_book(*events, *tail), with_book(*events, *altered)
@@ -475,6 +475,132 @@ def test_a_snapshot_without_a_disconnect_is_an_unjustified_resync() -> None:
         with_book(snapshot(), *deltas, snapshot(last_update_id=5_000, receipt=BASE + 50_000)),
         "book_unjustified_resync:5",
     )
+
+
+# --- B1: native identity across segments (SYNTHETIC_TEST_ONLY) ---------------------------------------------------------
+
+FIRST = step(0, first=999, final=1_001, previous=998)  # the applied native identity 1001: best bid 99.95 quantity 101
+
+
+def fixed_chain(previous: int, start: int, count: int) -> tuple[ObservedBookDelta, ...]:
+    """Deltas that restate only the best ask quantity, so 99.95 stays the best bid (the B1 consumer-visible level)."""
+
+    deltas = []
+    for j in range(start, start + count):
+        bump = (lvl(Fraction("100.05"), 100 + j % 2),)
+        deltas.append(step(j, first=previous + 1, final=previous + 2, previous=previous, bids=(), asks=bump))
+        previous += 2
+    return tuple(deltas)
+
+
+def resynced(
+    *, best_bid_quantity: object = 101, levels: int = LEVELS, last_update_id: int = 1_001, receipt: int = BASE + 600
+) -> ObservedBookSnapshot:
+    """A resync snapshot; by default exactly the state the applied identity 1001 produced."""
+
+    bids = tuple(lvl(Fraction("99.95") - TICK * i, best_bid_quantity if i == 0 else 100) for i in range(levels))
+    return snapshot(levels=levels, last_update_id=last_update_id, receipt=receipt, bids=bids)
+
+
+def replay(quantity: object = 101, **changes: object) -> ObservedBookDelta:
+    """A redelivery of the applied native identity 1001, received after the resync snapshot."""
+
+    redelivered = step(
+        0, first=999, final=1_001, previous=998, receipt=BASE + 700, bids=(lvl(Fraction("99.95"), quantity),)
+    )
+    return replace(redelivered, **changes)
+
+
+def test_b1_a_conflicting_same_id_replay_after_resync_is_rejected_before_it_touches_the_book() -> None:
+    tail = fixed_chain(1_001, 1, 100)
+    result = with_book(snapshot(), FIRST, ObservedDisconnect(BOOK), resynced(), replay(777), *tail)
+    assert_rejected(result, "book_native_replay_conflict:4")
+    assert [segment.end_reason for segment in result.evidence.book_segments] == ["disconnect"]
+    assert result.evidence.book_record_count == 1
+    for conflicting in (
+        replay(event_time_ns=FIRST.event_time_ns - 1),
+        replay(first_update_id=1_000),
+        replay(previous_final_update_id=997),
+        replay(bids=()),
+        replay(asks=(lvl(Fraction("100.05"), 0),)),
+    ):
+        assert_rejected(
+            with_book(snapshot(), FIRST, ObservedDisconnect(BOOK), resynced(), conflicting, *tail),
+            "book_native_replay_conflict:4",
+        )
+
+
+def test_b1_a_reused_applied_identity_cannot_bypass_the_check_as_buffered_or_stale() -> None:
+    applied = (snapshot(), FIRST, *fixed_chain(1_001, 1, 1))
+    later = resynced(last_update_id=1_005, receipt=BASE + 1_900)
+    buffered = replay(777, receipt_ns=BASE + 1_800)
+    assert_rejected(with_book(*applied, ObservedDisconnect(BOOK), buffered, later), "book_native_replay_conflict:4")
+    stale = replay(777, receipt_ns=BASE + 2_000)
+    assert_rejected(with_book(*applied, ObservedDisconnect(BOOK), later, stale), "book_native_replay_conflict:5")
+    straddle = step(2, first=1_004, final=1_006, previous=1_003, bids=(), asks=(lvl(Fraction("100.05"), 102),))
+    tolerated = with_book(
+        *applied, ObservedDisconnect(BOOK), later, replay(receipt_ns=BASE + 2_000), straddle, *fixed_chain(1_006, 3, 3)
+    )
+    assert tolerated.evidence.status is EdgeEvidenceStatus.READY
+    assert [segment.stale_delta_count for segment in tolerated.evidence.book_segments] == [0, 1]
+    assert [record.sequence_id for record in book_records(tolerated)] == [1_001, 1_003, 1_006, 1_008, 1_010, 1_012]
+
+
+def test_b1_a_resync_snapshot_at_an_authenticated_id_cannot_substitute_different_state() -> None:
+    tail = fixed_chain(1_001, 1, 3)
+    gappy = replace(resynced(), bids=(resynced().bids[0], *resynced().bids[2:]))
+    for conflicting in (resynced(best_bid_quantity=555), snapshot(last_update_id=1_001, receipt=BASE + 600), gappy):
+        assert_rejected(
+            with_book(snapshot(), FIRST, ObservedDisconnect(BOOK), conflicting, *tail), "book_snapshot_conflict:3"
+        )
+    other = snapshot(bids=(lvl(Fraction("99.95"), 5), *snapshot().bids[1:]))
+    assert_rejected(with_book(snapshot(), ObservedDisconnect(BOOK), other, *chain_steps()), "book_snapshot_conflict:2")
+    older = snapshot(last_update_id=999)
+    assert_rejected(
+        with_book(snapshot(), ObservedDisconnect(BOOK), older, *chain_steps()), "book_snapshot_regression:2"
+    )
+
+
+def test_b1_a_resync_that_agrees_inside_both_horizons_and_an_equivalent_replay_keep_book_truth() -> None:
+    tail = fixed_chain(1_001, 1, 100)
+    baseline = with_book(snapshot(), FIRST, *tail)
+    for resync in (resynced(), resynced(levels=LEVELS + 20), resynced(levels=OBSERVED_PIT_BOOK_DEPTH + 10)):
+        result = with_book(snapshot(), FIRST, ObservedDisconnect(BOOK), resync, replay(), *tail)
+        evidence = result.evidence
+        assert evidence.status is EdgeEvidenceStatus.READY, evidence.integrity_reason_codes
+        assert [
+            (segment.applied_delta_count, segment.emitted_record_count, segment.reobserved_state_count)
+            for segment in evidence.book_segments
+        ] == [(1, 1, 0), (100, 100, 1)]
+        if resync.bids == resynced().bids:
+            assert [record.record_digest for record in book_records(result)] == [
+                record.record_digest for record in book_records(baseline)
+            ]
+            assert result.dataset is not None and baseline.dataset is not None
+            assert result.dataset.dataset_digest == baseline.dataset.dataset_digest
+        sequence = [record.sequence_id for record in book_records(result)]
+        assert sequence == sorted(set(sequence)) and sequence.count(1_001) == 1
+        assert values_of(book_records(result)[1])["best_bid_quantity"] == d(101)
+    again = with_book(snapshot(), FIRST, ObservedDisconnect(BOOK), resynced(), replay(), *tail)
+    assert (
+        again.evidence.ingress_digest
+        == with_book(snapshot(), FIRST, ObservedDisconnect(BOOK), resynced(), replay(), *tail).evidence.ingress_digest
+    )
+    events = (snapshot(), FIRST, ObservedDisconnect(BOOK), resynced(), replay(), *tail)
+    assert verify_observed_pit_ingress(again.evidence, inputs(book=book_stream(events=events))).intact is True
+
+
+def test_b1_the_poisoned_capture_never_reaches_the_economics_consumer() -> None:
+    tail = fixed_chain(1_001, 1, 100)
+    poisoned = with_book(snapshot(), FIRST, ObservedDisconnect(BOOK), resynced(), replay(777), *tail)
+    assert poisoned.dataset is None
+    equivalent = with_book(snapshot(), FIRST, ObservedDisconnect(BOOK), resynced(), replay(), *tail)
+    baseline = with_book(snapshot(), FIRST, *tail)
+    assert equivalent.dataset is not None and baseline.dataset is not None
+    assert equivalent.dataset.dataset_digest == baseline.dataset.dataset_digest
+    economics = econ.economics(ingress_world(equivalent))
+    assert (economics.status, economics.gate_verdict) == (EdgeEvidenceStatus.READY, EdgeGateVerdict.PASS)
+    assert economics.result_digest == econ.economics(ingress_world(baseline)).result_digest
 
 
 def test_native_regression_replay_reorder_and_malformed_ids_reject() -> None:
