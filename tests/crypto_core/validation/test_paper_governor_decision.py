@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import FrozenInstanceError, replace
+from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR, ROUND_HALF_EVEN, ROUND_UP, getcontext, localcontext
 from pathlib import Path
 
 import pytest
@@ -222,14 +223,14 @@ def _bridge_signal():
     )
 
 
-def _prior_long():
+def _prior_long(average_entry_price: str = "100"):
     return build_paper_position_state(
         position_state_id="pos-1",
         market_symbol=_SYMBOL,
         side=PaperPositionStateSide.LONG,
         signed_units="10",
         abs_units="10",
-        average_entry_price="100",
+        average_entry_price=average_entry_price,
         transition_count=0,
         correlation_id="corr-pos",
     )
@@ -306,11 +307,11 @@ def _mr_prov() -> PaperSessionSequenceProvenance:
     return PaperSessionSequenceProvenance(session_sequence=session, episodes=tuple(eps))
 
 
-def _aligned():
+def _aligned(average_entry_price: str = "100"):
     capacity = _capacity()
     order_intent = _order_intent_from(capacity, _request(capacity))
     bridge_signal = _bridge_signal()
-    prior = _prior_long()
+    prior = _prior_long(average_entry_price)
     episode_run = run_paper_episode(order_intent, prior, _snapshot(), _policy_fill(), _mark(), **_CHAIN_IDS)  # type: ignore[arg-type]
     fill, transition, new_state, event = _realized_components(order_intent, prior)
     episode = build_paper_end_to_end_episode(
@@ -348,7 +349,17 @@ def _aligned():
 
 
 def _ready_bridge():
-    record, manifest, episode = _aligned()
+    bridge = _ready_bridge_for_entry("100")
+    # The aligned chain produces realized_pnl=-200, closed_units=4, computed_event_count=1.
+    assert bridge.realized_pnl_total == "-200"
+    assert bridge.closed_units_total == "4"
+    assert bridge.computed_event_count == 1
+    return bridge
+
+
+def _ready_bridge_for_entry(average_entry_price: str):
+    """A genuine READY bridge: SELL 4 at 50 closes part of a LONG 10 entered at ``average_entry_price``."""
+    record, manifest, episode = _aligned(average_entry_price)
     journal = EvidenceJournal()
     bridge = append_paper_admission_record_to_evidence_journal(
         journal,
@@ -363,10 +374,6 @@ def _ready_bridge():
         correlation_id=_CORR,
     )
     assert bridge.status is PaperAdmissionLedgerBridgeStatus.READY
-    # The aligned chain produces realized_pnl=-200, closed_units=4, computed_event_count=1.
-    assert bridge.realized_pnl_total == "-200"
-    assert bridge.closed_units_total == "4"
-    assert bridge.computed_event_count == 1
     return bridge
 
 
@@ -510,6 +517,82 @@ def test_policy_snapshot_is_serializer_visible_and_digest_bound() -> None:
     payload = paper_governor_decision_to_dict(decision)
     assert payload["policy_digest"] == policy.policy_digest
     assert payload["policy_id"] == policy.policy_id
+
+
+# --------------------------------------------------------------------------------------------------
+# 2b. Ambient decimal context independence (C7_DECIMAL_CONTEXT_DEPENDENCE regression)
+# --------------------------------------------------------------------------------------------------
+
+_CONTEXT_PRECISIONS = (1, 2, 6, 28, 50)
+_CONTEXT_ROUNDINGS = (ROUND_HALF_EVEN, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING)
+_REVIEW = "paper_governor_decision:realized_pnl_exceeds_review_threshold"
+_BLOCK = "paper_governor_decision:realized_pnl_exceeds_block_threshold"
+
+
+def _in_every_context(call):  # noqa: ANN001, ANN202
+    """``call()`` under every ambient context of the matrix; each ``localcontext`` restores the caller's context."""
+    caller = getcontext()
+    before = (caller.prec, caller.rounding)
+    results = []
+    for precision in _CONTEXT_PRECISIONS:
+        for rounding in _CONTEXT_ROUNDINGS:
+            with localcontext() as ctx:
+                ctx.prec, ctx.rounding = precision, rounding
+                results.append(call())
+    assert (getcontext().prec, getcontext().rounding) == before
+    return results
+
+
+@pytest.mark.parametrize(
+    ("entry", "realized", "max_abs", "review_abs", "verdict", "reasons"),
+    [
+        ("50.0254026", "-0.1016104", "1000", "0.101", "REVIEW_REQUIRED", (_REVIEW,)),
+        ("50.0254026", "-0.1016104", "0.101", "0.1", "BLOCK_PAPER", (_BLOCK,)),
+        ("49.9745974", "0.1016104", "1000", "0.101", "REVIEW_REQUIRED", (_REVIEW,)),
+        ("50", "0", "0", "0", "ALLOW_PAPER", ()),
+        ("50.0254026", "-0.1016104", "1000", "0.1016104", "ALLOW_PAPER", ()),
+        ("50.0254026", "-0.1016104", "1000", "0.1016103", "REVIEW_REQUIRED", (_REVIEW,)),
+        ("50.0254026", "-0.1016104", "0.1016104", "0.1016104", "ALLOW_PAPER", ()),
+        ("50.0254026", "-0.1016104", "0.1016103", "0", "BLOCK_PAPER", (_BLOCK,)),
+        ("100.123456789", "-200.493827156", "1000", "200.493827155", "REVIEW_REQUIRED", (_REVIEW,)),
+    ],
+    ids=[
+        "audit_counterexample_review",
+        "block_threshold",
+        "positive_amount",
+        "zero_amount",
+        "review_equality_allows",
+        "just_above_review",
+        "block_equality_allows",
+        "just_above_block",
+        "more_digits_than_precision",
+    ],
+)
+def test_the_verdict_is_independent_of_the_ambient_decimal_context(
+    entry: str, realized: str, max_abs: str, review_abs: str, verdict: str, reasons: tuple[str, ...]
+) -> None:
+    """The same immutable bridge and policy decide identically under every caller precision and rounding.
+
+    Before the repair, ``abs()`` rounded the magnitude to the ambient context: at precision 1 the audit
+    counterexample's |-0.1016104| became 0.1 <= 0.101 and REVIEW (or BLOCK) silently became ALLOW_PAPER.
+    """
+
+    bridge = _ready_bridge_for_entry(entry)  # a genuine chain, built once under the caller's context
+    assert bridge.realized_pnl_total == realized
+    policy = _policy(max_abs_realized_pnl=max_abs, review_abs_realized_pnl=review_abs)
+    reference = _decide(bridge=bridge, policy=policy)
+    assert (reference.status, reference.decision.value, reference.reason_codes) == (
+        PaperGovernorDecisionStatus.DECIDED,
+        verdict,
+        reasons,
+    )
+    for decision in _in_every_context(lambda: _decide(bridge=bridge, policy=policy)):
+        assert (decision.decision, decision.reason_codes, decision.realized_pnl_total, decision.decision_digest) == (
+            reference.decision,
+            reference.reason_codes,
+            realized,
+            reference.decision_digest,
+        )
 
 
 # --------------------------------------------------------------------------------------------------

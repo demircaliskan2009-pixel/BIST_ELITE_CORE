@@ -9,7 +9,8 @@ A small, immutable, fail-closed *summary / probe* that consumes the **existing**
 boundaries, proves they describe the **same admitted paper chain**, and emits ONE operator-readable,
 digest-bound **time-free** metrics summary. It is **additive, not duplicative**: it recomputes **no**
 aggregation — it reads the aggregate's bound gross totals / counts by value (the only derived value is the
-absolute magnitude of the already-bound gross realized-PnL total) and binds the readiness verdict as context.
+absolute magnitude of the already-bound gross realized-PnL total, taken exactly with ``Decimal.copy_abs`` so it
+never depends on the caller's ambient ``decimal`` context) and binds the readiness verdict as context.
 
 It is **time-free by construction**: it computes no Sharpe, no annualized / time-weighted return, no
 return series, no wall-clock or session duration, and no 30-day gate — those are explicit digest-bound
@@ -486,14 +487,15 @@ def summarize_paper_session_metrics(
         if not _is_int(count_value) or count_value < 0:
             hard.append(f"paper_session_metrics_summary:{count_name}_invalid")
 
-    # Gross totals well-formed (canonical decimals). The only derived metric is abs(realized).
+    # Gross totals well-formed (canonical decimals). The only derived metric is the exact magnitude of realized:
+    # ``copy_abs`` is context-free, whereas ``abs()`` would round to the caller's ambient decimal context.
     realized = _canonical_decimal(session_aggregate.realized_pnl_total)
     closed = _canonical_decimal(session_aggregate.closed_units_total)
     if realized is None or closed is None or closed < 0:
         hard.append("paper_session_metrics_summary:session_aggregate_totals_malformed")
         abs_realized_total = ""
     else:
-        abs_realized_total = _render_decimal(abs(realized))
+        abs_realized_total = _render_decimal(realized.copy_abs())
 
     # Caller ids: the aggregate by its own ``aggregate_id`` (also bound by the manifest below); the readiness
     # run/episode by ``run_id`` and ``correlation_id``. The aggregate's OWN audit ``correlation_id`` is

@@ -12,7 +12,9 @@ It models no account: it reserves no real capital, computes no real equity/margi
 calls no live/private API, schedules nothing, and performs no wall-clock/random/IO/network/persistence. Its
 rules are static deterministic thresholds over the bridge's already-bound GROSS paper figures
 (``realized_pnl_total`` magnitude, ``closed_units_total``, ``computed_event_count``) — sanity governance,
-not a capital/risk model.
+not a capital/risk model. The magnitude is exact (``Decimal.copy_abs``, never ``abs()``, which rounds to the
+caller's ambient ``decimal`` context) and every comparison is exact, so the verdict never depends on the
+caller's context precision or rounding.
 
 Trust boundary (fail-closed): the bridge self-digest is re-proven via the PUBLIC
 ``paper_admission_ledger_bridge_digest`` and must equal the bridge's stored ``ledger_digest`` AND the
@@ -522,7 +524,9 @@ def decide_paper_governor(
             block.append("paper_governor_decision:insufficient_computed_events")
         if closed > max_units:  # type: ignore[operator]
             block.append("paper_governor_decision:closed_units_exceeds_max")
-        abs_realized = abs(realized)  # type: ignore[arg-type]
+        # Exact and context-free: ``abs()`` would round to the caller's ambient decimal context before the
+        # threshold comparison (e.g. 0.1016104 -> 0.1 at precision 1, turning REVIEW/BLOCK into ALLOW).
+        abs_realized = realized.copy_abs()  # type: ignore[union-attr]
         if abs_realized > max_abs:  # type: ignore[operator]
             block.append("paper_governor_decision:realized_pnl_exceeds_block_threshold")
         elif abs_realized > review_abs:  # type: ignore[operator]

@@ -12,6 +12,7 @@ import functools
 import json
 import re
 from dataclasses import fields, replace
+from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR, ROUND_HALF_EVEN, ROUND_UP, getcontext, localcontext
 from fractions import Fraction
 
 import pytest
@@ -959,6 +960,96 @@ def test_the_genesis_c7_policy_governs_the_sleeves_own_sealed_history(
         )
     # The very same sealed history opens an AUTHORIZED world-G cycle under the fixture C7: only the C7 policy differs.
     assert gpe.world_days(day + 1)[day].cycle.authorized is True
+
+
+_CONTEXTS = tuple(
+    (precision, rounding)
+    for precision in (1, 2, 6, 28, 50)
+    for rounding in (ROUND_HALF_EVEN, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING)
+)
+
+
+def context_signature(context: object) -> tuple:
+    summary, decision = context.summary, context.governor_decision  # type: ignore[attr-defined]
+    return (
+        context.status.value,  # type: ignore[attr-defined]
+        decision.decision.value,
+        decision.reason_codes,
+        decision.decision_digest,
+        summary.realized_pnl_total,
+        summary.abs_realized_pnl_total,
+        summary.summary_digest,
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "thresholds", "status", "verdict", "reasons"),
+    [
+        (
+            "c7-review-0101",
+            (("review_abs_realized_pnl", "0.101"),),
+            "GOVERNOR_REVIEW_REQUIRED",
+            "REVIEW_REQUIRED",
+            ("paper_governor_decision:realized_pnl_exceeds_review_threshold",),
+        ),
+        (
+            "c7-block-0101",
+            (("max_abs_realized_pnl", "0.101"), ("review_abs_realized_pnl", "0.1")),
+            "GOVERNOR_BLOCKED",
+            "BLOCK_PAPER",
+            ("paper_governor_decision:realized_pnl_exceeds_block_threshold",),
+        ),
+        ("G", (), "SAMPLE_ELIGIBLE", "ALLOW_PAPER", ()),
+    ],
+    ids=["audit_counterexample_review", "block_threshold", "fixture_c7_eligible"],
+)
+def test_the_metrics_context_is_independent_of_the_ambient_decimal_context(
+    name: str, thresholds: tuple, status: str, verdict: str, reasons: tuple[str, ...]
+) -> None:
+    """C7_DECIMAL_CONTEXT_DEPENDENCE: the day-8 sealed history (realized -0.1016104) under the same genesis C7.
+
+    Before the repair, precision 1 or 2 rounded |-0.1016104| to 0.1, so REVIEW (review 0.101) and BLOCK (block 0.101)
+    both became ALLOW_PAPER and the context turned SAMPLE_ELIGIBLE; other contexts rendered other magnitudes and
+    summary digests. Every ambient precision and rounding must now yield the one exact, default-context outcome.
+    """
+
+    world = gpe.scenario("G") if name == "G" else c7_world(name, **dict(thresholds))
+    episodes = history(8)
+    reference = context_over(episodes, world)
+    expected = context_signature(reference)
+    assert expected[:3] + expected[4:6] == (status, verdict, reasons, "-0.1016104", "0.1016104")
+    caller = getcontext()
+    before = (caller.prec, caller.rounding)
+    for precision, rounding in _CONTEXTS:
+        with localcontext() as ctx:
+            ctx.prec, ctx.rounding = precision, rounding
+            derived = context_over(episodes, world)
+        assert context_signature(derived) == expected, (precision, rounding)
+    assert (getcontext().prec, getcontext().rounding) == before
+
+
+def test_whole_cycles_are_independent_of_the_ambient_decimal_context() -> None:
+    """Deterministic replay of B1, ORDINARY and a C7 review STOP under hostile ambient contexts: identical digests."""
+
+    days = gpe.world_days()
+    review = c7_world("c7-review-0101", review_abs_realized_pnl="0.101")
+    stop_inputs = gpe.cycle_inputs_for(8, days[7].seal, world=review, reservation_dataset=gpe.archive(7))
+    stop = build_governed_paper_cycle_authority(stop_inputs)
+    assert stop.reason_codes == (
+        code("metrics_governor_stop:GOVERNOR_REVIEW_REQUIRED"),
+        code("portfolio_governance_not_ready:NOT_COMPUTABLE"),
+    )
+    targets = ((days[8].cycle_inputs, days[8].cycle), (days[30].cycle_inputs, days[30].cycle), (stop_inputs, stop))
+    for precision, rounding in ((1, ROUND_DOWN), (2, ROUND_CEILING)):
+        for inputs, accepted in targets:
+            with localcontext() as ctx:
+                ctx.prec, ctx.rounding = precision, rounding
+                rebuilt = build_governed_paper_cycle_authority(inputs)
+            assert (rebuilt.status, rebuilt.phase, rebuilt.cycle_digest) == (
+                accepted.status,
+                accepted.phase,
+                accepted.cycle_digest,
+            )
 
 
 def test_the_genesis_adopts_c7_only_as_its_exact_record_under_the_exact_human_approval() -> None:
