@@ -10,7 +10,9 @@ paper archive (daily marks near 40, two-day final funding, a 10 bps book of dept
 day the derived reservation, RG-4/RG-5/RG-7 and, once episodes exist, RG-3/RG-6/RG-8, the human cycle approval, the
 closing attestation and the day seal. Day 0 opens at G = S0 + 635 days, the bootstrap horizon is 30 days and the
 passive carry profile enters SHORT on days 3, 9, 15, 21, 27 and exits on days 7, 13, 19, 25, 31: B0 on days 0-3, B1
-on days 4-29 and ORDINARY on days 30-31.
+on days 4-29 and ORDINARY on days 30-31. RG-3 carries the genesis's derived metrics context (the section-7 chain over
+the sealed history under the synthetic C7 policy of the accepted time-window fixture): no series on days 4-7, before
+the first computed realized event, and the sample-eligible summary of the whole sealed history from day 8.
 
 Cost: the world is built once per session and every pure upstream re-proof is memoized, exactly (frozen inputs, the
 same objects) or by the accepted exact keys. A ``slow`` test re-proves the whole lineage memo-free.
@@ -72,6 +74,7 @@ from crypto_core.validation.governed_paper_execution_authority import (
     build_governed_paper_cycle_authority,
     build_governed_paper_genesis,
     governed_paper_genesis_authority,
+    governed_paper_metrics_context,
     governed_paper_reservation_plan,
     verify_governed_paper_cycle_authority,
 )
@@ -91,6 +94,9 @@ from crypto_core.validation.historical_pit_dataset import (
 )
 from crypto_core.validation.paper_admission_ledger_bridge import append_paper_admission_record_to_evidence_journal
 from crypto_core.validation.paper_capacity_gate import build_paper_capacity_gate_policy, evaluate_paper_capacity_gate
+from crypto_core.validation.paper_deterministic_time_window_adapter import (
+    build_paper_deterministic_time_window_evidence,
+)
 from crypto_core.validation.paper_end_to_end_episode import build_paper_end_to_end_episode
 from crypto_core.validation.paper_episode_runner import run_paper_episode
 from crypto_core.validation.paper_evidence_admission_record import build_paper_evidence_admission_record
@@ -99,7 +105,7 @@ from crypto_core.validation.paper_fill_simulator import (
     build_paper_fill_policy,
     simulate_paper_fill,
 )
-from crypto_core.validation.paper_governor_decision import decide_paper_governor
+from crypto_core.validation.paper_governor_decision import build_paper_governor_policy, decide_paper_governor
 from crypto_core.validation.paper_order_intent import build_paper_order_intent
 from crypto_core.validation.paper_order_intent_admission import (
     PaperOrderIntentType,
@@ -140,6 +146,7 @@ from crypto_core.validation.paper_session_realized_pnl_evidence_manifest import 
     build_paper_session_realized_pnl_evidence_manifest,
 )
 from crypto_core.validation.paper_session_sequence import build_paper_session_sequence
+from crypto_core.validation.paper_sharpe_evidence import build_paper_sharpe_evidence
 from crypto_core.validation.paper_sleeve_correlation_evidence import (
     PaperSleeveCorrelationInputs,
     PaperSleeveCorrelationSleeveInputs,
@@ -460,6 +467,27 @@ def assignment():  # noqa: ANN201
     return tuple(canonical_profile_parameter_assignment(profile, pret.params_p()))
 
 
+@functools.cache
+def governor_policy(**overrides: object):  # noqa: ANN201
+    """SYNTHETIC C7: the accepted time-window fixture's governor thresholds, never governed values.
+
+    ``overrides`` builds a SYNTHETIC variant that exercises one metrics-context branch; no variant is a threshold.
+    """
+
+    accepted = rg3t.world.window_support._gov_policy()  # noqa: SLF001 - the accepted fixture's synthetic C7
+    values: dict[str, object] = {
+        "policy_id": accepted.policy_id,
+        "min_computed_event_count": accepted.min_computed_event_count,
+        "max_abs_realized_pnl": accepted.max_abs_realized_pnl,
+        "review_abs_realized_pnl": accepted.review_abs_realized_pnl,
+        "max_closed_units": accepted.max_closed_units,
+    }
+    if not overrides:
+        return accepted
+    values.update(overrides)
+    return build_paper_governor_policy(**values)  # type: ignore[arg-type]
+
+
 def genesis_arguments(**overrides: object) -> dict[str, object]:
     intake, _, _, registry, binding = ef6t.world()
     admission = ef7t.admitted()
@@ -490,6 +518,7 @@ def genesis_arguments(**overrides: object) -> dict[str, object]:
         "equity_basis_policy": basis,
         "ladder_seed": seed,
         "performance_path_policy": path,
+        "metrics_governor_policy": governor_policy(),
         "genesis_start_ns": G,
         "bootstrap_horizon_days": HORIZON_DAYS,
         "reservation_band": BAND,
@@ -764,11 +793,12 @@ class Governance:
 
 
 @functools.cache
-def market_summary():  # noqa: ANN201 - the synthetic C7 metrics summary of the carry market
-    """SYNTHETIC C7: a genuine metrics summary over one deterministic paper chain re-targeted to the carry market.
+def foreign_summary():  # noqa: ANN201 - a self-consistent metrics summary that is not the sleeve's own
+    """A FOREIGN metrics summary: one genuine deterministic paper chain re-targeted to the carry market.
 
     It mirrors the accepted time-window fixture chain (aggregate, manifest, ledger bridge, governor, replay, Stage-4
-    readiness, summary) on ``INS``; its governor thresholds are synthetic test values, never governed C7 values.
+    readiness, summary) on ``INS`` under the same synthetic C7 policy. It is READY and digest-valid, but none of its
+    episodes was sealed by the genesis, so no governed cycle may accept it as the sleeve's metrics context.
     """
 
     support = rg3t.world.window_support
@@ -919,7 +949,7 @@ def market_summary():  # noqa: ANN201 - the synthetic C7 metrics summary of the 
     )
     governor = decide_paper_governor(
         ledger,
-        support._gov_policy(),  # noqa: SLF001 - SYNTHETIC C7 governor thresholds of the accepted fixture
+        governor_policy(),  # the same SYNTHETIC C7 governor thresholds as the genesis
         expected_ledger_bridge_digest=ledger.ledger_digest,
         episode_id=support._EPISODE_ID,  # noqa: SLF001
         run_id=run_id,
@@ -956,20 +986,68 @@ def market_summary():  # noqa: ANN201 - the synthetic C7 metrics summary of the 
     )
 
 
-def series_world_for(valuation: object, basis: object, start: int, end: int):  # noqa: ANN201
-    """RG-3's generic series inputs over ``valuation`` with the carry market's synthetic C7 summary."""
+def series_world_for(valuation: object, basis: object, start: int, end: int, summary: object):  # noqa: ANN201
+    """RG-3's generic series inputs over ``valuation`` and ``summary``, all under the summary's run and correlation.
 
-    methodology = rg3t.methodology_for(basis)  # type: ignore[arg-type]
-    summary = market_summary()
-    window = rg3t.time_window_for(start, end, summary)
-    series = rg3t.series_for(valuation, methodology, window)  # type: ignore[arg-type]
-    return rg3t.SeriesWorld(methodology, summary, window, series, rg3t.sharpe_for(series))
+    The accepted chain pins one correlation: the summary's equals the window's, the methodology's, the series' and the
+    Sharpe's, and RG-3 requires the series' to equal the valuation's.
+    """
+
+    correlation = summary.correlation_id  # type: ignore[attr-defined]
+    methodology = rg3t.methodology_for(basis, correlation_id=correlation)  # type: ignore[arg-type]
+    window = build_paper_deterministic_time_window_evidence(
+        summary,  # type: ignore[arg-type]
+        expected_metrics_summary_digest=summary.summary_digest,  # type: ignore[attr-defined]
+        started_at_ns=start,
+        stopped_at_ns=end,
+        window_id="window-sleeve",
+        methodology_id=methodology.methodology_id,
+        run_id=summary.run_id,  # type: ignore[attr-defined]
+        aggregate_id=summary.aggregate_id,  # type: ignore[attr-defined]
+        correlation_id=correlation,
+        sample_observation_count=(end - start) // DAY,
+    )
+    series = rg3t.series_for(valuation, methodology, window, correlation_id=correlation)  # type: ignore[arg-type]
+    sharpe = build_paper_sharpe_evidence(
+        series,
+        expected_daily_return_series_digest=series.series_digest,
+        risk_free_policy_id=rg3t.RISK_FREE_POLICY_ID,
+        sharpe_evidence_id="sleeve-sharpe-1",
+        paper_id="sleeve-paper-1",
+        correlation_id=correlation,
+    )
+    return rg3t.SeriesWorld(methodology, summary, window, series, sharpe)  # type: ignore[arg-type]
 
 
-def performance_world(day: int, seal: GovernedPaperDaySeal, *, world: Scenario | None = None):  # noqa: ANN201
-    """RG-3 over the history sealed before E_day (window [G, E_day)) on the genesis's envelope and basis policy."""
+DERIVED = object()  # the metrics context a world's RG-3 carries by default: the genesis's own derivation
 
-    genesis_inputs = (scenario("G") if world is None else world).genesis_inputs
+
+def metrics_context_of(seal: GovernedPaperDaySeal, *, world: Scenario | None = None):  # noqa: ANN201
+    """The RG-3 metrics context the genesis derives over the history ``seal`` closed (the cycle's own derivation)."""
+
+    world = scenario("G") if world is None else world
+    return governed_paper_metrics_context(world.genesis, world.genesis_inputs, sealed_episodes=seal.episodes)
+
+
+def performance_world(  # noqa: ANN201
+    day: int, seal: GovernedPaperDaySeal, *, world: Scenario | None = None, metrics_summary: object = DERIVED
+):
+    """RG-3 over the history sealed before E_day (window [G, E_day)) on the genesis's envelope and basis policy.
+
+    By default RG-3 carries the derived metrics context: its sample-eligible summary, or no series at all. A test may
+    supply another ``metrics_summary`` (None: no series) to prove the cycle refuses it. RG-3 is identified by the
+    carried summary's correlation, else by the first sealed episode's (the derivation's anchor).
+    """
+
+    world = scenario("G") if world is None else world
+    if metrics_summary is DERIVED:
+        metrics_summary = metrics_context_of(seal, world=world).series_summary
+    correlation = (
+        seal.episodes[0].end_to_end_episode.correlation_id
+        if metrics_summary is None
+        else metrics_summary.correlation_id  # type: ignore[attr-defined]
+    )
+    genesis_inputs = world.genesis_inputs
     env, basis = genesis_inputs.portfolio_risk_envelope, genesis_inputs.equity_basis_policy
     end = instant(day)
     funding = build_paper_sleeve_funding_evidence(
@@ -982,7 +1060,7 @@ def performance_world(day: int, seal: GovernedPaperDaySeal, *, world: Scenario |
     )
     valuation_inputs = PaperSleeveValuationInputs(
         valuation_id=f"gpe-valuation-{day}",
-        correlation_id=rg3t.world.VALUATION_CORRELATION,
+        correlation_id=correlation,
         equity_basis_policy=basis,
         window_start_ns=G,
         window_end_ns=end,
@@ -991,14 +1069,18 @@ def performance_world(day: int, seal: GovernedPaperDaySeal, *, world: Scenario |
         funding_evidence=funding,
     )
     valuation = build_paper_sleeve_daily_valuation_evidence(valuation_inputs)
-    series = series_world_for(valuation, basis, G, end)
+    series = (
+        dict.fromkeys(("methodology", "metrics_summary", "time_window", "daily_return_series", "sharpe_evidence"))
+        if metrics_summary is None
+        else series_world_for(valuation, basis, G, end, metrics_summary).inputs()
+    )
     inputs = PaperSleevePerformanceInputs(
         performance_evidence_id=f"gpe-rg3-{day}",
-        correlation_id=rg3t.world.VALUATION_CORRELATION,
+        correlation_id=correlation,
         portfolio_risk_envelope=env,
         valuation_inputs=valuation_inputs,
         valuation=valuation,
-        **series.inputs(),  # type: ignore[arg-type]
+        **series,  # type: ignore[arg-type]
     )
     return inputs, build_paper_sleeve_performance_evidence(inputs)
 
@@ -1009,10 +1091,12 @@ def governance_at(
     prior: GovernedPaperDaySeal | None,
     *,
     world: Scenario | None = None,
+    metrics_summary: object = DERIVED,
 ) -> Governance:
     """RG-4/RG-5/RG-7 at E_day and, once an episode is sealed, RG-3/RG-6/RG-8 (B0 supplies no sleeve evidence).
 
-    Every RG artifact is built on the genesis's own envelope, seed, path policy and basis policy.
+    Every RG artifact is built on the genesis's own envelope, seed, path policy and basis policy; RG-3 carries
+    ``metrics_summary`` (by default the derived metrics context, see ``performance_world``).
     """
 
     world = scenario("G") if world is None else world
@@ -1023,7 +1107,11 @@ def governance_at(
         genesis_inputs.performance_path_policy,
     )
     end = instant(day)
-    performance = None if prior is None or not prior.episodes else performance_world(day, prior, world=world)
+    performance = (
+        None
+        if prior is None or not prior.episodes
+        else performance_world(day, prior, world=world, metrics_summary=metrics_summary)
+    )
     sleeves = () if performance is None else (performance,)
     correlation_inputs = PaperSleeveCorrelationInputs(
         correlation_evidence_id=f"gpe-rg5-{day}",

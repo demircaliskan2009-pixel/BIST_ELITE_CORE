@@ -2,11 +2,13 @@
 
 SYNTHETIC TEST VALUES ONLY: every approval here is a synthetic PASS-branch fixture, never a real human decision. The
 authentic worlds (world P's EF-7 v2 admission, world G's cycles and the named scenarios) are the execution test
-module's own, imported by basename so they are built once per session.
+module's own, imported by basename so they are built once per session. The C7 governor policy is the accepted
+time-window fixture's synthetic one; each C7 variant here is a SYNTHETIC branch probe, never a threshold.
 """
 
 from __future__ import annotations
 
+import functools
 import json
 import re
 from dataclasses import fields, replace
@@ -27,6 +29,7 @@ from crypto_core.validation.governed_paper_execution_authority import (
     GovernedPaperGenesis,
     GovernedPaperGenesisInputs,
     GovernedPaperGenesisStatus,
+    GovernedPaperMetricsContextStatus,
     build_governed_paper_cycle_authority,
     build_governed_paper_genesis,
     governed_paper_cycle_admission_window,
@@ -35,16 +38,23 @@ from crypto_core.validation.governed_paper_execution_authority import (
     governed_paper_genesis_authority,
     governed_paper_genesis_digest,
     governed_paper_genesis_to_dict,
+    governed_paper_metrics_context,
     governed_paper_reservation_plan,
     verify_governed_paper_cycle_authority,
     verify_governed_paper_genesis,
 )
-from crypto_core.validation.governed_paper_typed_identity import governed_paper_typed_image
+from crypto_core.validation.governed_paper_typed_identity import (
+    governed_paper_typed_identity_digest,
+    governed_paper_typed_image,
+)
 from crypto_core.validation.historical_execution_economics import historical_execution_latest_visible_mark
 from crypto_core.validation.historical_execution_economics_policy import (
     HistoricalExecutionApprovalKind,
     historical_execution_quantize_price,
 )
+from crypto_core.validation.paper_governor_decision import paper_governor_policy_digest
+from crypto_core.validation.paper_session_metrics_summary import paper_session_metrics_summary_digest
+from crypto_core.validation.paper_sleeve_performance_evidence import PaperSleevePerformanceStatus
 from crypto_core.validation.paper_sleeve_risk_budget_decision import (
     PaperSleeveRiskBudgetPolicy,
     paper_sleeve_risk_budget_policy_digest,
@@ -150,6 +160,7 @@ def test_the_world_genesis_is_authorized_and_every_fact_is_derived_from_its_upst
         instant(30),
         gpe.BAND,
     )
+    assert genesis.metrics_governor_policy_digest == paper_governor_policy_digest(gpe.governor_policy())
     assert (genesis.rule_set_id, genesis.rule_set_digest) == (
         GOVERNED_PAPER_EXECUTION_AUTHORITY_RULE_SET["rule_set_id"],
         GOVERNED_PAPER_EXECUTION_AUTHORITY_RULE_SET_DIGEST,
@@ -380,6 +391,7 @@ def test_malformed_genesis_input_is_refused_never_represented(overrides: dict[st
         ("real_money_enabled", 0),
         ("status", "AUTHORIZED"),
         ("bootstrap_horizon_days", True),
+        ("metrics_governor_policy_digest", "0" * 64),
     ],
 )
 def test_a_forged_genesis_never_verifies_even_resealed(name: str, value: object) -> None:
@@ -420,6 +432,14 @@ def test_each_phase_opens_on_its_exact_upstream_state() -> None:
     assert Fraction(days[4].cycle.bootstrap_max_peak_distance) <= Fraction("0.05")
     assert (days[30].cycle.governance_status, days[30].cycle.performance_status) == ("READY", "READY")
     assert days[30].cycle.bootstrap_max_peak_distance == ""
+    assert [days[day].cycle.metrics_context_status for day in (3, 4, 7, 8, 29, 30)] == [
+        "",
+        "NO_COMPUTED_REALIZED_EVENT",
+        "NO_COMPUTED_REALIZED_EVENT",
+        "SAMPLE_ELIGIBLE",
+        "SAMPLE_ELIGIBLE",
+        "SAMPLE_ELIGIBLE",
+    ]
 
 
 def test_the_reservation_is_derived_and_priced_on_the_engines_own_quote() -> None:
@@ -620,6 +640,8 @@ def test_each_direction_is_authorized_only_by_its_own_record_and_allocation() ->
         ("status", "AUTHORIZED"),
         ("phase", "BOOTSTRAP_B0"),
         ("day_index", True),
+        ("metrics_context_status", "SAMPLE_ELIGIBLE"),
+        ("metrics_summary_digest", "0" * 64),
     ],
 )
 def test_a_forged_cycle_never_verifies_even_resealed(name: str, value: object) -> None:
@@ -663,8 +685,318 @@ def test_the_rule_set_pins_every_bootstrap_reason_set() -> None:
     for name in (
         "bootstrap_b0_drawdown_reasons",
         "bootstrap_b1_performance_reasons",
+        "bootstrap_b1_unmeasured_performance_reasons",
         "bootstrap_b1_drawdown_reasons",
         "bootstrap_b1_ladder_reasons",
         "bootstrap_b1_governance_reasons",
+        "rg3_metrics_context_below_minimum_reasons",
     ):
         assert rule_set[name] and all(type(item) is str for item in rule_set[name])  # type: ignore[union-attr]
+    assert rule_set["bootstrap_b1_unmeasured_performance_reasons"] == [
+        "paper_sleeve_performance_evidence:daily_return_series_not_supplied"
+    ]
+    assert rule_set["rg3_metrics_context_below_minimum_reasons"] == [
+        "paper_governor_decision:insufficient_computed_events"
+    ]
+
+
+# --- C. the RG-3 metrics context (M2_RG3_METRICS_CONTEXT_V1) -------------------------------------------------------------
+
+CONTEXT = GovernedPaperMetricsContextStatus
+UNMEASURED = ("paper_sleeve_performance_evidence:daily_return_series_not_supplied",)
+SHARPE_SHORT = tuple(sorted(GOVERNED_PAPER_EXECUTION_AUTHORITY_RULE_SET["bootstrap_b1_performance_reasons"]))  # type: ignore[arg-type]
+
+
+def history(day: int) -> tuple:
+    """The episodes world G sealed before E_day: the history its day-``day`` cycle opens on."""
+
+    return gpe.world_days(day)[day - 1].seal.episodes
+
+
+def context_over(episodes: tuple, world: object | None = None):  # noqa: ANN201
+    world = gpe.scenario("G") if world is None else world
+    return governed_paper_metrics_context(world.genesis, world.genesis_inputs, sealed_episodes=episodes)  # type: ignore[attr-defined]
+
+
+def context_key(context: object) -> tuple:
+    summary, decision = context.summary, context.governor_decision  # type: ignore[attr-defined]
+    return (
+        context.status,  # type: ignore[attr-defined]
+        context.manifest_digest,  # type: ignore[attr-defined]
+        None if summary is None else summary.summary_digest,
+        None if decision is None else decision.decision_digest,
+    )
+
+
+def reseal_policy(policy: object, **changes: object) -> object:
+    changed = replace(policy, **changes)  # type: ignore[type-var]
+    return replace(changed, policy_digest=paper_governor_policy_digest(changed))  # type: ignore[arg-type]
+
+
+def reseal_summary(summary: object, **changes: object) -> object:
+    changed = replace(summary, **changes)  # type: ignore[type-var]
+    return replace(changed, summary_digest=paper_session_metrics_summary_digest(changed))  # type: ignore[arg-type]
+
+
+@functools.cache
+def c7_world(name: str, **thresholds: object):  # noqa: ANN201
+    """World G's genesis under a SYNTHETIC C7 variant, exactly approved: one metrics-context branch probe."""
+
+    inputs = gpe.governed_genesis_inputs(
+        genesis_id=f"gpe-genesis-{name}", metrics_governor_policy=gpe.governor_policy(**thresholds)
+    )
+    return gpe.Scenario(name, inputs, build_governed_paper_genesis(inputs), gpe.paper_records(), (ef8t.genesis(),))
+
+
+def c7_cycle(day: int, name: str, **thresholds: object) -> GovernedPaperCycleAuthority:
+    """The day-``day`` cycle of a C7 variant opened on world G's sealed history, with its own reservation and RG chain."""
+
+    world = c7_world(name, **thresholds)
+    prior = gpe.world_days(day)[day - 1].seal
+    inputs = gpe.cycle_inputs_for(day, prior, world=world, reservation_dataset=gpe.archive(day - 1))
+    return build_governed_paper_cycle_authority(inputs)
+
+
+def carrying(day: int, metrics_summary: object, *, name: str = "G", basis: object | None = None):  # noqa: ANN201
+    """World ``name``'s day-``day`` cycle inputs whose RG-3, and every RG artifact over it, carries ``metrics_summary``.
+
+    ``basis`` values RG-3 under another equity-basis policy than the genesis's; the genesis itself is unchanged.
+    """
+
+    world = gpe.scenario(name)
+    days = gpe.days_of(name, day + 1)
+    valued = world
+    if basis is not None:
+        valued = replace(world, genesis_inputs=replace(world.genesis_inputs, equity_basis_policy=basis))
+    governance = gpe.governance_at(
+        day, gpe.reservation_plan(day, world), days[day - 1].seal, world=valued, metrics_summary=metrics_summary
+    )
+    return replace(
+        days[day].cycle_inputs,
+        allocation_inputs=governance.allocation_inputs,
+        allocation_decision=governance.allocation,
+        drawdown_inputs=governance.drawdown_inputs,
+        drawdown_evidence=governance.drawdown,
+        governance_inputs=governance.governance_inputs,
+        governance_decision=governance.governance,
+    )
+
+
+def test_the_metrics_context_is_the_section7_chain_over_exactly_the_sealed_history() -> None:
+    days, policy = gpe.world_days(), gpe.governor_policy()
+    statuses = {}
+    for day in (4, 7, 8, 14, 20, 26, 30, 31):
+        episodes = history(day)
+        context = context_over(episodes)
+        statuses[day] = context.status
+        assert context_key(context) == context_key(context_over(episodes))  # same input, same digests
+        assert (
+            context.governor_policy_digest
+            == policy.policy_digest
+            == days[day].cycle_inputs.genesis.metrics_governor_policy_digest
+        )
+        cycle, rg3 = days[day].cycle, days[day].cycle_inputs.governance_inputs.drawdown_inputs.sleeves[0]
+        assert cycle.metrics_context_status == context.status.value
+        assert rg3.performance_inputs.metrics_summary == context.series_summary
+        if context.summary is None:
+            assert (cycle.metrics_summary_digest, cycle.metrics_governor_decision_digest) == ("", "")
+            continue
+        summary, events = context.summary, [item.realized_pnl_event for item in episodes]
+        computed = [item for item in events if item.status.value == "COMPUTED"]
+        assert (summary.event_count, summary.computed_event_count, summary.source_event_digest_count) == (
+            len(events),
+            len(computed),
+            len(events),
+        )
+        assert Fraction(summary.realized_pnl_total) == sum(Fraction(item.realized_pnl) for item in computed)
+        assert Fraction(summary.closed_units_total) == sum(Fraction(item.closed_units) for item in computed)
+        anchor = episodes[0].end_to_end_episode  # the run that opened the period: one identity for every cycle
+        assert (summary.run_id, summary.correlation_id) == (anchor.run_id, anchor.correlation_id)
+        assert rg3.performance_inputs.correlation_id == anchor.correlation_id == rg3.performance_evidence.correlation_id
+        assert context.governor_decision.policy_digest == policy.policy_digest
+        assert (cycle.metrics_summary_digest, cycle.metrics_governor_decision_digest) == (
+            summary.summary_digest,
+            context.governor_decision.decision_digest,
+        )
+        assert (summary.paper_only, summary.thirty_day_gate_satisfied, summary.operational_readiness) == (
+            True,
+            False,
+            False,
+        )
+    assert {day for day, status in statuses.items() if status is CONTEXT.NO_COMPUTED_REALIZED_EVENT} == {4, 7}
+    assert {day for day, status in statuses.items() if status is CONTEXT.SAMPLE_ELIGIBLE} == {8, 14, 20, 26, 30, 31}
+
+
+def test_b1_carries_no_series_until_its_derived_context_is_sample_eligible() -> None:
+    days = gpe.world_days()
+    for day, reasons in ((4, UNMEASURED), (7, UNMEASURED), (8, SHARPE_SHORT), (29, SHARPE_SHORT)):
+        cycle, rg3 = days[day].cycle, days[day].cycle_inputs.governance_inputs.drawdown_inputs.sleeves[0]
+        assert (cycle.status, cycle.phase) == (
+            GovernedPaperCycleStatus.AUTHORIZED,
+            GovernedPaperCyclePhase.BOOTSTRAP_B1,
+        )
+        assert rg3.performance_evidence.status is PaperSleevePerformanceStatus.NOT_COMPUTABLE
+        assert tuple(sorted(rg3.performance_evidence.reason_codes)) == reasons
+        assert (rg3.performance_inputs.time_window is None) is (reasons == UNMEASURED)
+    ordinary = days[30].cycle_inputs.governance_inputs.drawdown_inputs.sleeves[0]
+    assert days[30].cycle.phase is GovernedPaperCyclePhase.ORDINARY
+    assert ordinary.performance_evidence.status is PaperSleevePerformanceStatus.READY
+    assert ordinary.performance_inputs.metrics_summary == context_over(history(30)).summary
+
+
+def derived_summary(day: int):  # noqa: ANN201
+    return context_over(history(day)).summary
+
+
+@pytest.mark.parametrize(
+    ("day", "summary"),
+    [
+        (30, lambda: gpe.foreign_summary()),
+        (14, lambda: derived_summary(8)),
+        (14, lambda: context_over(gpe.world_days(16)[15].seal.episodes).summary),
+        (14, lambda: context_over(history(14)[:1] + history(14)[2:]).summary),
+        (14, lambda: context_over(tuple(reversed(history(14)))).summary),
+        (14, lambda: context_over(history(14), c7_world("c7-units-99", max_closed_units="99")).summary),
+        (
+            14,
+            lambda: reseal_summary(
+                derived_summary(14), realized_pnl_total="-1.1032104", abs_realized_pnl_total="1.1032104"
+            ),
+        ),
+        (14, lambda: None),
+        (4, lambda: gpe.foreign_summary()),
+        (4, lambda: derived_summary(8)),
+    ],
+    ids=[
+        "foreign_at_ordinary",
+        "stale",
+        "future",
+        "incomplete",
+        "wrong_anchor",
+        "other_c7_policy",
+        "tampered_totals",
+        "no_series_when_eligible",
+        "forged_ready_without_computed_event",
+        "later_summary_in_insufficient_sample",
+    ],
+)
+def test_a_metrics_summary_that_is_not_the_derivation_is_refused(day: int, summary) -> None:  # noqa: ANN001
+    with refused("performance_metrics_context_not_derived"):
+        build_governed_paper_cycle_authority(carrying(day, summary()))
+
+
+@pytest.mark.parametrize(("name", "day"), [("G", 30), ("stop", 4)], ids=["ordinary", "bootstrap_stop_day"])
+def test_rg3_is_valued_only_under_the_genesis_equity_basis(name: str, day: int) -> None:
+    """C5: another governed basis of the same sleeve rescales RG-3's index, hence every drawdown and stop."""
+
+    world, days = gpe.scenario(name), gpe.days_of(name, day + 1)
+    accepted = days[day].cycle_inputs.governance_inputs.drawdown_inputs.sleeves[0].performance_evidence
+    genesis_basis = world.genesis_inputs.equity_basis_policy
+    assert accepted.equity_basis_digest == world.genesis.equity_basis_policy_digest == genesis_basis.equity_basis_digest
+    summary = gpe.metrics_context_of(days[day - 1].seal, world=world).series_summary
+    rebuilt = build_governed_paper_cycle_authority(carrying(day, summary, name=name))  # control: the same harness
+    assert rebuilt.cycle_digest == days[day].cycle.cycle_digest
+    other = rg3t.world.basis_policy(sleeve_id=CARRY, market_symbol=INS, reference_notional="1000000")
+    assert other.advances is True and other.equity_basis_digest != genesis_basis.equity_basis_digest
+    with refused("performance_not_on_the_genesis_basis"):
+        build_governed_paper_cycle_authority(carrying(day, summary, name=name, basis=other))
+
+
+def test_the_derivation_refuses_a_history_it_cannot_prove_and_any_unauthorized_genesis() -> None:
+    episodes = history(14)
+    with refused("metrics_context_needs_sealed_episodes"):
+        context_over(())
+    with refused("metrics_context_needs_sealed_episodes"):
+        context_over(list(episodes))  # type: ignore[arg-type]
+    with refused("metrics_context_history_malformed"):
+        context_over((*episodes, object()))
+    with refused("metrics_context_not_derivable"):
+        context_over((*episodes, episodes[-1]))  # a duplicated sealed episode
+    inputs = unapproved()
+    for approval in (None, gpe.genesis_approval_for(inputs, kind=gpe.SYNTHETIC)):
+        candidate = replace(inputs, approval=approval)
+        with refused("genesis_not_authorized"):
+            governed_paper_metrics_context(build_governed_paper_genesis(candidate), candidate, sealed_episodes=episodes)
+
+
+@pytest.mark.parametrize(
+    ("day", "name", "thresholds", "status", "phase", "context", "reasons"),
+    [
+        (8, "c7-min-2", (("min_computed_event_count", 2),), "AUTHORIZED", "BOOTSTRAP_B1", "BELOW_GOVERNOR_MINIMUM", ()),
+        (30, "c7-min-2", (("min_computed_event_count", 2),), "AUTHORIZED", "ORDINARY", "SAMPLE_ELIGIBLE", ()),
+        (
+            8,
+            "c7-review",
+            (("review_abs_realized_pnl", "0.1"),),
+            "BLOCKED",
+            "NOT_ESTABLISHED",
+            "GOVERNOR_REVIEW_REQUIRED",
+            ("metrics_governor_stop:GOVERNOR_REVIEW_REQUIRED", "portfolio_governance_not_ready:NOT_COMPUTABLE"),
+        ),
+        (
+            30,
+            "c7-units-1",
+            (("max_closed_units", "1"),),
+            "BLOCKED",
+            "NOT_ESTABLISHED",
+            "GOVERNOR_BLOCKED",
+            ("metrics_governor_stop:GOVERNOR_BLOCKED", "portfolio_governance_not_ready:NOT_COMPUTABLE"),
+        ),
+    ],
+    ids=["below_minimum_keeps_b1", "minimum_reached_is_ordinary", "review_is_a_stop", "block_stops_ordinary"],
+)
+def test_the_genesis_c7_policy_governs_the_sleeves_own_sealed_history(
+    day: int, name: str, thresholds: tuple, status: str, phase: str, context: str, reasons: tuple[str, ...]
+) -> None:
+    cycle = c7_cycle(day, name, **dict(thresholds))
+    assert (cycle.status.value, cycle.phase.value, cycle.metrics_context_status) == (status, phase, context)
+    assert cycle.reason_codes == tuple(code(reason) for reason in reasons)
+    if status == "BLOCKED":
+        assert (cycle.long_authorized, cycle.short_authorized, governed_paper_cycle_admission_window(cycle)) == (
+            False,
+            False,
+            None,
+        )
+    # The very same sealed history opens an AUTHORIZED world-G cycle under the fixture C7: only the C7 policy differs.
+    assert gpe.world_days(day + 1)[day].cycle.authorized is True
+
+
+def test_the_genesis_adopts_c7_only_as_its_exact_record_under_the_exact_human_approval() -> None:
+    inputs, genesis = gpe.world_genesis()
+    policy = gpe.governor_policy()
+    view = governed_paper_genesis_authority(genesis, inputs)
+    assert view.metrics_governor_policy == policy and type(view.metrics_governor_policy) is type(policy)
+    assert genesis.metrics_governor_policy_identity_digest == governed_paper_typed_identity_digest(
+        policy,
+        gpe.authority._RECORD_DOMAIN,  # noqa: SLF001
+    )
+    other = gpe.governor_policy(max_closed_units="99")
+    changed = build_governed_paper_genesis(replace(inputs, metrics_governor_policy=other))
+    assert (changed.status, changed.reason_codes) == (
+        NEEDS_GOVERNANCE,
+        (code("genesis_approval_mismatch:approved_genesis_policy_digest"),),
+    )
+    assert changed.metrics_governor_policy_digest == other.policy_digest != genesis.metrics_governor_policy_digest
+    assert changed.genesis_inputs_identity_digest != genesis.genesis_inputs_identity_digest
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        (lambda policy: None, "metrics_governor_policy_malformed"),
+        (lambda policy: policy.policy_id, "metrics_governor_policy_malformed"),
+        (lambda policy: reseal_policy(policy, min_computed_event_count=True), "metrics_governor_policy_invalid"),
+        (lambda policy: reseal_policy(policy, review_abs_realized_pnl="2000"), "metrics_governor_policy_invalid"),
+        (lambda policy: replace(policy, max_closed_units="1"), "metrics_governor_policy_not_canonical"),
+        (lambda policy: reseal_policy(policy, paper_only=False), "metrics_governor_policy_not_canonical"),
+        (
+            lambda policy: reseal_policy(policy, schema_version="paper-governor-policy.v0"),
+            "metrics_governor_policy_not_canonical",
+        ),
+        (lambda policy: reseal_policy(policy, metadata=[("note", "x")]), "metrics_governor_policy_not_canonical"),
+    ],
+    ids=["missing", "not_a_policy", "bool_count", "review_above_block", "stale_digest", "paper_only", "schema", "list"],
+)
+def test_a_c7_policy_that_is_not_its_canonical_record_never_reaches_a_genesis(change, reason: str) -> None:  # noqa: ANN001
+    with refused(reason):
+        build_governed_paper_genesis(unapproved(metrics_governor_policy=change(gpe.governor_policy())))
