@@ -22,11 +22,12 @@ Genesis (``GovernedPaperGenesis``, one per sleeve, single-sleeve, one-use). It b
 admitted), its EF-8 INITIAL_ACTIVATION receipt, the executable binding, one admitted variant and its exact parameter
 assignment, the parameter approval, the EF-6 economics policy (its recomputed digest must equal the EF-6
 ``economics_policy_digest``) and its approval, the RG-2 envelope, the equity-basis policy (reference notional ==
-``initial_equity``), the RG-6 ladder seed, the RG-4 performance-path policy, the genesis instant G (a UTC day), the
-bootstrap horizon H (``>= 30`` UTC days) and the reservation band beta. The capacity authority is the EF-7 assumption
-of the one supported measure (``max_open_position_notional`` / ``quote_currency_notional`` /
-``per_instrument_open_position``); any other measure for the instrument blocks the genesis. A HUMAN_GOVERNANCE approval
-of the exact genesis policy (adoption C1 and bootstrap C2) is required for ``AUTHORIZED``.
+``initial_equity``), the RG-6 ladder seed, the RG-4 performance-path policy, the C7 governor policy of the RG-3
+metrics context (an exact canonical record of its public builder), the genesis instant G (a UTC day), the bootstrap
+horizon H (``>= 30`` UTC days) and the reservation band beta. The capacity authority is the EF-7 assumption of the one
+supported measure (``max_open_position_notional`` / ``quote_currency_notional`` / ``per_instrument_open_position``);
+any other measure for the instrument blocks the genesis. A HUMAN_GOVERNANCE approval of the exact genesis policy
+(adoption C1, bootstrap C2 and the C7 governor thresholds) is required for ``AUTHORIZED``.
 ``genesis_inputs_identity_digest`` is the typed identity of the complete inputs, with every verified upstream artifact
 as a typed reference to its recomputed self-digest.
 
@@ -41,12 +42,24 @@ under the economics engine's own rule, RG-7 and RG-4 at ``E_k`` and, once episod
   ``u * L_k``, and its RG-7 record ELIGIBLE with ``final_allocated_budget == u * L_k`` on a READY allocation with an
   attested ACTIVE head and no kill override. Otherwise its ceiling is zero. There is no aggregate-to-symmetric shortcut,
   and at least one direction must be authorized.
+* RG-3 metrics context (``M2_RG3_METRICS_CONTEXT_V1``), derived, never supplied: the accepted section-7 chain (session,
+  realized-PnL bridge, aggregate, evidence manifest, admission record, journal ledger bridge, governor under the
+  genesis C7 policy, its deterministic replay, Stage-4 readiness and metrics summary) over exactly the whole sealed
+  history, anchored on the first sealed episode (the run that opened the period, so the summary's run and
+  correlation identity, which RG-3's window, series and Sharpe must share, never moves). Its status is
+  ``NO_COMPUTED_REALIZED_EVENT`` (the manifest has no computed realized event), ``BELOW_GOVERNOR_MINIMUM`` (the governor
+  blocks only for fewer computed events than the C7 minimum), ``SAMPLE_ELIGIBLE`` (ALLOW_PAPER: a ready candidate
+  summary), ``GOVERNOR_REVIEW_REQUIRED`` or ``GOVERNOR_BLOCKED``. RG-3 is valued under the genesis equity-basis policy
+  (C5) only, and must carry exactly the derived summary when it is sample-eligible over a computed valuation, and no
+  series otherwise; any other basis or metrics summary is refused. A governor review or block is a STOP.
 * Phases (GAP-5): ``BOOTSTRAP_B0`` (no sealed episode; RG-8 cannot be constructed; RG-4 NOT_COMPUTABLE for exactly the
   missing sleeve, and absent on day 0, whose window ``[G, G)`` is empty); ``BOOTSTRAP_B1`` (episodes exist; RG-8, RG-4,
   RG-6, seeded from the genesis seed, and RG-3 NOT_COMPUTABLE with exactly the pinned reason sets of the bootstrap
-  sleeve's insufficient sample; the bootstrap stop is not triggered); ``ORDINARY`` (RG-3 and RG-8 READY, the terminal
-  allocation equal to RG-7's). Bootstrap phases need ``E_k < G + H`` and no other sleeve with a post-kill
-  reservation. A STOP, a rejected allocation, a governance gap or a kill is never excepted.
+  sleeve's insufficient sample: no series while the metrics context is ``NO_COMPUTED_REALIZED_EVENT`` or
+  ``BELOW_GOVERNOR_MINIMUM``, an uncomputable Sharpe while it is ``SAMPLE_ELIGIBLE``; the bootstrap stop is not
+  triggered); ``ORDINARY`` (RG-3 and RG-8 READY, the terminal allocation equal to RG-7's). Bootstrap phases need
+  ``E_k < G + H`` and no other sleeve with a post-kill reservation. A STOP, a rejected allocation, a governance gap or
+  a kill is never excepted.
 * Approval (C3): only an exact HUMAN_GOVERNANCE approval of the cycle policy authorizes the cycle.
 
 A cycle is prospective authority for its window only. It never proves the history it was opened on: the lineage
@@ -63,6 +76,10 @@ from fractions import Fraction
 
 from crypto_core.audit.evidence_journal import EvidenceArtifactType, EvidenceJournal
 from crypto_core.strategy.spec import StrategySpec, strategy_spec_digest, validate_strategy_spec
+from crypto_core.validation.deterministic_paper_replay_harness import (
+    DeterministicPaperReplayHarnessStatus,
+    verify_deterministic_paper_replay,
+)
 from crypto_core.validation.edge_artifact_core import (
     EdgeArtifactError,
     EdgeAuthorityBinding,
@@ -118,12 +135,28 @@ from crypto_core.validation.historical_execution_economics_policy import (
     verify_historical_execution_economics_policy,
 )
 from crypto_core.validation.historical_pit_dataset import HistoricalPitDataset, verify_historical_pit_dataset
+from crypto_core.validation.paper_admission_ledger_bridge import (
+    PaperAdmissionLedgerBridgeStatus,
+    append_paper_admission_record_to_evidence_journal,
+)
 from crypto_core.validation.paper_allocator_intent_draft import (
     PaperAllocatorIntentDraft,
     PaperAllocatorIntentDraftStatus,
     build_paper_allocator_intent_draft,
 )
 from crypto_core.validation.paper_capacity_gate import PaperCapacityGatePolicy, build_paper_capacity_gate_policy
+from crypto_core.validation.paper_evidence_admission_record import (
+    PaperEvidenceAdmissionStatus,
+    build_paper_evidence_admission_record,
+)
+from crypto_core.validation.paper_governor_decision import (
+    PaperGovernorDecision,
+    PaperGovernorDecisionStatus,
+    PaperGovernorPolicy,
+    PaperGovernorVerdict,
+    build_paper_governor_policy,
+    decide_paper_governor,
+)
 from crypto_core.validation.paper_portfolio_allocation_decision import (
     PaperGovernedLifecycleState,
     PaperPortfolioAllocationDecision,
@@ -150,9 +183,29 @@ from crypto_core.validation.paper_portfolio_risk_envelope import (
     paper_portfolio_risk_envelope_to_dict,
     verify_paper_portfolio_risk_envelope,
 )
+from crypto_core.validation.paper_realized_pnl_rollup import PaperRealizedPnlRollupInput
+from crypto_core.validation.paper_session_metrics_summary import (
+    PaperSessionMetricsSummary,
+    PaperSessionMetricsSummaryStatus,
+    summarize_paper_session_metrics,
+)
+from crypto_core.validation.paper_session_realized_pnl_aggregate import (
+    PaperSessionRealizedPnlAggregateInput,
+    build_paper_session_realized_pnl_aggregate,
+)
+from crypto_core.validation.paper_session_realized_pnl_bridge import (
+    PaperSessionSequenceProvenance,
+    build_paper_session_realized_pnl_bridge,
+)
+from crypto_core.validation.paper_session_realized_pnl_evidence_manifest import (
+    PaperSessionRealizedPnlEvidenceManifestStatus,
+    build_paper_session_realized_pnl_evidence_manifest,
+)
+from crypto_core.validation.paper_session_sequence import build_paper_session_sequence
 from crypto_core.validation.paper_sleeve_daily_valuation_evidence import (
     PaperSleeveDayCloseValuation,
     PaperSleeveEpisodeEvidence,
+    PaperSleeveValuationStatus,
 )
 from crypto_core.validation.paper_sleeve_drawdown_evidence import (
     PaperSleeveDrawdownEvidence,
@@ -203,6 +256,11 @@ from crypto_core.validation.paper_sleeve_risk_budget_decision import (
     paper_sleeve_risk_budget_policy_digest,
     paper_sleeve_risk_budget_policy_to_dict,
 )
+from crypto_core.validation.paper_stage4_readiness_decision import (
+    PaperStage4ReadinessStatus,
+    PaperStage4ReadinessVerdict,
+    decide_paper_stage4_readiness,
+)
 from crypto_core.validation.paper_trade_tick import PaperTradeTick, build_paper_trade_tick, paper_trade_tick_to_dict
 from crypto_core.validation.strategy_executable_binding import (
     StrategyExecutableBinding,
@@ -220,8 +278,8 @@ from crypto_core.validation.strategy_executable_profiles import (
 )
 
 _PREFIX = "governed_paper_execution_authority"
-_GENESIS_SCHEMA_VERSION = "governed-paper-genesis.v1"
-_CYCLE_SCHEMA_VERSION = "governed-paper-cycle-authority.v1"
+_GENESIS_SCHEMA_VERSION = "governed-paper-genesis.v2"
+_CYCLE_SCHEMA_VERSION = "governed-paper-cycle-authority.v2"
 _GENESIS_DIGEST_FIELD = "genesis_digest"
 _CYCLE_DIGEST_FIELD = "cycle_digest"
 _ADMISSION_SCHEMA_VERSION = "edge-paper-admission-decision.v2"
@@ -244,6 +302,10 @@ _B1_PERFORMANCE_REASONS = (
     "paper_sharpe_evidence:insufficient_daily_return_count",
     "paper_sleeve_performance_evidence:sharpe_not_computed",
 )
+# RG-3 of a bootstrap sleeve whose derived metrics context cannot yet support a series: it carries none.
+_B1_UNMEASURED_PERFORMANCE_REASONS = ("paper_sleeve_performance_evidence:daily_return_series_not_supplied",)
+# The exact governor reasons of a sample below the C7 minimum (an insufficient sample, never a threshold breach).
+_BELOW_GOVERNOR_MINIMUM_REASONS = ("paper_governor_decision:insufficient_computed_events",)
 _B1_DRAWDOWN_REASONS = (
     "paper_sleeve_drawdown_evidence:portfolio_requires_every_covered_sleeve_measured",
     "paper_sleeve_drawdown_evidence:sleeve_not_measured:{sleeve}",
@@ -256,7 +318,7 @@ _B1_GOVERNANCE_REASONS = (
 )
 
 GOVERNED_PAPER_EXECUTION_AUTHORITY_RULE_SET: dict[str, object] = {
-    "rule_set_id": "governed-paper-execution-authority.v1",
+    "rule_set_id": "governed-paper-execution-authority.v2",
     "contract_id": "GOVERNED_PAPER_TYPED_PROVENANCE_V2",
     "trust_rule": "DERIVE_NOT_ACCEPT+CANONICAL_TYPED_IDENTITY+RECOMPUTED_DIGEST+PUBLIC_VERIFIER_REPROOF",
     "typed_identity_schema": "governed-paper-typed-image.v1",
@@ -271,6 +333,12 @@ GOVERNED_PAPER_EXECUTION_AUTHORITY_RULE_SET: dict[str, object] = {
     "direction_authority_rule": "own_eligible_record_reserved_equals_unit_times_reservation_and_rg7_final_equal",
     "bootstrap_b0_drawdown_reasons": list(_B0_DRAWDOWN_REASONS),
     "bootstrap_b1_performance_reasons": list(_B1_PERFORMANCE_REASONS),
+    "bootstrap_b1_unmeasured_performance_reasons": list(_B1_UNMEASURED_PERFORMANCE_REASONS),
+    "rg3_metrics_context_rule": "section7_chain_over_the_whole_sealed_history_under_the_genesis_c7_governor.v1",
+    "rg3_metrics_context_anchor": "first_sealed_episode",
+    "rg3_metrics_context_series_rule": "exact_derived_summary_when_sample_eligible_else_no_series",
+    "rg3_metrics_context_below_minimum_reasons": list(_BELOW_GOVERNOR_MINIMUM_REASONS),
+    "rg3_metrics_context_stop_rule": "governor_review_required_or_blocked_is_a_stop",
     "bootstrap_b1_drawdown_reasons": list(_B1_DRAWDOWN_REASONS),
     "bootstrap_b1_ladder_reasons": list(_B1_LADDER_REASONS),
     "bootstrap_b1_governance_reasons": list(_B1_GOVERNANCE_REASONS),
@@ -331,9 +399,19 @@ class GovernedPaperCyclePhase(str, Enum):
     NOT_ESTABLISHED = "NOT_ESTABLISHED"
 
 
+class GovernedPaperMetricsContextStatus(str, Enum):
+    """What the derived RG-3 metrics context of one sealed history supports (see the module docstring)."""
+
+    NO_COMPUTED_REALIZED_EVENT = "NO_COMPUTED_REALIZED_EVENT"
+    BELOW_GOVERNOR_MINIMUM = "BELOW_GOVERNOR_MINIMUM"
+    SAMPLE_ELIGIBLE = "SAMPLE_ELIGIBLE"
+    GOVERNOR_REVIEW_REQUIRED = "GOVERNOR_REVIEW_REQUIRED"
+    GOVERNOR_BLOCKED = "GOVERNOR_BLOCKED"
+
+
 @dataclass(frozen=True)
 class GovernedPaperGenesisApproval:
-    """Human governance of one exact genesis policy (adoption C1 and bootstrap C2)."""
+    """Human governance of one exact genesis policy (adoption C1, bootstrap C2 and the C7 governor thresholds)."""
 
     approval_reference: str
     approval_digest: str
@@ -377,6 +455,7 @@ class GovernedPaperGenesisInputs:
     equity_basis_policy: PaperSleeveEquityBasisPolicy
     ladder_seed: PaperSleeveLadderSeed
     performance_path_policy: PaperPortfolioPerformancePathPolicy
+    metrics_governor_policy: PaperGovernorPolicy
     genesis_start_ns: int
     bootstrap_horizon_days: int
     reservation_band: str
@@ -423,6 +502,8 @@ class GovernedPaperGenesis:
     equity_basis_policy_digest: str
     ladder_seed_digest: str
     performance_path_policy_digest: str
+    metrics_governor_policy_digest: str
+    metrics_governor_policy_identity_digest: str
     genesis_start_ns: int
     bootstrap_horizon_days: int
     bootstrap_end_ns: int
@@ -528,6 +609,9 @@ class GovernedPaperCycleAuthority:
     governance_status: str
     performance_evidence_digest: str
     performance_status: str
+    metrics_context_status: str
+    metrics_summary_digest: str
+    metrics_governor_decision_digest: str
     bootstrap_max_peak_distance: str
     cycle_policy_digest: str
     rule_set_id: str
@@ -573,6 +657,28 @@ class GovernedPaperGenesisAuthority:
     equity_basis_policy: PaperSleeveEquityBasisPolicy
     ladder_seed: PaperSleeveLadderSeed
     performance_path_policy: PaperPortfolioPerformancePathPolicy
+    metrics_governor_policy: PaperGovernorPolicy
+
+
+@dataclass(frozen=True)
+class GovernedPaperMetricsContext:
+    """The derived RG-3 metrics context of one cumulative sealed history (never supplied, never a value).
+
+    ``summary`` is the section-7 metrics summary of the whole sealed history (None without any computed realized
+    event); ``governor_decision`` is its governor decision under the genesis C7 policy (None likewise).
+    """
+
+    status: GovernedPaperMetricsContextStatus
+    governor_policy_digest: str
+    manifest_digest: str
+    governor_decision: PaperGovernorDecision | None
+    summary: PaperSessionMetricsSummary | None
+
+    @property
+    def series_summary(self) -> PaperSessionMetricsSummary | None:
+        """The summary RG-3 carries: the derived one when sample-eligible, otherwise None (RG-3 carries no series)."""
+
+        return self.summary if self.status is GovernedPaperMetricsContextStatus.SAMPLE_ELIGIBLE else None
 
 
 @dataclass(frozen=True)
@@ -744,19 +850,22 @@ _UPSTREAM_REFERENCES = (
     PaperPortfolioPerformancePathPolicy,
 )
 _GENESIS_INPUTS_DOMAIN = GovernedPaperTypeDomain(
-    "governed-paper-genesis-inputs.v1", roots=(GovernedPaperGenesisInputs,), references=_UPSTREAM_REFERENCES
+    "governed-paper-genesis-inputs.v2", roots=(GovernedPaperGenesisInputs,), references=_UPSTREAM_REFERENCES
 )
 _GENESIS_DOMAIN = GovernedPaperTypeDomain(_GENESIS_SCHEMA_VERSION, roots=(GovernedPaperGenesis,))
 _CYCLE_DOMAIN = GovernedPaperTypeDomain(_CYCLE_SCHEMA_VERSION, roots=(GovernedPaperCycleAuthority,))
 _RECORD_DOMAIN = GovernedPaperTypeDomain(
-    "governed-paper-governance-records.v1",
+    "governed-paper-governance-records.v2",
     roots=(
         ProfileParameterAssignment,
         StrategyExecutableParameterApproval,
         HistoricalExecutionEconomicsApproval,
         PaperSleeveRiskBudgetPolicy,
+        PaperGovernorPolicy,
     ),
 )
+# The RG-3 metrics context: a supplied summary must be typed-identical to the derived one.
+_METRICS_DOMAIN = GovernedPaperTypeDomain("governed-paper-rg3-metrics-summary.v1", roots=(PaperSessionMetricsSummary,))
 # The sealed history: the closure of the RG-3 episode, day-close and funding-event schemas. The StrategySpec carries
 # open ``dict[str, Any]`` fields, so it is a reference re-proven through its public digest, never imaged.
 _HISTORY_DOMAIN = GovernedPaperTypeDomain(
@@ -879,6 +988,28 @@ def _capacity(
         blocked.append(_reason("capacity_assumption_not_unique" if supported else "capacity_assumption_missing"))
         return None
     return supported[0]
+
+
+def _canonical_governor_policy(policy: object) -> PaperGovernorPolicy:
+    """C7 rebuilt by its public builder (every threshold invariant re-checked); the record must be typed-identical."""
+
+    if type(policy) is not PaperGovernorPolicy:
+        raise _fail("metrics_governor_policy_malformed")
+    try:
+        canonical = build_paper_governor_policy(
+            policy_id=policy.policy_id,
+            min_computed_event_count=policy.min_computed_event_count,
+            max_abs_realized_pnl=policy.max_abs_realized_pnl,
+            review_abs_realized_pnl=policy.review_abs_realized_pnl,
+            max_closed_units=policy.max_closed_units,
+            metadata=dict(policy.metadata),
+        )
+        identical = governed_paper_typed_identical(canonical, policy, _RECORD_DOMAIN)
+    except Exception as exc:  # noqa: BLE001 - a policy its builder or the record schema refuses is never C7
+        raise _fail("metrics_governor_policy_invalid") from exc
+    if not identical:
+        raise _fail("metrics_governor_policy_not_canonical")
+    return canonical
 
 
 def _genesis_proof(inputs: GovernedPaperGenesisInputs) -> _GenesisProof:  # noqa: C901 - one linear re-proof
@@ -1104,6 +1235,9 @@ def _genesis_proof(inputs: GovernedPaperGenesisInputs) -> _GenesisProof:  # noqa
     if path.envelope_digest != envelope_digest:
         blocked.append(_reason("performance_path_policy_envelope_mismatch"))
 
+    # C7: the governor policy of the RG-3 metrics context, adopted only through the exact genesis approval.
+    governor_policy = _canonical_governor_policy(inputs.metrics_governor_policy)
+
     # The derived risk-budget policy (B1) and the one supported capacity assumption (GAP-3).
     risk_budget_policy = _derive_risk_budget_policy(admission)
     if risk_budget_policy.sleeve_id != sleeve_id:
@@ -1191,6 +1325,10 @@ def _genesis_proof(inputs: GovernedPaperGenesisInputs) -> _GenesisProof:  # noqa
         "equity_basis_policy_digest": str(upstream["equity_basis_policy_digest"]),
         "ladder_seed_digest": str(upstream["ladder_seed_digest"]),
         "performance_path_policy_digest": str(upstream["performance_path_policy_digest"]),
+        "metrics_governor_policy_digest": governor_policy.policy_digest,
+        "metrics_governor_policy_identity_digest": governed_paper_typed_identity_digest(
+            governor_policy, _RECORD_DOMAIN
+        ),
         "genesis_start_ns": start,
         "bootstrap_horizon_days": horizon,
         "bootstrap_end_ns": bootstrap_end,
@@ -1214,6 +1352,7 @@ def _genesis_proof(inputs: GovernedPaperGenesisInputs) -> _GenesisProof:  # noqa
             equity_basis_policy=basis,
             ladder_seed=seed,
             performance_path_policy=path,
+            metrics_governor_policy=governor_policy,
         )
     return _GenesisProof(authority, facts, blocked, governance)
 
@@ -1435,6 +1574,173 @@ def governed_paper_reservation_plan(
     ]
 
 
+# --- the RG-3 metrics context (derived, never supplied) ------------------------------------------------------------------
+
+
+def _metrics_context(
+    authority: GovernedPaperGenesisAuthority, episodes: tuple[PaperSleeveEpisodeEvidence, ...]
+) -> GovernedPaperMetricsContext:
+    """The section-7 chain over exactly ``episodes`` (a validated, non-empty sealed history) under the genesis C7.
+
+    One session over every sealed episode in sealed order, anchored on the first one (the run that opened the period):
+    its episode, run and correlation identity is the journal, governor, replay, readiness and summary identity, stable
+    across the whole period. Every hop is an accepted public builder, so no metric is computed here, and a hop that
+    does not reach its trusted state is a provenance defect.
+    """
+
+    policy = authority.metrics_governor_policy
+    genesis_id = authority.genesis.genesis_id
+    anchor = episodes[0].end_to_end_episode
+    correlation = anchor.correlation_id
+    ids = {"episode_id": anchor.episode_id, "run_id": anchor.run_id, "correlation_id": correlation}
+    try:
+        runs = tuple(item.episode_run for item in episodes)
+        provenance = PaperSessionSequenceProvenance(
+            session_sequence=build_paper_session_sequence(
+                runs, paper_session_id=f"{genesis_id}-rg3-session", correlation_id=correlation
+            ),
+            episodes=runs,
+        )
+        rollups = tuple(
+            PaperRealizedPnlRollupInput(
+                event=item.realized_pnl_event,
+                prior_state=item.prior_position_state,
+                fill_result=item.fill_result,
+                transition=item.position_transition,
+                new_position_state=item.new_position_state,
+            )
+            for item in episodes
+        )
+        bridge = build_paper_session_realized_pnl_bridge(
+            provenance, rollups, bridge_id=f"{genesis_id}-rg3-bridge", correlation_id=correlation
+        )
+        aggregate = build_paper_session_realized_pnl_aggregate(
+            [PaperSessionRealizedPnlAggregateInput(bridge=bridge, session_input=provenance, rollup_entries=rollups)],
+            aggregate_id=f"{genesis_id}-rg3-aggregate",
+            correlation_id=correlation,
+        )
+        manifest = build_paper_session_realized_pnl_evidence_manifest(
+            aggregate, expected_aggregate_digest=aggregate.aggregate_digest, correlation_id=correlation
+        )
+        if manifest.status is PaperSessionRealizedPnlEvidenceManifestStatus.INSUFFICIENT_EVIDENCE:
+            return GovernedPaperMetricsContext(
+                status=GovernedPaperMetricsContextStatus.NO_COMPUTED_REALIZED_EVENT,
+                governor_policy_digest=policy.policy_digest,
+                manifest_digest=manifest.manifest_digest,
+                governor_decision=None,
+                summary=None,
+            )
+        record = build_paper_evidence_admission_record(
+            manifest, expected_manifest_digest=manifest.manifest_digest, correlation_id=correlation
+        )
+        journal = EvidenceJournal()
+        ledger = append_paper_admission_record_to_evidence_journal(
+            journal,
+            record,
+            anchor,
+            manifest,
+            expected_admission_digest=record.admission_digest,
+            expected_episode_digest=anchor.episode_digest,
+            expected_prior_journal_head_digest=journal.head_digest,
+            **ids,
+        )
+        # The decision and its deterministic replay: two independent derivations over the same ledger and policy.
+        original = decide_paper_governor(ledger, policy, expected_ledger_bridge_digest=ledger.ledger_digest, **ids)
+        replayed = decide_paper_governor(ledger, policy, expected_ledger_bridge_digest=ledger.ledger_digest, **ids)
+        replay = verify_deterministic_paper_replay(
+            original,
+            replayed,
+            expected_original_digest=original.decision_digest,
+            expected_replay_digest=replayed.decision_digest,
+            **ids,
+        )
+        readiness = decide_paper_stage4_readiness(
+            replay,
+            original,
+            expected_replay_result_digest=replay.replay_result_digest,
+            expected_governor_decision_digest=original.decision_digest,
+            **ids,
+        )
+        summary = summarize_paper_session_metrics(
+            aggregate,
+            manifest,
+            readiness,
+            expected_session_aggregate_digest=aggregate.aggregate_digest,
+            expected_evidence_manifest_digest=manifest.manifest_digest,
+            expected_readiness_decision_digest=readiness.readiness_decision_digest,
+            run_id=anchor.run_id,
+            aggregate_id=aggregate.aggregate_id,
+            correlation_id=correlation,
+        )
+    except Exception as exc:  # noqa: BLE001 - a sealed history the accepted chain refuses is a provenance defect
+        raise _fail("metrics_context_not_derivable") from exc
+    if (
+        manifest.status is not PaperSessionRealizedPnlEvidenceManifestStatus.READY
+        or record.status is not PaperEvidenceAdmissionStatus.ADMITTED
+        or ledger.status is not PaperAdmissionLedgerBridgeStatus.READY
+        or ledger.appended is not True
+        or original.status is not PaperGovernorDecisionStatus.DECIDED
+        or replay.status is not DeterministicPaperReplayHarnessStatus.MATCHED
+        or readiness.status is not PaperStage4ReadinessStatus.DECIDED
+        or summary.status is not PaperSessionMetricsSummaryStatus.READY
+    ):
+        raise _fail("metrics_context_not_derivable")
+    candidate = PaperStage4ReadinessVerdict.PAPER_STAGE4_CANDIDATE.value
+    if original.decision is PaperGovernorVerdict.ALLOW_PAPER:
+        if summary.ready is not True or summary.readiness_verdict != candidate:
+            raise _fail("metrics_context_not_derivable")
+        status = GovernedPaperMetricsContextStatus.SAMPLE_ELIGIBLE
+    elif original.decision is PaperGovernorVerdict.REVIEW_REQUIRED:
+        status = GovernedPaperMetricsContextStatus.GOVERNOR_REVIEW_REQUIRED
+    elif (
+        original.decision is PaperGovernorVerdict.BLOCK_PAPER
+        and tuple(original.reason_codes) == _BELOW_GOVERNOR_MINIMUM_REASONS
+    ):
+        status = GovernedPaperMetricsContextStatus.BELOW_GOVERNOR_MINIMUM
+    else:
+        status = GovernedPaperMetricsContextStatus.GOVERNOR_BLOCKED
+    return GovernedPaperMetricsContext(
+        status=status,
+        governor_policy_digest=policy.policy_digest,
+        manifest_digest=manifest.manifest_digest,
+        governor_decision=original,
+        summary=summary,
+    )
+
+
+def governed_paper_metrics_context(
+    genesis: object, genesis_inputs: object, *, sealed_episodes: tuple[PaperSleeveEpisodeEvidence, ...]
+) -> GovernedPaperMetricsContext:
+    """The RG-3 metrics context a cycle of a verified AUTHORIZED genesis derives over ``sealed_episodes``.
+
+    ``sealed_episodes`` is the whole, non-empty episode history sealed before the cycle opens. The same derivation the
+    cycle performs: a caller builds RG-3 over exactly its ``series_summary``, or with no series when that is None.
+    Raises on any defect.
+    """
+
+    authority = governed_paper_genesis_authority(genesis, genesis_inputs)
+    if type(sealed_episodes) is not tuple or not sealed_episodes:
+        raise _fail("metrics_context_needs_sealed_episodes")
+    try:  # the exact typed episode schema the cycle's sealed-history digest images
+        governed_paper_sealed_history_digest(
+            sealed_episodes, (), (), strategy_spec_digest_anchor=authority.genesis.strategy_spec_digest
+        )
+    except Exception as exc:  # noqa: BLE001 - an episode outside the sealed-history schema is never history
+        raise _fail("metrics_context_history_malformed") from exc
+    return _metrics_context(authority, sealed_episodes)
+
+
+def _is_the_derived_summary(supplied: object, expected: PaperSessionMetricsSummary | None) -> bool:
+    if expected is None:
+        return supplied is None
+    try:
+        return type(supplied) is PaperSessionMetricsSummary and governed_paper_typed_identical(
+            supplied, expected, _METRICS_DOMAIN
+        )
+    except Exception:  # noqa: BLE001 - a value outside the summary schema is never the derived summary
+        return False
+
+
 # --- cycle ---------------------------------------------------------------------------------------------------------------
 
 
@@ -1447,6 +1753,16 @@ class _CycleProof:
 
 
 _EMPTY_DIRECTION = {"status": "", "reserved": "", "final": "", "authorized": False}
+# The RG-3 reasons a bootstrap phase pins for each derived metrics context; any other context never bootstraps.
+_B1_PERFORMANCE_BY_CONTEXT = {
+    GovernedPaperMetricsContextStatus.NO_COMPUTED_REALIZED_EVENT: _B1_UNMEASURED_PERFORMANCE_REASONS,
+    GovernedPaperMetricsContextStatus.BELOW_GOVERNOR_MINIMUM: _B1_UNMEASURED_PERFORMANCE_REASONS,
+    GovernedPaperMetricsContextStatus.SAMPLE_ELIGIBLE: _B1_PERFORMANCE_REASONS,
+}
+_METRICS_GOVERNOR_STOPS = (
+    GovernedPaperMetricsContextStatus.GOVERNOR_REVIEW_REQUIRED,
+    GovernedPaperMetricsContextStatus.GOVERNOR_BLOCKED,
+)
 
 
 def _direction(
@@ -1689,8 +2005,22 @@ def _cycle_proof(inputs: GovernedPaperCycleInputs) -> _CycleProof:  # noqa: C901
         governance_status="",
         performance_evidence_digest="",
         performance_status="",
+        metrics_context_status="",
+        metrics_summary_digest="",
+        metrics_governor_decision_digest="",
         bootstrap_max_peak_distance="",
     )
+    # The RG-3 metrics context of the sealed history (M2): derived under the genesis C7 policy, never supplied.
+    context = _metrics_context(authority, episodes) if episodes else None
+    if context is not None:
+        decision = context.governor_decision
+        facts.update(
+            metrics_context_status=context.status.value,
+            metrics_summary_digest="" if context.summary is None else context.summary.summary_digest,
+            metrics_governor_decision_digest="" if decision is None else decision.decision_digest,
+        )
+        if context.status in _METRICS_GOVERNOR_STOPS:
+            blocked.append(_reason(f"metrics_governor_stop:{context.status.value}"))
     phase = GovernedPaperCyclePhase.NOT_ESTABLISHED
     bootstrap = False
     governed, governed_inputs = inputs.governance_decision, inputs.governance_inputs
@@ -1746,6 +2076,18 @@ def _cycle_proof(inputs: GovernedPaperCycleInputs) -> _CycleProof:  # noqa: C901
             != history_digest
         ):
             raise _fail("performance_history_not_the_sealed_history")
+        # C5: RG-3 (hence every drawdown, ladder and bootstrap-stop index) is valued under exactly the genesis's basis
+        # record: the genesis fact is that record's recomputed self-digest, which RG-3 carries as equity_basis_digest.
+        if performance.equity_basis_digest != genesis.equity_basis_policy_digest:
+            raise _fail("performance_not_on_the_genesis_basis")
+        if context is None:
+            raise _fail("performance_metrics_context_not_derived")
+        # RG-3 carries a series only over a computed valuation, and there only the derived sample-eligible summary.
+        valuation_computed = sleeves[0].performance_inputs.valuation.status is PaperSleeveValuationStatus.COMPUTED
+        expected_summary = context.series_summary if valuation_computed else None
+        if not _is_the_derived_summary(sleeves[0].performance_inputs.metrics_summary, expected_summary):
+            raise _fail("performance_metrics_context_not_derived")
+        pinned_performance = _B1_PERFORMANCE_BY_CONTEXT.get(context.status)
         ladder_state = ladders[0].ladder_decision_inputs.ladder_state
         facts.update(
             governance_decision_digest=governed.governance_decision_digest,
@@ -1779,7 +2121,8 @@ def _cycle_proof(inputs: GovernedPaperCycleInputs) -> _CycleProof:  # noqa: C901
             and tuple(sorted(ladders[0].ladder_decision.reason_codes))
             == _expected_reasons(_B1_LADDER_REASONS, sleeve_id)
             and performance.status is PaperSleevePerformanceStatus.NOT_COMPUTABLE
-            and tuple(sorted(performance.reason_codes)) == _expected_reasons(_B1_PERFORMANCE_REASONS, sleeve_id)
+            and pinned_performance is not None
+            and tuple(sorted(performance.reason_codes)) == _expected_reasons(pinned_performance, sleeve_id)
         ):
             phase, bootstrap = GovernedPaperCyclePhase.BOOTSTRAP_B1, True
             days = sleeves[0].performance_inputs.valuation.days
@@ -1944,6 +2287,8 @@ __all__ = [
     "GovernedPaperGenesisAuthority",
     "GovernedPaperGenesisInputs",
     "GovernedPaperGenesisStatus",
+    "GovernedPaperMetricsContext",
+    "GovernedPaperMetricsContextStatus",
     "GovernedPaperReservationPlan",
     "build_governed_paper_cycle_authority",
     "build_governed_paper_genesis",
@@ -1954,6 +2299,7 @@ __all__ = [
     "governed_paper_genesis_authority",
     "governed_paper_genesis_digest",
     "governed_paper_genesis_to_dict",
+    "governed_paper_metrics_context",
     "governed_paper_reservation_plan",
     "governed_paper_sealed_history_digest",
     "verify_governed_paper_cycle_authority",

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import FrozenInstanceError, replace
+from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_FLOOR, ROUND_HALF_EVEN, ROUND_UP, getcontext, localcontext
 from pathlib import Path
 
 import pytest
@@ -231,14 +232,14 @@ def _bridge_signal():
     )
 
 
-def _prior_long():
+def _prior_long(average_entry_price: str = "100"):
     return build_paper_position_state(
         position_state_id="pos-1",
         market_symbol=_SYMBOL,
         side=PaperPositionStateSide.LONG,
         signed_units="10",
         abs_units="10",
-        average_entry_price="100",
+        average_entry_price=average_entry_price,
         transition_count=0,
         correlation_id="corr-pos",
     )
@@ -315,11 +316,11 @@ def _mr_prov() -> PaperSessionSequenceProvenance:
     return PaperSessionSequenceProvenance(session_sequence=session, episodes=tuple(eps))
 
 
-def _aligned():
+def _aligned(average_entry_price: str = "100"):
     capacity = _capacity()
     order_intent = _order_intent_from(capacity, _request(capacity))
     bridge_signal = _bridge_signal()
-    prior = _prior_long()
+    prior = _prior_long(average_entry_price)
     episode_run = run_paper_episode(order_intent, prior, _snapshot(), _policy_fill(), _mark(), **_CHAIN_IDS)  # type: ignore[arg-type]
     fill, transition, new_state, event = _realized_components(order_intent, prior)
     episode = build_paper_end_to_end_episode(
@@ -387,10 +388,15 @@ def _policy(
     )
 
 
-def _full_chain(policy=None):
+def _full_chain(policy=None, average_entry_price: str = "100"):
     """Build one genuine deterministic paper chain → (aggregate, manifest, readiness, aggregate_input)."""
-    record, manifest, episode, agg, agg_input = _aligned()
+    record, manifest, episode, agg, agg_input = _aligned(average_entry_price)
     bridge = _ready_bridge_from(record, manifest, episode)
+    return agg, manifest, _decision_chain(bridge, policy), agg_input
+
+
+def _decision_chain(bridge, policy=None):  # noqa: ANN001, ANN202
+    """The governor → deterministic replay → Stage-4 readiness decision over one READY ledger bridge."""
     policy = policy if policy is not None else _policy()
     governor = decide_paper_governor(
         bridge,
@@ -419,7 +425,7 @@ def _full_chain(policy=None):
         episode_id=_EPISODE_ID,
         correlation_id=_CORR,
     )
-    return agg, manifest, readiness, agg_input
+    return readiness
 
 
 def _chain_inputs(policy=None):
@@ -523,6 +529,82 @@ def test_blocked_summarized_not_ready() -> None:
     assert result.ready is False
     assert result.readiness_verdict == "PAPER_BLOCKED"
     assert any("readiness_blocked" in code for code in result.reason_codes)
+
+
+# --------------------------------------------------------------------------------------------------
+# 2b. Ambient decimal context independence (C7_DECIMAL_CONTEXT_DEPENDENCE regression)
+# --------------------------------------------------------------------------------------------------
+
+_CONTEXT_PRECISIONS = (1, 2, 6, 28, 50)
+_CONTEXT_ROUNDINGS = (ROUND_HALF_EVEN, ROUND_DOWN, ROUND_UP, ROUND_FLOOR, ROUND_CEILING)
+
+
+def _in_every_context(call):  # noqa: ANN001, ANN202
+    """``call()`` under every ambient context of the matrix; each ``localcontext`` restores the caller's context."""
+    caller = getcontext()
+    before = (caller.prec, caller.rounding)
+    results = []
+    for precision in _CONTEXT_PRECISIONS:
+        for rounding in _CONTEXT_ROUNDINGS:
+            with localcontext() as ctx:
+                ctx.prec, ctx.rounding = precision, rounding
+                results.append(call())
+    assert (getcontext().prec, getcontext().rounding) == before
+    return results
+
+
+@pytest.mark.parametrize(
+    ("entry", "policy_overrides", "realized", "magnitude", "verdict"),
+    [
+        ("50.0254026", {"review_abs_realized_pnl": "0.101"}, "-0.1016104", "0.1016104", "PAPER_REVIEW_REQUIRED"),
+        (
+            "50.0254026",
+            {"max_abs_realized_pnl": "0.101", "review_abs_realized_pnl": "0.1"},
+            "-0.1016104",
+            "0.1016104",
+            "PAPER_BLOCKED",
+        ),
+        ("49.9745974", {}, "0.1016104", "0.1016104", "PAPER_STAGE4_CANDIDATE"),
+        ("50", {}, "0", "0", "PAPER_STAGE4_CANDIDATE"),
+        ("100.123456789", {}, "-200.493827156", "200.493827156", "PAPER_STAGE4_CANDIDATE"),
+        ("100", {}, "-200", "200", "PAPER_STAGE4_CANDIDATE"),
+    ],
+    ids=["audit_counterexample_review", "block_threshold", "positive", "zero", "more_digits_than_precision", "base"],
+)
+def test_the_summary_is_independent_of_the_ambient_decimal_context(
+    entry: str, policy_overrides: dict[str, str], realized: str, magnitude: str, verdict: str
+) -> None:
+    """The same immutable chain summarizes identically, decisions included, under every precision and rounding.
+
+    Before the repair, ``abs()`` rounded the magnitude to the ambient context (0.1016104 -> "0.1", "0.2",
+    "0.11", ...), so the summary digest changed with the caller's context; with the governor's ``abs()`` the audit
+    counterexample also turned PAPER_REVIEW_REQUIRED into a sample-eligible PAPER_STAGE4_CANDIDATE.
+    """
+
+    record, manifest, episode, aggregate, _ = _aligned(entry)
+    bridge = _ready_bridge_from(record, manifest, episode)  # immutable inputs, built once under the caller's context
+    policy = _policy(**policy_overrides)
+    readiness = _decision_chain(bridge, policy)
+    reference = _summarize(aggregate, manifest, readiness)
+    assert (reference.realized_pnl_total, reference.abs_realized_pnl_total, reference.readiness_verdict) == (
+        realized,
+        magnitude,
+        verdict,
+    )
+    for summary in _in_every_context(lambda: _summarize(aggregate, manifest, readiness)):
+        assert (summary.abs_realized_pnl_total, summary.summary_digest) == (magnitude, reference.summary_digest)
+
+    def decide_and_summarize():  # noqa: ANN202
+        decided = _decision_chain(bridge, policy)
+        return decided, _summarize(aggregate, manifest, decided)
+
+    for decided, summary in _in_every_context(decide_and_summarize):
+        assert decided.readiness_decision_digest == readiness.readiness_decision_digest
+        assert (summary.readiness_verdict, summary.abs_realized_pnl_total, summary.summary_digest) == (
+            verdict,
+            magnitude,
+            reference.summary_digest,
+        )
 
 
 # --------------------------------------------------------------------------------------------------
