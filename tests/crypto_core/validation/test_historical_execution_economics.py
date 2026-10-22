@@ -61,6 +61,7 @@ from crypto_core.validation.historical_execution_economics import (
     historical_execution_governed_paper_outcome_to_dict,
     historical_execution_governed_paper_prefix_digest,
     historical_execution_latest_visible_mark,
+    historical_execution_visible_observations,
     simulate_historical_execution_governed_paper,
     verify_historical_execution_economics,
 )
@@ -2302,6 +2303,26 @@ def test_a_longer_replay_preserves_the_shorter_prefix_exactly() -> None:
         (schedule_of(window_of(short="-1")), "admission_schedule_invalid:quantity_ceiling_negative"),
         (schedule_of(window_of(price="0")), "admission_schedule_invalid:reservation_price_not_positive"),
         (schedule_of(window_of(), invalidated=False), "admission_schedule_malformed:invalidated_from_ns"),
+        (
+            replace(PERMISSIVE, entry_refused_decision_sequences=[1]),
+            "admission_schedule_malformed:entry_refused_decision_sequences",
+        ),
+        (
+            replace(PERMISSIVE, entry_refused_decision_sequences=(True,)),
+            "admission_schedule_malformed:entry_refused_decision_sequences",
+        ),
+        (
+            replace(PERMISSIVE, entry_refused_decision_sequences=(-1,)),
+            "admission_schedule_malformed:entry_refused_decision_sequences",
+        ),
+        (
+            replace(PERMISSIVE, entry_refused_decision_sequences=(2, 1)),
+            "admission_schedule_invalid:entry_refusals_not_strictly_increasing",
+        ),
+        (
+            replace(PERMISSIVE, entry_refused_decision_sequences=(1, 1)),
+            "admission_schedule_invalid:entry_refusals_not_strictly_increasing",
+        ),
         (schedule_of(window_of(START - 1, END)), "admission_schedule_outside_evaluation_window"),
         (schedule_of(window_of(START, END + 1)), "admission_schedule_outside_evaluation_window"),
     ],
@@ -2404,6 +2425,120 @@ def test_the_latest_visible_mark_is_the_engines_own_valuation_mark() -> None:
         values = {"dataset": w.dataset, "policy": policy, "instrument": INS, "at_ns": START, **arguments}
         with pytest.raises(HistoricalExecutionEconomicsError, match=f"^{_code(code)}$"):
             historical_execution_latest_visible_mark(values.pop("dataset"), **values)  # type: ignore[arg-type]
+
+
+def _entries_and_exits(result: HistoricalExecutionEconomicsResult) -> tuple[tuple[int, ...], tuple[int, ...]]:
+    """The decision sequences of intents that open from flat (entries) and of every other intent (exits, reductions)."""
+
+    entries = tuple(sorted(item.decision_sequence for item in result.intents if Fraction(item.actual_quantity) == 0))
+    exits = tuple(sorted(item.decision_sequence for item in result.intents if Fraction(item.actual_quantity) != 0))
+    return entries, exits
+
+
+def test_an_entry_refusal_refuses_only_entries_and_never_an_exit() -> None:
+    mirror = economics(world(records=market_records(rates=flipped())))
+    for result in (default_result(), mirror):
+        entries, exits = _entries_and_exits(result)
+        assert entries and exits
+        # every non-flat decision: once an entry is refused the position stays flat, and each later non-flat
+        # decision opens a new intent (exactly the intents of a run without any window)
+        everything = tuple(sorted({item.decision_sequence for item in governed(result, schedule_of()).intents}))
+        nothing = governed(result, replace(PERMISSIVE, entry_refused_decision_sequences=everything))
+        assert set(governed_reasons(nothing)) == {"governed_paper_entry_safety_refused"}
+        assert nothing.position_transitions == () and nothing.fee_cashflows == () and nothing.trades == ()
+        assert len(nothing.governance_rejected_fill_digests) == len(nothing.intents)
+        # refusing the decisions of every exit and reduction changes nothing: only an entry is ever refused
+        exits_listed = governed(result, replace(PERMISSIVE, entry_refused_decision_sequences=exits))
+        permissive = governed(result)
+        for name in ("intents", "fills", "position_transitions", "fee_cashflows", "valuations", "trades"):
+            assert getattr(exits_listed, name) == getattr(permissive, name), name
+        assert exits_listed.governance_rejected_fill_digests == ()
+        # a refused first entry leaves no fee, transition or state change; the next entry decision opens instead
+        first = entries[0]
+        skipped = governed(result, replace(PERMISSIVE, entry_refused_decision_sequences=(first,)))
+        refused = [item for item in skipped.fills if item.reason == "governed_paper_entry_safety_refused"]
+        assert len(refused) == 1 and refused[0].outcome is HistoricalExecutionFillOutcome.REJECTED
+        assert (
+            refused[0].execution_time_ns is None and refused[0].fill_digest in skipped.governance_rejected_fill_digests
+        )
+        assert all(item.fill_digest != refused[0].fill_digest for item in skipped.position_transitions)
+        assert all(item.fill_digest != refused[0].fill_digest for item in skipped.fee_cashflows)
+        assert skipped.position_transitions and skipped.position_transitions != permissive.position_transitions
+        verification = verify_governed_paper_outcome(
+            skipped, result=result, expected_result_digest=result.result_digest
+        )
+        assert (verification.intact, verification.reason_codes) == (True, ())
+        assert skipped.schedule.entry_refused_decision_sequences == (first,)
+        assert historical_execution_admission_schedule_digest(skipped.schedule) == skipped.schedule_digest
+
+
+def test_the_entry_refusals_are_part_of_the_schedule_identity_and_of_the_prefix() -> None:
+    entries, _ = _entries_and_exits(default_result())
+    refused = replace(PERMISSIVE, entry_refused_decision_sequences=entries[:1])
+    assert historical_execution_admission_schedule_digest(refused) != historical_execution_admission_schedule_digest(
+        PERMISSIVE
+    )
+    cut_at = default_result().intents[-1].decision_time_ns + 1
+    assert historical_execution_governed_paper_prefix_digest(
+        governed(schedule=refused), before_ns=cut_at
+    ) != historical_execution_governed_paper_prefix_digest(governed(), before_ns=cut_at)
+    outcome = governed(schedule=refused)
+    other = _reseal_outcome(outcome, schedule=PERMISSIVE)
+    result = default_result()
+    assert (
+        verify_governed_paper_outcome(other, result=result, expected_result_digest=result.result_digest).intact is False
+    )
+
+
+def test_the_visible_observations_are_the_engines_own_rules_indexed_once() -> None:
+    w, policy = default_world(), default_policy()
+    observations = historical_execution_visible_observations(w.dataset, policy=policy, instrument=INS)
+    assert observations.mark_series_available is True and observations.book_series_available is True
+    books = [item for item in w.dataset.records if item.series_id == "book" and item.instrument == INS]
+    instants = sorted(
+        {
+            START,
+            END,
+            *(
+                max(item.available_at_ns, item.finalized_at_ns) + delta
+                for item in w.dataset.records
+                for delta in (-1, 0, 1)
+            ),
+        }
+    )
+    for at in instants:
+        assert observations.latest_mark(at) == historical_execution_latest_visible_mark(
+            w.dataset, policy=policy, instrument=INS, at_ns=at
+        )
+        visible = [item for item in books if max(item.available_at_ns, item.finalized_at_ns) <= at]
+        expected = None
+        if visible:
+            latest = max(visible, key=lambda item: (item.event_time_ns, item.sequence_id))
+            expected = (latest.record_digest, latest.event_time_ns)
+        assert observations.latest_book_update(at) == expected
+    foreign = historical_execution_visible_observations(w.dataset, policy=policy, instrument="ETH-USDT-PERP")
+    assert (foreign.mark_series_available, foreign.book_series_available) == (False, False)
+    assert foreign.latest_mark(START) is None and foreign.latest_book_update(START) is None
+    for call, code in (
+        (
+            lambda: historical_execution_visible_observations(object(), policy=policy, instrument=INS),
+            "visible_mark_input_malformed",
+        ),  # type: ignore[arg-type]
+        (
+            lambda: historical_execution_visible_observations(w.dataset, policy=object(), instrument=INS),
+            "visible_mark_input_malformed",
+        ),  # type: ignore[arg-type]
+        (
+            lambda: historical_execution_visible_observations(w.dataset, policy=policy, instrument=1),
+            "visible_mark_instant_invalid",
+        ),  # type: ignore[arg-type]
+        (lambda: observations.latest_mark(True), "visible_mark_instant_invalid"),  # type: ignore[arg-type]
+        (lambda: observations.latest_mark(-1), "visible_mark_instant_invalid"),
+        (lambda: observations.latest_book_update(True), "visible_book_instant_invalid"),  # type: ignore[arg-type]
+        (lambda: observations.latest_book_update(-1), "visible_book_instant_invalid"),
+    ):
+        with pytest.raises(HistoricalExecutionEconomicsError, match=f"^{_code(code)}$"):
+            call()
 
 
 def test_the_governed_outcome_domain_is_the_closure_of_its_schema() -> None:

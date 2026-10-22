@@ -16,6 +16,14 @@ the first computed realized event, and the sample-eligible summary of the whole 
 
 Cost: the world is built once per session and every pure upstream re-proof is memoized, exactly (frozen inputs, the
 same objects) or by the accepted exact keys. A ``slow`` test re-proves the whole lineage memo-free.
+
+ENTRY GATE SUBSTITUTION (SYNTHETIC, TEST-ONLY). The production entry-safety gate (``governed_paper_entry_safety``,
+PRDV4 §1.21 and §1.9) refuses every S1 entry of these worlds: on the selected data contract its first check, NT-D01,
+is BLOCKED_ON_MISSING_INPUT. ``test_governed_paper_entry_safety.py`` proves that on world G and on every scenario.
+This module and the authority tests exercise the downstream mechanics an entry reaches (fills, projection, funding,
+RG-3, the bootstrap phases) with the rule table explicitly replaced by one always-passing check
+(``install_test_only_permissive_entry_gate``). No public input selects that table: the seals built under it carry its
+own rule-set digest, and none of them verifies under the production gate.
 """
 
 from __future__ import annotations
@@ -31,6 +39,7 @@ import pytest
 import crypto_core.validation.edge_kill_quarantine_decision as ef8_module
 import crypto_core.validation.edge_paper_admission_decision as ef7_module
 import crypto_core.validation.governed_admitted_variant_paper_execution as execution
+import crypto_core.validation.governed_paper_entry_safety as entry_safety
 import crypto_core.validation.governed_paper_execution_authority as authority
 import crypto_core.validation.paper_portfolio_allocation_decision as rg7_module
 import crypto_core.validation.paper_portfolio_governance_decision as rg8_module
@@ -302,10 +311,38 @@ def apply_memos(patch: pytest.MonkeyPatch) -> None:
         patch.setattr(module, name, memo)
 
 
+def _test_only_permissive_check(observation: object) -> object:
+    return entry_safety._Outcome(  # noqa: SLF001 - the test-only rule table below
+        entry_safety.GovernedPaperEntrySafetyStatus.PASS, "", "test_only_permissive_entry_gate"
+    )
+
+
+TEST_ONLY_PERMISSIVE_ENTRY_CHECKS = (
+    entry_safety._Check(  # noqa: SLF001 - SYNTHETIC, test-only rule table (see the module docstring)
+        "TEST-ONLY-PERMISSIVE",
+        entry_safety.GovernedPaperEntrySafetyFamily.DATA,
+        "SYNTHETIC test-only substitution of the S1 entry-safety rule table",
+        "none",
+        _test_only_permissive_check,  # type: ignore[arg-type]
+    ),
+)
+
+
+def install_test_only_permissive_entry_gate(patch: pytest.MonkeyPatch) -> None:
+    """SYNTHETIC, TEST-ONLY: replace the production entry-safety rule table by one always-passing check.
+
+    Only the downstream-mechanics lineage tests install it (see the module docstring); the production gate refuses every
+    S1 entry of these worlds. The seals built under it carry the substituted rule-set digest.
+    """
+
+    patch.setattr(entry_safety, "_CHECKS", TEST_ONLY_PERMISSIVE_ENTRY_CHECKS)
+
+
 @pytest.fixture(autouse=True, scope="module")
 def _memoized_verification():
     with pytest.MonkeyPatch.context() as patch:
         apply_memos(patch)
+        install_test_only_permissive_entry_gate(patch)
         yield
 
 

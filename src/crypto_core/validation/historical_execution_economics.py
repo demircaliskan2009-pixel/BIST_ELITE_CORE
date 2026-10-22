@@ -105,13 +105,16 @@ fail and proves no venue mechanics, liquidation behavior or real-market stress.
 
 Governed paper admission (``GOVERNED_PAPER_ADMISSION_HOOKS_V1``). ``simulate_historical_execution_governed_paper``
 re-runs THIS engine over one authenticated READY + PASS result under one neutral ``HistoricalExecutionAdmissionSchedule``
-(ordered disjoint windows, each with long and short post-fill ceilings and a reservation price, and an optional
-invalidation instant); the engine never learns which governance produced the schedule. The two hooks only refuse:
+(ordered disjoint windows, each with long and short post-fill ceilings and a reservation price, an optional
+invalidation instant and the decision sequences whose entries are refused); the engine never learns which governance
+produced the schedule. The two hooks only refuse:
 
 * at the decision instant ``t0``: no window contains ``t0`` (``governed_paper_no_cycle_authority``), the schedule is
   invalidated at or before ``t0`` (``governed_paper_lifecycle_invalidated``), the window's ceiling on the intent's own
   side is zero, so that side is not permitted at all, exits included (``governed_paper_direction_not_authorized``), the
-  intent adds to an open position on its own side (``governed_paper_same_side_add_unsupported``), or its post-fill
+  intent adds to an open position on its own side (``governed_paper_same_side_add_unsupported``), the intent increases
+  the magnitude of the position (an entry) and the schedule lists its decision sequence among the refused entries
+  (``governed_paper_entry_safety_refused``; an exit or a reduction is never refused by that list), or its post-fill
   position exceeds the window's long or short ceiling (``governed_paper_unit_ceiling_exceeded``); the intent is
   ``REJECTED`` before any book is selected;
 * at the fill instant ``tf``: no window contains ``tf`` (``governed_paper_no_cycle_authority_at_fill``), the schedule is
@@ -2048,9 +2051,10 @@ def historical_execution_stress_outcome_digest(outcome: HistoricalExecutionStres
 
 # --- governed paper admission (GOVERNED_PAPER_ADMISSION_HOOKS_V1) -----------------------------------------------------
 
-HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v1"
+HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v2"
 _SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION
-_GOVERNED_SCHEMA_VERSION = "historical-execution-governed-paper-outcome.v1"
+HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION = "historical-execution-governed-paper-outcome.v2"
+_GOVERNED_SCHEMA_VERSION = HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION
 _GOVERNED_DIGEST_FIELD = "outcome_digest"
 _GOVERNED_REASON_PREFIX = "governed_paper_"
 # The intent of the last decision is PENDING only when the evaluation end, not the market, left it unfilled.
@@ -2075,12 +2079,18 @@ class HistoricalExecutionAdmissionWindow:
 
 @dataclass(frozen=True)
 class HistoricalExecutionAdmissionSchedule:
-    """One neutral declared admission schedule: ordered, disjoint windows and an optional invalidation instant."""
+    """One neutral declared admission schedule: ordered, disjoint windows and an optional invalidation instant.
+
+    ``entry_refused_decision_sequences`` (strictly increasing) names the decisions whose entry is refused: an intent of
+    such a decision that would increase the magnitude of the position is refused at its decision instant, while an
+    exit or a reduction of an open position stays subject only to the other rules.
+    """
 
     schema_version: str
     schedule_id: str
     windows: tuple[HistoricalExecutionAdmissionWindow, ...]
     invalidated_from_ns: int | None
+    entry_refused_decision_sequences: tuple[int, ...] = ()
 
 
 HISTORICAL_EXECUTION_GOVERNED_PAPER_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
@@ -2178,6 +2188,7 @@ class _GovernedPaperSimulation(_Simulation):
         )
         self.window_starts = [item.start for item in self.windows]
         self.invalidated_from = schedule.invalidated_from_ns
+        self.entry_refusals = frozenset(schedule.entry_refused_decision_sequences)
         super().__init__(**arguments)  # type: ignore[arg-type]
 
     def _window_index(self, time_ns: int) -> int | None:
@@ -2204,6 +2215,8 @@ class _GovernedPaperSimulation(_Simulation):
         post = actual + intent.requested if buying else actual - intent.requested
         if actual != 0 and abs(post) > abs(actual):
             return "governed_paper_same_side_add_unsupported"
+        if abs(post) > abs(actual) and intent.record.decision_sequence in self.entry_refusals:
+            return "governed_paper_entry_safety_refused"
         if post > window.max_long or -post > window.max_short:
             return "governed_paper_unit_ceiling_exceeded"
         return None
@@ -2256,6 +2269,13 @@ def canonical_historical_execution_admission_schedule(value: object) -> Historic
     invalidated = value.invalidated_from_ns
     if invalidated is not None and not historical_execution_wire_int_is_valid(invalidated, minimum=0):
         raise _fail("admission_schedule_malformed:invalidated_from_ns")
+    refused = value.entry_refused_decision_sequences
+    if type(refused) is not tuple or any(
+        not historical_execution_wire_int_is_valid(item, minimum=0) for item in refused
+    ):
+        raise _fail("admission_schedule_malformed:entry_refused_decision_sequences")
+    if any(later <= earlier for earlier, later in zip(refused, refused[1:], strict=False)):
+        raise _fail("admission_schedule_invalid:entry_refusals_not_strictly_increasing")
     return value
 
 
@@ -2512,6 +2532,114 @@ def historical_execution_governed_paper_prefix_digest(
     return edge_sha256_text(edge_canonical_json(prefix))
 
 
+class _LatestVisible:
+    """The latest record (by event time, then sequence; the earliest dataset position on a tie) visible at an instant.
+
+    Built once over one series: records ordered by PIT visibility, with the running best of that key, so every query is
+    a bisection. It selects exactly what a scan of the dataset in record order selects.
+    """
+
+    def __init__(self, dataset: HistoricalPitDataset, *, series: str, instrument: str) -> None:
+        ranked: list[tuple[int, int, HistoricalPitRecord]] = []
+        for position, record in enumerate(dataset.records):
+            visible = _visibility(record) if record.series_id == series and record.instrument == instrument else None
+            if visible is not None:
+                ranked.append((visible, position, record))
+        ranked.sort(key=lambda item: (item[0], item[1]))
+        self._visibility = [item[0] for item in ranked]
+        self._best: list[HistoricalPitRecord] = []
+        best: tuple[int, int, int] | None = None
+        record_of_best: HistoricalPitRecord | None = None
+        for _, position, record in ranked:
+            key = (record.event_time_ns, record.sequence_id, -position)
+            if best is None or key > best:
+                best, record_of_best = key, record
+            self._best.append(record_of_best)  # type: ignore[arg-type]
+
+    def at(self, at_ns: int) -> HistoricalPitRecord | None:
+        index = bisect.bisect_right(self._visibility, at_ns)
+        return self._best[index - 1] if index else None
+
+
+class HistoricalExecutionVisibleObservations:
+    """This engine's own point-in-time observation rules over one authentic dataset, policy and instrument.
+
+    Built by ``historical_execution_visible_observations`` (which verifies its inputs once); every query is pure and
+    reads only records visible at or before the queried instant.
+    """
+
+    def __init__(
+        self,
+        *,
+        dataset: HistoricalPitDataset,
+        policy: HistoricalExecutionEconomicsPolicy,
+        instrument: str,
+    ) -> None:
+        self._policy = policy
+        mark_codes, mark_series = _select_series(
+            dataset, key=policy.mark_data_key, instrument=instrument, policy=policy
+        )
+        book_codes, book_series = _select_series(
+            dataset, key=policy.order_book_data_key, instrument=instrument, policy=policy
+        )
+        self.mark_series_available = not mark_codes
+        self.book_series_available = not book_codes
+        self._marks = None if mark_codes else _LatestVisible(dataset, series=mark_series, instrument=instrument)
+        self._books = None if book_codes else _LatestVisible(dataset, series=book_series, instrument=instrument)
+
+    def latest_mark(self, at_ns: int) -> tuple[str, str] | None:
+        """``(mark record digest, mark price)`` under the engine's valuation rule at ``at_ns``, or None.
+
+        The latest visible mark (by event time, then sequence); None when there is none, it is older than
+        ``max_mark_staleness_ns`` or its price is not positive.
+        """
+
+        if not historical_execution_wire_int_is_valid(at_ns, minimum=0):
+            raise _fail("visible_mark_instant_invalid")
+        best = None if self._marks is None else self._marks.at(at_ns)
+        policy = self._policy
+        if best is None or at_ns - best.event_time_ns > policy.max_mark_staleness_ns:
+            return None
+        values = [item.value for item in best.values if item.name == policy.mark_value_name]
+        if len(values) != 1 or not historical_execution_decimal_is_canonical(values[0]):
+            raise _fail("visible_mark_value_malformed")
+        if Fraction(values[0]) <= 0:
+            return None
+        return best.record_digest, values[0]
+
+    def latest_book_update(self, at_ns: int) -> tuple[str, int] | None:
+        """``(book record digest, its native event time)`` of the latest order-book update visible at ``at_ns``."""
+
+        if not historical_execution_wire_int_is_valid(at_ns, minimum=0):
+            raise _fail("visible_book_instant_invalid")
+        best = None if self._books is None else self._books.at(at_ns)
+        return None if best is None else (best.record_digest, best.event_time_ns)
+
+
+def historical_execution_visible_observations(
+    dataset: HistoricalPitDataset,
+    *,
+    policy: HistoricalExecutionEconomicsPolicy,
+    instrument: str,
+) -> HistoricalExecutionVisibleObservations:
+    """Verify one dataset and policy once and index this engine's visible mark and order-book observations.
+
+    Malformed or non-authentic inputs raise ``HistoricalExecutionEconomicsError``; a missing or unusable mark or book
+    series is reported by ``mark_series_available`` / ``book_series_available`` and every query of it returns None.
+    """
+
+    if type(dataset) is not HistoricalPitDataset or not verify_historical_pit_dataset(dataset).intact:
+        raise _fail("visible_mark_input_malformed")
+    if (
+        type(policy) is not HistoricalExecutionEconomicsPolicy
+        or not verify_historical_execution_economics_policy(policy).intact
+    ):
+        raise _fail("visible_mark_input_malformed")
+    if type(instrument) is not str:
+        raise _fail("visible_mark_instant_invalid")
+    return HistoricalExecutionVisibleObservations(dataset=dataset, policy=policy, instrument=instrument)
+
+
 def historical_execution_latest_visible_mark(
     dataset: HistoricalPitDataset,
     *,
@@ -2526,33 +2654,12 @@ def historical_execution_latest_visible_mark(
     Malformed or non-authentic inputs raise ``HistoricalExecutionEconomicsError``.
     """
 
-    if type(dataset) is not HistoricalPitDataset or not verify_historical_pit_dataset(dataset).intact:
-        raise _fail("visible_mark_input_malformed")
-    if (
-        type(policy) is not HistoricalExecutionEconomicsPolicy
-        or not verify_historical_execution_economics_policy(policy).intact
-    ):
-        raise _fail("visible_mark_input_malformed")
-    if type(instrument) is not str or not historical_execution_wire_int_is_valid(at_ns, minimum=0):
+    observations = historical_execution_visible_observations(dataset, policy=policy, instrument=instrument)
+    if not historical_execution_wire_int_is_valid(at_ns, minimum=0):
         raise _fail("visible_mark_instant_invalid")
-    codes, series = _select_series(dataset, key=policy.mark_data_key, instrument=instrument, policy=policy)
-    if codes:
+    if not observations.mark_series_available:
         raise _fail("visible_mark_series_unavailable")
-    best: HistoricalPitRecord | None = None
-    for record in dataset.records:
-        visible = _visibility(record) if record.series_id == series and record.instrument == instrument else None
-        if visible is None or visible > at_ns:
-            continue
-        if best is None or (record.event_time_ns, record.sequence_id) > (best.event_time_ns, best.sequence_id):
-            best = record
-    if best is None or at_ns - best.event_time_ns > policy.max_mark_staleness_ns:
-        return None
-    values = [item.value for item in best.values if item.name == policy.mark_value_name]
-    if len(values) != 1 or not historical_execution_decimal_is_canonical(values[0]):
-        raise _fail("visible_mark_value_malformed")
-    if Fraction(values[0]) <= 0:
-        return None
-    return best.record_digest, values[0]
+    return observations.latest_mark(at_ns)
 
 
 # --- result -------------------------------------------------------------------------------------------------------------

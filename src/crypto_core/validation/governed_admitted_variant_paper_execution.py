@@ -10,6 +10,11 @@ at ``E_{k+1}`` by an authenticated prefix replay from the immutable genesis G:
   genesis's canonical authorities (never supplied), then re-run under the neutral admission schedule of every
   AUTHORIZED cycle so far (``simulate_historical_execution_governed_paper``). The archive holds only records known at
   ``E_{k+1}``, and it must reproduce the cycle's opening quote ``m(E_k)``;
+* entry safety (``S1_PAPER_ENTRY_SAFETY_CLOSURE_V1``, ``governed_paper_entry_safety``): every decision of the run whose
+  resulting direction is LONG or SHORT is evaluated at its own decision instant against the PRDV4 §1.21 NO-TRADE
+  conditions and the §1.9 Family B gates, over the archive and the genesis facts. The schedule lists every refused
+  decision and the engine refuses its entry, never an exit. The seal carries the day's evaluations and the digest of
+  the whole evaluation;
 * the engine content of every event before ``E_k`` must equal the previous seal's (X1, the prefix digest); the intent
   the previous replay's end left pending is excluded from both prefixes and keeps its deciding-cycle lineage (B3);
 * the closing head attestation at ``E_{k+1}`` validates or invalidates the day, never authorizes it (X3). A changed head
@@ -57,6 +62,11 @@ from crypto_core.validation.edge_kill_quarantine_decision import (
     EdgeLifecycleState,
     verify_edge_kill_quarantine_decision,
 )
+from crypto_core.validation.governed_paper_entry_safety import (
+    GovernedPaperEntrySafetyDecision,
+    GovernedPaperEntrySafetyEvidence,
+    build_governed_paper_entry_safety_evidence,
+)
 from crypto_core.validation.governed_paper_execution_authority import (
     GovernedPaperCycleAuthority,
     GovernedPaperCycleInputs,
@@ -80,6 +90,7 @@ from crypto_core.validation.governed_paper_typed_identity import (
 from crypto_core.validation.historical_decision_run import build_historical_decision_run
 from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION,
+    HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION,
     HistoricalExecutionAdmissionSchedule,
     HistoricalExecutionAdmissionWindow,
     HistoricalExecutionFill,
@@ -138,8 +149,8 @@ from crypto_core.validation.strategy_signal_to_paper_intent import (
 )
 
 _PREFIX = "governed_admitted_variant_paper_execution"
-_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v1"
-_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v1"
+_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v2"
+_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v2"
 _SEAL_DIGEST_FIELD = "seal_digest"
 _EVIDENCE_DIGEST_FIELD = "evidence_digest"
 _UTC_DAY_NS = 86_400_000_000_000
@@ -224,6 +235,9 @@ class GovernedPaperDaySeal:
     pending_deciding_day_index: int | None
     pending_deciding_cycle_digest: str | None
     governance_rejected_fill_count: int
+    entry_safety_rule_set_digest: str
+    entry_safety_evidence_digest: str
+    entry_safety_decisions: tuple[GovernedPaperEntrySafetyDecision, ...]
     episodes: tuple[PaperSleeveEpisodeEvidence, ...]
     episode_deciding_cycle_digests: tuple[str, ...]
     day_closes: tuple[PaperSleeveDayCloseValuation, ...]
@@ -452,7 +466,7 @@ def _spec_resolver() -> Mapping[type, Callable[[object], str]]:
 _SEAL_DOMAIN = GovernedPaperTypeDomain(_SEAL_SCHEMA_VERSION, roots=(GovernedPaperDaySeal,), references=(StrategySpec,))
 # The typed identity domain of the engine's governed outcome: the closure of its declared schema (TCI_V1).
 _OUTCOME_DOMAIN = GovernedPaperTypeDomain(
-    "historical-execution-governed-paper-outcome.v1", roots=(HistoricalExecutionGovernedPaperOutcome,)
+    HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION, roots=(HistoricalExecutionGovernedPaperOutcome,)
 )
 _EVIDENCE_DOMAIN = GovernedPaperTypeDomain(_EVIDENCE_SCHEMA_VERSION, roots=(GovernedPaperExecutionEvidence,))
 
@@ -878,6 +892,9 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
         "pending_deciding_day_index": None,
         "pending_deciding_cycle_digest": None,
         "governance_rejected_fill_count": 0,
+        "entry_safety_rule_set_digest": "",
+        "entry_safety_evidence_digest": "",
+        "entry_safety_decisions": (),
         "episodes": (),
         "episode_deciding_cycle_digests": (),
         "day_closes": (),
@@ -895,6 +912,9 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
         facts.update(
             _derive_day(authority, cycle, prior, reservation, pending_reservation, replay, dataset, start, end)
         )
+        # The engine ran under the schedule the entry-safety refusals completed; a blocked day keeps the opening one.
+        facts["schedule"] = replay.schedule
+        facts["schedule_digest"] = edge_sha256_text(edge_canonical_json(_to_payload(replay.schedule)))
         return _SealProof(facts, ())
     except _Blocked as blocked:
         facts.update(empty)
@@ -906,6 +926,8 @@ class _Replay:
     run_digest: str
     economics_digest: str
     outcome: HistoricalExecutionGovernedPaperOutcome
+    entry_safety: GovernedPaperEntrySafetyEvidence
+    schedule: HistoricalExecutionAdmissionSchedule
 
 
 def _replay(
@@ -915,7 +937,10 @@ def _replay(
     start: int,
     end: int,
 ) -> _Replay:
-    """The authenticated prefix replay over ``[G, E_{k+1})``: run, economics and governed outcome, all built here."""
+    """The authenticated prefix replay over ``[G, E_{k+1})``: run, entry safety, economics and governed outcome.
+
+    Every artifact is built here. The entry-safety refusals of the run complete the schedule before the engine re-runs.
+    """
 
     genesis = authority.genesis
     run = build_historical_decision_run(
@@ -933,6 +958,10 @@ def _replay(
     )
     if run.status is not EdgeEvidenceStatus.READY or run.gate_verdict is not EdgeGateVerdict.PASS:
         raise _Blocked(f"decision_run_not_ready:{run.gate_verdict.value}")
+    entry_safety = build_governed_paper_entry_safety_evidence(
+        authority=authority, run=run, dataset=inputs.dataset, invalidated_from_ns=schedule.invalidated_from_ns
+    )
+    schedule = replace(schedule, entry_refused_decision_sequences=entry_safety.refused_decision_sequences)
     economics = build_historical_execution_economics(
         run,
         expected_run_digest=run.run_digest,
@@ -953,7 +982,7 @@ def _replay(
     )
     if outcome.simulated is not True:
         raise _Blocked("governed_economics_not_computed")
-    return _Replay(run.run_digest, economics.result_digest, outcome)
+    return _Replay(run.run_digest, economics.result_digest, outcome, entry_safety, schedule)
 
 
 def _derive_day(  # noqa: C901, PLR0912 - one linear derivation of the day
@@ -1134,6 +1163,11 @@ def _derive_day(  # noqa: C901, PLR0912 - one linear derivation of the day
         "pending_deciding_day_index": pending_day,
         "pending_deciding_cycle_digest": pending_digest,
         "governance_rejected_fill_count": len(outcome.governance_rejected_fill_digests),
+        "entry_safety_rule_set_digest": replay.entry_safety.rule_set_digest,
+        "entry_safety_evidence_digest": replay.entry_safety.evidence_digest,
+        "entry_safety_decisions": tuple(
+            item for item in replay.entry_safety.decisions if start <= item.decision_time_ns < end
+        ),
         "episodes": episodes,
         "episode_deciding_cycle_digests": tuple(chain.deciding),
         "day_closes": closes,

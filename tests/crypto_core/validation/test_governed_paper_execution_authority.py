@@ -84,6 +84,9 @@ d, instant, CARRY, INS, G, DAY = gpe.d, gpe.instant, gpe.CARRY, gpe.INS, gpe.G, 
 def _memoized_verification():
     with pytest.MonkeyPatch.context() as patch:
         gpe.apply_memos(patch)
+        # SYNTHETIC, TEST-ONLY: the shared world G lineage is built under the explicit permissive entry gate of
+        # test_governed_admitted_variant_paper_execution.py; the production gate refuses every one of its entries.
+        gpe.install_test_only_permissive_entry_gate(patch)
         yield
 
 
