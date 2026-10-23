@@ -937,9 +937,10 @@ def _replay(
     start: int,
     end: int,
 ) -> _Replay:
-    """The authenticated prefix replay over ``[G, E_{k+1})``: run, entry safety, economics and governed outcome.
+    """The authenticated prefix replay over ``[G, E_{k+1})``: run, economics, entry safety and governed outcome.
 
-    Every artifact is built here. The entry-safety refusals of the run complete the schedule before the engine re-runs.
+    Every artifact is built here. The economics validates the archive's economic series first, so an archive it cannot
+    compute keeps its BLOCKED day; only then do the entry-safety refusals complete the schedule the engine re-runs under.
     """
 
     genesis = authority.genesis
@@ -958,10 +959,6 @@ def _replay(
     )
     if run.status is not EdgeEvidenceStatus.READY or run.gate_verdict is not EdgeGateVerdict.PASS:
         raise _Blocked(f"decision_run_not_ready:{run.gate_verdict.value}")
-    entry_safety = build_governed_paper_entry_safety_evidence(
-        authority=authority, run=run, dataset=inputs.dataset, invalidated_from_ns=schedule.invalidated_from_ns
-    )
-    schedule = replace(schedule, entry_refused_decision_sequences=entry_safety.refused_decision_sequences)
     economics = build_historical_execution_economics(
         run,
         expected_run_digest=run.run_digest,
@@ -977,6 +974,10 @@ def _replay(
         or economics.simulated_economics_computed is not True
     ):
         raise _Blocked(f"economics_not_computed:{economics.gate_verdict.value}")
+    entry_safety = build_governed_paper_entry_safety_evidence(
+        authority=authority, run=run, dataset=inputs.dataset, invalidated_from_ns=schedule.invalidated_from_ns
+    )
+    schedule = replace(schedule, entry_refused_decision_sequences=entry_safety.refused_decision_sequences)
     outcome = simulate_historical_execution_governed_paper(
         economics, expected_result_digest=economics.result_digest, schedule=schedule
     )

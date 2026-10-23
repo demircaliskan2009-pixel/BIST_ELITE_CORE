@@ -638,6 +638,41 @@ def test_a_blocked_day_carries_no_entry_safety_fact_and_keeps_its_opening_schedu
     assert item.seal.schedule.entry_refused_decision_sequences  # the sealed day ran under the completed schedule
 
 
+def test_an_archive_the_economics_cannot_compute_keeps_its_blocked_day_and_the_gate_never_raises_first() -> None:
+    """A mark visible at the day-3 decision (not at the cycle opening) that lacks its ``mark_price`` value.
+
+    The archive stays authentic and READY and the funding decision run still passes, but the economics cannot compute
+    over it, so the day is BLOCKED exactly as before the gate existed: the gate runs only after the economics, so its
+    visible-mark rule never raises over an archive whose blocked day the seal must represent.
+    """
+
+    item = gated_days("G", 4)[3]
+    decision_ns = item.seal.entry_safety_decisions[0].decision_time_ns
+    day = (item.seal.window_start_ns - gpe.S0) // gpe.DAY
+    stray = gpe._record(  # noqa: SLF001 - the shared SYNTHETIC record helper
+        "mark",
+        "mark_price",
+        100_000 + day,
+        decision_ns - 5,
+        decision_ns - 3,
+        {"index_price": gpe.d(gpe.paper_mark(day))},
+    )
+    assert stray.event_time_ns > item.seal.window_start_ns  # invisible at E_3: the opening quote is unchanged
+    # a later mark would precede the stray's sequence (marks are sequenced by day); the archive need not be complete
+    kept = [
+        record
+        for record in item.seal_inputs.dataset.records
+        if not (record.series_id == "mark" and record.event_time_ns > stray.event_time_ns)
+    ]
+    malformed = gpe.archive_of("paper-archive-G-3-stray-mark", (*kept, stray))
+    assert (malformed.status, malformed.advances) == (EdgeEvidenceStatus.READY, True)
+    seal = gpe.rebuilt_seal(item, dataset=malformed)
+    assert seal.status is GovernedPaperDaySealStatus.BLOCKED
+    assert len(seal.reason_codes) == 1 and seal.reason_codes[0].startswith(gpe.code("economics_not_computed:"))
+    assert (seal.entry_safety_decisions, seal.schedule.entry_refused_decision_sequences) == ((), ())
+    assert verify_governed_paper_day_seal(seal, replace(item.seal_inputs, dataset=malformed)).intact is True
+
+
 def test_the_evidence_builder_refuses_a_foreign_unready_or_malformed_input() -> None:
     item = gated_days("G", 4)[3]
     authority, run, _ = run_and_evidence(item)
