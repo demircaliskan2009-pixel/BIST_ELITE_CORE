@@ -327,3 +327,16 @@ days on the one economics engine (design: `multi_sleeve_risk_governance_design.m
   (`governance_decision_framework.md` §6a); every test value is synthetic and every test approval a fixture;
 - non-claims: no order, capital, venue fill, scheduler, live or shadow path, readiness or Stage-4 completion, and the
   `E_k` instants are injected UTC coordinates, not machine-time proof.
+
+Entry safety (`S1_PAPER_ENTRY_SAFETY_CLOSURE_V1`, `governed_paper_entry_safety.py`):
+
+- every S1 entry decision is evaluated against all 26 NO-TRADE ids that PRDV4 §1.21 enumerates (its heading says 23)
+  and the seven §1.9 Family B gates; the first non-admitting check refuses the entry, and the engine refuses only that
+  entry, never an exit;
+- on the selected data contract (final funding, mark, L2 depth-50 book) NT-D01 and 21 further NO-TRADE conditions
+  are BLOCKED_ON_MISSING_INPUT, three are enforced (NT-D02, NT-X01, NT-T01), NT-M04 is not applicable to a
+  one-sleeve portfolio, and the §1.9 24-hour holding exit, 1.5 x ATR_4h stop and stop tightening are
+  BLOCKED_PROTECTION_UNREPRESENTABLE. EVERY S1 paper entry is therefore refused: the governed path opens no position
+  until those measurements and protections exist, which needs a separate design and authorization;
+- this is fail-closed construction, not activation, a qualified source, Stage-4 completion or a profitability claim.
+  The downstream fill mechanics are exercised only under an explicit test-only permissive rule table.
