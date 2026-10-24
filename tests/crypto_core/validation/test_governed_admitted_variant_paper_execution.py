@@ -41,6 +41,7 @@ import crypto_core.validation.edge_paper_admission_decision as ef7_module
 import crypto_core.validation.governed_admitted_variant_paper_execution as execution
 import crypto_core.validation.governed_paper_entry_safety as entry_safety
 import crypto_core.validation.governed_paper_execution_authority as authority
+import crypto_core.validation.governed_paper_protective_authority as protective_authority
 import crypto_core.validation.paper_portfolio_allocation_decision as rg7_module
 import crypto_core.validation.paper_portfolio_governance_decision as rg8_module
 from crypto_core.audit.evidence_journal import EvidenceJournal
@@ -279,8 +280,10 @@ _SAME = {
                 "governed_paper_cycle_reservation",
                 "verify_governed_paper_day_seal",
                 "verify_paper_lifecycle_head_authority",
+                "governed_paper_protective_authority_context",
             ),
         ),
+        (protective_authority, ("governed_paper_genesis_authority",)),
     )
     for name in names
 }

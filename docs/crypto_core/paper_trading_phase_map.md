@@ -340,3 +340,22 @@ Entry safety (`S1_PAPER_ENTRY_SAFETY_CLOSURE_V1`, `governed_paper_entry_safety.p
   until those measurements and protections exist, which needs a separate design and authorization;
 - this is fail-closed construction, not activation, a qualified source, Stage-4 completion or a profitability claim.
   The downstream fill mechanics are exercised only under an explicit test-only permissive rule table.
+
+Protective position lifecycle (`PROTECTIVE_POSITION_LIFECYCLE_V1`, recorded 2026-10-24):
+
+- the one economics engine applies an optional position-management policy (result schema v2): the 24 h maximum hold
+  from the first opening fill, and the 1.5 x ATR_4h stop on PIT-visible marks with Wilder ATR(14) (DEC-7) over an
+  authenticated offline OHLC bar archive. Each is a close-only standing obligation filled through the engine's own
+  book, latency, spread, depth and fee model; an unfilled close stays an OUTSTANDING obligation with its breach
+  duration, and a price gap never guarantees the stop price;
+- governed paper uses the same engine semantics. A digest-bound, human-governed protective authority (DEC-1) lets a
+  close-only protective action bypass the cycle direction ceilings, the cycle window and the post-invalidation entry
+  ban. It never opens, increases or reverses a position, and a missing, expired or revoked authority refuses the
+  attempt and leaves explicit breach evidence. Day seal v3 and lineage evidence v3 carry the excursion's deciding
+  cycle and the pending protective attempt across day boundaries; legacy v1/v2 artifacts are byte-identical;
+- entry gate rule set v2 passes FB-MAX-HOLD and FB-STOP only when the protective window covers the holding horizon
+  (and, for FB-STOP, the ATR_4h reading exists). FB-STOP-TIGHTENING stays BLOCKED: the DEC-9 tightening reading needs
+  a human approval no one has given, and it runs only under test-only synthetic approvals. Every S1 entry is still
+  refused, first by NT-D01: the 22 missing NO-TRADE inputs and the other Family B gates are unchanged;
+- REAL_PAPER_EXECUTION stays BLOCKED: no qualified OHLC source (M1), no accepted venue facts (D1) and no C1-C9
+  decisions exist. Every bar, policy value and approval in the tests is synthetic.
