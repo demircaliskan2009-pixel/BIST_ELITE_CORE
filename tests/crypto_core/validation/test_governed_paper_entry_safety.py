@@ -11,7 +11,10 @@ this module never installs the test-only permissive rule table. It proves:
 * each check enforces its published rule on the inputs the selected path derives, and fails closed otherwise;
 * on the selected data contract every S1 entry of world G and of the accepted scenarios is refused (NT-D01 is the
   first non-admitting check), only entries are refused, and the seal and lineage bind exactly that evaluation;
-* the test-only permissive table cannot masquerade as the production gate.
+* the test-only permissive table cannot masquerade as the production gate;
+* rule set v2 (``PROTECTIVE_POSITION_LIFECYCLE_V1``): with a verified protective context FB-MAX-HOLD and FB-STOP pass
+  exactly when the engine enforces them, FB-STOP-TIGHTENING stays blocked (DEC-9), every NO-TRADE id is unchanged and
+  rule set v1 keeps its accepted identity.
 """
 
 from __future__ import annotations
@@ -35,11 +38,15 @@ from crypto_core.validation.governed_admitted_variant_paper_execution import (
 )
 from crypto_core.validation.governed_paper_entry_safety import (
     GOVERNED_PAPER_ENTRY_SAFETY_NON_CLAIM_FLAGS,
+    GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET,
+    GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_DIGEST,
+    GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_ID,
     GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET,
     GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_DIGEST,
     GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID,
     GovernedPaperEntrySafetyError,
     GovernedPaperEntrySafetyObservation,
+    GovernedPaperEntrySafetyProtection,
     GovernedPaperEntrySafetyStatus,
     build_governed_paper_entry_safety_evidence,
     evaluate_governed_paper_entry_safety,
@@ -49,15 +56,24 @@ from crypto_core.validation.governed_paper_entry_safety import (
 )
 from crypto_core.validation.governed_paper_execution_authority import governed_paper_genesis_authority
 from crypto_core.validation.historical_execution_economics import (
+    HistoricalExecutionProtectiveWindow,
     historical_execution_latest_visible_mark,
     simulate_historical_execution_governed_paper,
 )
 from crypto_core.validation.historical_execution_economics_policy import LATENCY_TIER_PRDV4_T1
+from crypto_core.validation.historical_ohlc_bar_archive import HistoricalOhlcPriceSemantics
+from crypto_core.validation.historical_position_management_policy import (
+    MAX_HOLD_NS,
+    TIGHTENING_DEC9_READING_V1,
+    TIGHTENING_NOT_APPLIED_PENDING_DEC9,
+)
 
 try:  # the module objects pytest collects (basename import): the shared synthetic worlds and their exact memos
     import test_governed_admitted_variant_paper_execution as gpe
+    import test_governed_paper_protective_authority as prot
 except ImportError:  # imported outside a pytest session
     from tests.crypto_core.validation import test_governed_admitted_variant_paper_execution as gpe
+    from tests.crypto_core.validation import test_governed_paper_protective_authority as prot
 
 _PREFIX = "governed_paper_entry_safety"
 S = GovernedPaperEntrySafetyStatus
@@ -738,3 +754,153 @@ def test_the_test_only_permissive_table_cannot_masquerade_as_the_production_gate
     finally:
         gpe.CONTRACT_MEMO_ENABLED[0] = True
     assert gated_days("G", 4)[3].seal.episodes == ()
+
+
+# --- D. rule set v2: the protective context (PROTECTIVE_POSITION_LIFECYCLE_V1) ---------------------------------------------
+
+# The accepted-main identity of rule set v1 (main 8a5b7560): this contract never changes it.
+ACCEPTED_MAIN_RULE_SET_V1_DIGEST = "c6c1647f434f6b7e3f52b69f142aedc0d79b7a90128bc9f4e5f4a3a84366d023"
+AUTHORITY = "f" * 64
+ATR_WINDOW = "9" * 64
+
+
+def protected(**changes: object) -> GovernedPaperEntrySafetyObservation:
+    """A SYNTHETIC entry observation under a protective context whose window covers the horizon and whose ATR exists."""
+
+    values: dict[str, object] = {
+        "protection_present": True,
+        "protective_window_covers": True,
+        "protective_authority_digest": AUTHORITY,
+        "atr_available": True,
+        "atr_value": d("0.4"),
+        "atr_reason": "",
+        "atr_window_digest": ATR_WINDOW,
+        "stop_tightening_method_id": TIGHTENING_NOT_APPLIED_PENDING_DEC9,
+    }
+    values.update(changes)
+    return observation(**values)
+
+
+def test_rule_set_v1_keeps_its_accepted_identity_and_v2_adds_only_its_protective_rule() -> None:
+    assert GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_DIGEST == ACCEPTED_MAIN_RULE_SET_V1_DIGEST
+    assert governed_paper_entry_safety_rule_set_digest() == ACCEPTED_MAIN_RULE_SET_V1_DIGEST
+    v1, v2 = GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET, GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET
+    assert (v2["rule_set_id"], GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_ID) == (
+        "governed-paper-entry-safety.v2",
+    ) * 2
+    assert v2["checks"] == v1["checks"] and v2["authorities"] == v1["authorities"]
+    assert set(v2) - set(v1) == {"protective_rule"}
+    assert v2["protective_rule"]["max_hold_ns"] == MAX_HOLD_NS  # type: ignore[index]
+    assert GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_DIGEST == edge_sha256_text(edge_canonical_json(v2))
+    assert GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_DIGEST != ACCEPTED_MAIN_RULE_SET_V1_DIGEST
+
+
+def test_a_protective_context_passes_max_hold_and_stop_only_and_every_no_trade_id_is_unchanged() -> None:
+    for direction in ("SHORT", "LONG"):
+        decision = evaluate_governed_paper_entry_safety(protected(target_direction=direction))
+        statuses = {item.check_id: item.status for item in decision.checks}
+        assert statuses == {**EXPECTED_BASE, "FB-MAX-HOLD": S.PASS, "FB-STOP": S.PASS}
+        hold, stop, tighten = (check_of(decision, name) for name in ("FB-MAX-HOLD", "FB-STOP", "FB-STOP-TIGHTENING"))
+        assert (hold.reason, hold.evidence_record_digests) == (
+            code("FB-MAX-HOLD:max_hold_close_only_obligation_enforced_by_the_engine"),
+            (AUTHORITY,),
+        )
+        assert (stop.observed, stop.reason, stop.evidence_record_digests) == (
+            d("0.4"),
+            code("FB-STOP:atr_4h_stop_enforced_by_the_engine"),
+            (AUTHORITY, ATR_WINDOW),
+        )
+        assert (tighten.status, tighten.reason) == (
+            UNREPRESENTABLE,
+            code("FB-STOP-TIGHTENING:stop_tightening_not_applied_pending_dec9"),
+        )
+        # the entry stays refused: NT-D01 is still the first non-admitting check
+        assert (decision.entry_permitted, decision.first_failure_check_id) == (False, "NT-D01")
+
+
+def test_an_uncovered_horizon_an_unavailable_atr_or_the_dec9_reading_never_passes() -> None:
+    uncovered = evaluate_governed_paper_entry_safety(
+        protected(protective_window_covers=False, protective_authority_digest=None)
+    )
+    for name in ("FB-MAX-HOLD", "FB-STOP"):
+        check = check_of(uncovered, name)
+        assert (check.status, check.reason) == (
+            UNREPRESENTABLE,
+            code(f"{name}:protective_authority_does_not_cover_the_holding_horizon"),
+        )
+    stale = evaluate_governed_paper_entry_safety(
+        protected(atr_available=False, atr_value=None, atr_window_digest=None, atr_reason="atr_bar_stale")
+    )
+    assert check_of(stale, "FB-MAX-HOLD").status is S.PASS
+    stop = check_of(stale, "FB-STOP")
+    assert (stop.status, stop.observed, stop.reason) == (BLOCKED, "", code("FB-STOP:atr_4h_unavailable:atr_bar_stale"))
+    dec9 = check_of(
+        evaluate_governed_paper_entry_safety(protected(stop_tightening_method_id=TIGHTENING_DEC9_READING_V1)),
+        "FB-STOP-TIGHTENING",
+    )
+    assert (dec9.status, dec9.reason) == (
+        UNREPRESENTABLE,
+        code("FB-STOP-TIGHTENING:dec9_tightening_reading_requires_human_approval"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("changes", "name"),
+    [
+        ({"protection_present": False}, "protective_facts_without_a_protective_context"),
+        ({"atr_reason": "atr_bar_stale"}, "atr_reading_inconsistent"),
+        ({"atr_value": None}, "atr_reading_inconsistent"),
+        ({"protective_authority_digest": None}, "protective_window_without_authority"),
+        ({"stop_tightening_method_id": None}, "stop_tightening_method_id"),
+        ({"atr_value": "0.000000000000000000"}, "atr_value"),
+        ({"protection_present": 1}, "protection_present"),
+    ],
+)
+def test_malformed_protective_facts_are_refused(changes: dict[str, object], name: str) -> None:
+    with pytest.raises(GovernedPaperEntrySafetyError, match=f"^{code(f'observation_malformed:{name}')}$"):
+        evaluate_governed_paper_entry_safety(protected(**changes))
+
+
+def world_protection(window_end_ns: int, **changes: object) -> GovernedPaperEntrySafetyProtection:
+    values: dict[str, object] = {
+        "position_management_policy": prot.pm_policy(),
+        "ohlc_archive": prot.world_ohlc(3),
+        "protective_window": HistoricalExecutionProtectiveWindow(gpe.G, window_end_ns, AUTHORITY),
+    }
+    values.update(changes)
+    return GovernedPaperEntrySafetyProtection(**values)  # type: ignore[arg-type]
+
+
+def test_world_g_entries_are_evaluated_against_the_engine_horizon_and_atr() -> None:
+    item = gated_days("G", 4)[3]
+    authority, run, _ = run_and_evidence(item)
+    instant = gpe.instant(3) + 10  # the day-3 entry decision
+    horizon = instant + MAX_HOLD_NS + 2 * authority.economics_policy.max_execution_delay_ns
+
+    def evaluated(protection: GovernedPaperEntrySafetyProtection):  # noqa: ANN202
+        evidence = build_governed_paper_entry_safety_evidence(
+            authority=authority,
+            run=run,
+            dataset=item.seal_inputs.dataset,
+            invalidated_from_ns=None,
+            protection=protection,
+        )
+        (entry,) = [decision for decision in evidence.decisions if decision.decision_time_ns == instant]
+        return evidence, entry
+
+    evidence, entry = evaluated(world_protection(horizon + 1))
+    assert (evidence.rule_set_id, evidence.rule_set_digest) == (
+        GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_DIGEST,
+    )
+    stop = check_of(entry, "FB-STOP")
+    assert (check_of(entry, "FB-MAX-HOLD").status, stop.status, stop.observed) == (S.PASS, S.PASS, d("0.4"))
+    assert (entry.entry_permitted, entry.first_failure_check_id) == (False, "NT-D01")
+    # the horizon must lie strictly inside the window: ending exactly at it never covers the obligation
+    _, boundary = evaluated(world_protection(horizon))
+    assert check_of(boundary, "FB-MAX-HOLD").status is UNREPRESENTABLE
+    _, absent = evaluated(world_protection(horizon + 1, protective_window=None))
+    assert check_of(absent, "FB-STOP").reason == code("FB-STOP:protective_authority_does_not_cover_the_holding_horizon")
+    last_trade = prot.world_ohlc(3, source=prot.ohlc_source(price_semantics=HistoricalOhlcPriceSemantics.LAST_TRADE))
+    with pytest.raises(GovernedPaperEntrySafetyError, match=code("protection_archive_not_of_the_policy")):
+        evaluated(world_protection(horizon + 1, ohlc_archive=last_trade))

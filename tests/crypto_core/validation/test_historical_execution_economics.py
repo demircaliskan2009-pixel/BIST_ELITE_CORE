@@ -2048,7 +2048,9 @@ _ALLOWED_CRYPTO_IMPORTS = {
     "crypto_core.validation.edge_strategy_spec_admission",
     "crypto_core.validation.historical_decision_run",
     "crypto_core.validation.historical_execution_economics_policy",
+    "crypto_core.validation.historical_ohlc_bar_archive",
     "crypto_core.validation.historical_pit_dataset",
+    "crypto_core.validation.historical_position_management_policy",
     "crypto_core.validation.strategy_executable_binding",
 }
 

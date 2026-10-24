@@ -36,6 +36,26 @@ A seal is a LOCAL derivation that trusts its predecessor seal only after recompu
 Only ``GovernedPaperExecutionEvidence`` proves a lineage: it re-proves every cycle and every seal by typed identity
 against its rebuild and binds them pairwise (history, closing attestation, prefix, archive growth, pending lineage,
 invalidation). A forged or stale seal never inherits authentic status.
+
+Protective lineage (``PROTECTIVE_POSITION_LIFECYCLE_V1``, seal v3 and evidence v3). Every seal of a protective lineage,
+from day 0 on, carries ``GovernedPaperDayProtectionInputs``; a lineage never switches mid-way, in either direction:
+
+* the protective authority (DEC-1, ``governed_paper_protective_authority``) is re-proven, of this genesis and the same
+  on every day; an authentic authority that is not AUTHORIZED blocks the day. Its human revocations must be effective
+  inside the day, and the earliest instant ever revoked persists. Its window, ended by its expiry or that revocation,
+  is the schedule's protective window (schedule v3);
+* the replay builds the economics under the authority's position-management policy and the day's authenticated OHLC
+  archive (only bars known at ``E_{k+1}``, of the adopted source). The entry gate evaluates rule set v2 on the same
+  protective context, so backtest and governed paper apply one protective semantics;
+* X4 for a protective fill: it is projected through the reservation of the cycle that decided its excursion's opening
+  intent, which is today's cycle, the pending cycle, or the excursion cycle the previous seal named. A protective fill
+  must be close-only, never bound to the cycle's direction authority (DEC-1). An excursion still open at ``E_{k+1}``
+  names its deciding cycle, and the next seal must be given exactly that cycle, re-proven;
+* X1 for a protective attempt left pending by the replay's end: it is excluded from both prefixes by its attempt instant
+  and fills, or not, in a later day's replay. The day's protective obligations, and those still outstanding, are
+  counted.
+
+Without protection inputs, every seal and evidence is exactly the accepted v2 artifact.
 """
 
 from __future__ import annotations
@@ -65,9 +85,11 @@ from crypto_core.validation.edge_kill_quarantine_decision import (
 from crypto_core.validation.governed_paper_entry_safety import (
     GovernedPaperEntrySafetyDecision,
     GovernedPaperEntrySafetyEvidence,
+    GovernedPaperEntrySafetyProtection,
     build_governed_paper_entry_safety_evidence,
 )
 from crypto_core.validation.governed_paper_execution_authority import (
+    GovernedPaperApprovalKind,
     GovernedPaperCycleAuthority,
     GovernedPaperCycleInputs,
     GovernedPaperCycleReservation,
@@ -82,6 +104,16 @@ from crypto_core.validation.governed_paper_execution_authority import (
     governed_paper_sealed_history_digest,
     verify_governed_paper_cycle_authority,
 )
+from crypto_core.validation.governed_paper_protective_authority import (
+    GovernedPaperProtectiveAuthority,
+    GovernedPaperProtectiveAuthorityError,
+    GovernedPaperProtectiveAuthorityInputs,
+    GovernedPaperProtectiveContext,
+    GovernedPaperProtectiveRevocation,
+    governed_paper_protective_authority_context,
+    governed_paper_protective_window,
+    verify_governed_paper_protective_revocation,
+)
 from crypto_core.validation.governed_paper_typed_identity import (
     GovernedPaperTypeDomain,
     governed_paper_typed_image,
@@ -91,20 +123,32 @@ from crypto_core.validation.historical_decision_run import build_historical_deci
 from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION,
+    HISTORICAL_EXECUTION_PROTECTIVE_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HistoricalExecutionAdmissionSchedule,
     HistoricalExecutionAdmissionWindow,
+    HistoricalExecutionExcursionProtection,
     HistoricalExecutionFill,
     HistoricalExecutionFillOutcome,
     HistoricalExecutionGovernedPaperOutcome,
-    HistoricalExecutionIntent,
+    HistoricalExecutionPositionManagementInputs,
+    HistoricalExecutionProtectiveObligationStatus,
+    HistoricalExecutionProtectiveWindow,
     HistoricalExecutionSide,
+    HistoricalExecutionTransitionKind,
     build_historical_execution_economics,
+    historical_execution_admission_schedule_digest,
+    historical_execution_admission_schedule_to_dict,
     historical_execution_governed_paper_outcome_to_dict,
     historical_execution_governed_paper_prefix_digest,
     historical_execution_latest_visible_mark,
     simulate_historical_execution_governed_paper,
 )
 from crypto_core.validation.historical_execution_economics_policy import historical_execution_wire_int_is_valid
+from crypto_core.validation.historical_ohlc_bar_archive import (
+    HistoricalOhlcBar,
+    HistoricalOhlcBarArchive,
+    verify_historical_ohlc_bar_archive,
+)
 from crypto_core.validation.historical_pit_dataset import HistoricalPitDataset, verify_historical_pit_dataset
 from crypto_core.validation.paper_capacity_gate import PaperCapacityGateStatus, evaluate_paper_capacity_gate
 from crypto_core.validation.paper_end_to_end_episode import PaperEndToEndEpisodeStatus, build_paper_end_to_end_episode
@@ -150,7 +194,9 @@ from crypto_core.validation.strategy_signal_to_paper_intent import (
 
 _PREFIX = "governed_admitted_variant_paper_execution"
 _SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v2"
+_PROTECTIVE_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v3"
 _EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v2"
+_PROTECTIVE_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v3"
 _SEAL_DIGEST_FIELD = "seal_digest"
 _EVIDENCE_DIGEST_FIELD = "evidence_digest"
 _UTC_DAY_NS = 86_400_000_000_000
@@ -270,6 +316,48 @@ class GovernedPaperDaySeal:
     archive_completeness_proven: bool = False
     edge_proven: bool = False
     profitability_proven: bool = False
+    # Seal v3 only (a protective lineage, PROTECTIVE_POSITION_LIFECYCLE_V1): a v2 payload carries none of these.
+    protective_authority_digest: str = ""
+    protective_revocation_digests: tuple[str, ...] = ()
+    protective_revoked_from_ns: int | None = None
+    ohlc_archive_digest: str = ""
+    ohlc_bar_count: int = 0
+    open_excursion_deciding_day_index: int | None = None
+    open_excursion_deciding_cycle_digest: str | None = None
+    pending_protective_attempt_time_ns: int | None = None
+    day_protective_obligation_count: int = 0
+    outstanding_protective_obligation_count: int = 0
+
+
+_SEAL_V3_FIELDS = (
+    "protective_authority_digest",
+    "protective_revocation_digests",
+    "protective_revoked_from_ns",
+    "ohlc_archive_digest",
+    "ohlc_bar_count",
+    "open_excursion_deciding_day_index",
+    "open_excursion_deciding_cycle_digest",
+    "pending_protective_attempt_time_ns",
+    "day_protective_obligation_count",
+    "outstanding_protective_obligation_count",
+)
+
+
+@dataclass(frozen=True)
+class GovernedPaperDayProtectionInputs:
+    """The protective inputs of one day of a protective lineage (PROTECTIVE_POSITION_LIFECYCLE_V1).
+
+    ``revocations`` are the human revocations effective inside this day. ``ohlc_archive`` holds the adopted source's bars
+    known at ``E_{k+1}``. The excursion cycle is the cycle that decided the opening intent of an excursion the previous
+    seal left open; it is None exactly when no excursion was open then.
+    """
+
+    authority_inputs: GovernedPaperProtectiveAuthorityInputs
+    authority: GovernedPaperProtectiveAuthority
+    revocations: tuple[GovernedPaperProtectiveRevocation, ...]
+    ohlc_archive: HistoricalOhlcBarArchive
+    excursion_cycle_inputs: GovernedPaperCycleInputs | None
+    excursion_cycle: GovernedPaperCycleAuthority | None
 
 
 @dataclass(frozen=True)
@@ -290,6 +378,7 @@ class GovernedPaperDaySealInputs:
     closing_head_authority_inputs: PaperLifecycleHeadAuthorityInputs
     closing_head_authority: PaperLifecycleHeadAuthority
     successor_receipts: tuple[EdgeKillQuarantineDecision, ...]
+    protection: GovernedPaperDayProtectionInputs | None = None
 
 
 @dataclass(frozen=True)
@@ -380,6 +469,17 @@ class GovernedPaperExecutionEvidence:
     archive_completeness_proven: bool = False
     edge_proven: bool = False
     profitability_proven: bool = False
+    # Evidence v3 only (a protective lineage): a v2 payload carries none of these.
+    protective_authority_digest: str = ""
+    terminal_protective_revoked_from_ns: int | None = None
+    terminal_outstanding_protective_obligation_count: int = 0
+
+
+_EVIDENCE_V3_FIELDS = (
+    "protective_authority_digest",
+    "terminal_protective_revoked_from_ns",
+    "terminal_outstanding_protective_obligation_count",
+)
 
 
 # --- helpers -----------------------------------------------------------------------------------------------------------
@@ -420,6 +520,8 @@ def _serialize(value: object) -> object:
     if is_dataclass(value) and not isinstance(value, type):
         if type(value) is StrategySpec:
             return {"strategy_spec_digest": strategy_spec_digest(value)}
+        if type(value) is HistoricalExecutionAdmissionSchedule:  # the engine's own (versioned) wire payload
+            return historical_execution_admission_schedule_to_dict(value)
         return _to_payload(value)
     if isinstance(value, Enum):
         return value.value
@@ -428,8 +530,36 @@ def _serialize(value: object) -> object:
     return value
 
 
+def _is_neutral(value: object) -> bool:
+    return (
+        value is None
+        or (type(value) is tuple and value == ())
+        or (type(value) is str and value == "")
+        or (type(value) is int and value == 0)
+    )
+
+
 def _to_payload(artifact: object) -> dict[str, object]:
-    return {item.name: _serialize(getattr(artifact, item.name)) for item in fields(artifact)}  # type: ignore[arg-type]
+    """The wire payload of one artifact; a v2 seal or evidence carries exactly its v2 fields.
+
+    A v2 artifact holding a non-neutral v3 field is never serialized (``ValueError``): a forged protective fact never
+    hides behind the legacy payload.
+    """
+
+    payload = {item.name: _serialize(getattr(artifact, item.name)) for item in fields(artifact)}  # type: ignore[arg-type]
+    legacy = _LEGACY_PAYLOADS.get(type(artifact))
+    if legacy is not None and getattr(artifact, "schema_version", None) == legacy[0]:
+        for name in legacy[1]:
+            if not _is_neutral(getattr(artifact, name)):
+                raise ValueError(f"{_PREFIX}:legacy_schema_carries_an_extension_field:{name}")
+            del payload[name]
+    return payload
+
+
+_LEGACY_PAYLOADS: dict[type, tuple[str, tuple[str, ...]]] = {
+    GovernedPaperDaySeal: (_SEAL_SCHEMA_VERSION, _SEAL_V3_FIELDS),
+    GovernedPaperExecutionEvidence: (_EVIDENCE_SCHEMA_VERSION, _EVIDENCE_V3_FIELDS),
+}
 
 
 def _plain(value: Fraction) -> str:
@@ -546,18 +676,21 @@ def _exact(text: object, expected: Fraction, field_name: str) -> None:
 def _episode(
     authority: GovernedPaperGenesisAuthority,
     reservation: GovernedPaperCycleReservation,
-    intent: HistoricalExecutionIntent,
     fill: HistoricalExecutionFill,
     prior: PaperPositionState,
     *,
+    base: str,
+    side: HistoricalExecutionSide,
+    requested_quantity: str,
     mark_price: str,
     transition: object,
 ) -> PaperSleeveEpisodeEvidence:
+    """One executed engine fill projected onto the generic paper chain; ``base`` names the decision or attempt."""
+
     genesis = authority.genesis
-    base = f"{genesis.genesis_id}-d{intent.decision_sequence}"
     correlation = f"corr-{base}"
-    side = PaperOrderSide.BUY if intent.side is HistoricalExecutionSide.BUY else PaperOrderSide.SELL
-    requested = Fraction(intent.requested_quantity)
+    order_side = PaperOrderSide.BUY if side is HistoricalExecutionSide.BUY else PaperOrderSide.SELL
+    requested = Fraction(requested_quantity)
     units = _plain(requested)
     notional = _plain(requested * Fraction(reservation.cycle.reservation_price))
     decision = evaluate_paper_capacity_gate(
@@ -573,7 +706,7 @@ def _episode(
         request_id=f"req-{base}",
         capacity_decision_digest=decision.decision_digest,
         market_symbol=genesis.instrument,
-        side=side,
+        side=order_side,
         intent_type=PaperOrderIntentType.MARKET,
         requested_notional=notional,
         requested_units=units,
@@ -588,7 +721,7 @@ def _episode(
         run_id=f"run-{base}",
         correlation_id=correlation,
         market_symbol=genesis.instrument,
-        side=side,
+        side=order_side,
         intent_type=PaperOrderIntentType.MARKET,
         requested_units=units,
         requested_notional=notional,
@@ -720,6 +853,7 @@ def _episode(
 class _SealProof:
     facts: dict[str, object]
     blocked: tuple[str, ...]
+    protective: bool = False
 
 
 def _closing(inputs: GovernedPaperDaySealInputs, cycle: GovernedPaperCycleAuthority, sleeve_id: str, end: int):  # noqa: ANN202
@@ -759,6 +893,116 @@ def _closing(inputs: GovernedPaperDaySealInputs, cycle: GovernedPaperCycleAuthor
     if head.lifecycle_head_digest != previous:
         raise _fail("closing_head_not_reached_by_the_successors")
     return paper_lifecycle_head_authority_digest(head), head.lifecycle_head_digest, tuple(digests), effective, attested
+
+
+@dataclass(frozen=True)
+class _DayProtection:
+    """The verified protective inputs of one day of a protective lineage (``context`` is None unless AUTHORIZED)."""
+
+    authority: GovernedPaperProtectiveAuthority
+    context: GovernedPaperProtectiveContext | None
+    revocation_digests: tuple[str, ...]
+    revoked_from_ns: int | None
+    window: HistoricalExecutionProtectiveWindow | None
+    archive: HistoricalOhlcBarArchive
+    archive_digest: str
+    excursion: GovernedPaperCycleReservation | None
+
+
+def _day_protection(  # noqa: C901 - one linear proof of the protective inputs
+    inputs: GovernedPaperDaySealInputs,
+    prior: GovernedPaperDaySeal | None,
+    *,
+    genesis: GovernedPaperGenesis,
+    start: int,
+    end: int,
+) -> _DayProtection | None:
+    """Re-prove the protective inputs of one day; a lineage is protective from day 0 on, or never."""
+
+    protection = inputs.protection
+    if protection is not None and type(protection) is not GovernedPaperDayProtectionInputs:
+        raise _fail("protection_inputs_malformed")
+    if prior is not None and (prior.schema_version == _PROTECTIVE_SEAL_SCHEMA_VERSION) is not (protection is not None):
+        raise _fail("protective_lineage_switched")
+    if protection is None:
+        return None
+    authority, authority_inputs = protection.authority, protection.authority_inputs
+    if type(authority) is not GovernedPaperProtectiveAuthority:
+        raise _fail("protective_authority_malformed")
+    try:  # one re-proof: the canonical context of an AUTHORIZED authority, None for an authentic unauthorized one
+        context = governed_paper_protective_authority_context(authority, authority_inputs)
+    except GovernedPaperProtectiveAuthorityError as exc:
+        raise _fail("protective_authority_not_authentic") from exc
+    if authority.genesis_digest != genesis.genesis_digest:
+        raise _fail("protective_authority_foreign")
+    if prior is not None and authority.authority_digest != prior.protective_authority_digest:
+        raise _fail("protective_authority_changed_inside_the_lineage")
+
+    # Human revocations effective inside this day; the earliest instant ever revoked persists.
+    revocations = protection.revocations
+    if type(revocations) is not tuple or any(
+        type(item) is not GovernedPaperProtectiveRevocation for item in revocations
+    ):
+        raise _fail("protective_revocations_malformed")
+    digests: list[str] = []
+    previous_at: int | None = None
+    for revocation in revocations:
+        verification = verify_governed_paper_protective_revocation(revocation)
+        if not verification.intact:
+            raise _fail("protective_revocation_not_authentic")
+        if revocation.authority_digest != authority.authority_digest:
+            raise _fail("protective_revocation_foreign")
+        if revocation.approval_kind is not GovernedPaperApprovalKind.HUMAN_GOVERNANCE:
+            raise _fail("protective_revocation_not_human_governance")
+        if not start < revocation.effective_at_ns <= end:
+            raise _fail("protective_revocation_outside_the_sealed_day")
+        if previous_at is not None and revocation.effective_at_ns <= previous_at:
+            raise _fail("protective_revocations_not_ordered")
+        previous_at = revocation.effective_at_ns
+        digests.append(verification.recomputed_digest)
+    revoked_from = None if prior is None else prior.protective_revoked_from_ns
+    if revoked_from is None and revocations:
+        revoked_from = revocations[0].effective_at_ns
+
+    # The adopted source's bars known at E_{k+1}.
+    archive = protection.ohlc_archive
+    if type(archive) is not HistoricalOhlcBarArchive:
+        raise _fail("ohlc_archive_malformed")
+    archive_verification = verify_historical_ohlc_bar_archive(archive)
+    if not archive_verification.intact:
+        raise _fail("ohlc_archive_not_authentic")
+    if archive.source_digest != authority.ohlc_source_digest:
+        raise _fail("ohlc_archive_not_of_the_adopted_source")
+    if any(max(bar.available_at_ns, bar.finalized_at_ns) > end for bar in archive.bars):
+        raise _fail("ohlc_archive_holds_a_bar_unknown_at_the_seal")
+
+    # The deciding cycle of the excursion the previous seal left open, re-proven against what that seal named.
+    open_digest = None if prior is None else prior.open_excursion_deciding_cycle_digest
+    excursion: GovernedPaperCycleReservation | None = None
+    if open_digest is None:
+        if protection.excursion_cycle is not None or protection.excursion_cycle_inputs is not None:
+            raise _fail("excursion_cycle_without_an_open_excursion")
+    else:
+        cycle = protection.excursion_cycle
+        if (
+            cycle is None
+            or not verify_governed_paper_cycle_authority(cycle, protection.excursion_cycle_inputs).intact
+            or governed_paper_cycle_authority_digest(cycle) != open_digest
+            or cycle.day_index != prior.open_excursion_deciding_day_index  # type: ignore[union-attr]
+            or cycle.genesis_digest != genesis.genesis_digest
+        ):
+            raise _fail("excursion_deciding_cycle_not_authentic")
+        excursion = governed_paper_cycle_reservation(cycle, protection.excursion_cycle_inputs)
+    return _DayProtection(
+        authority=authority,
+        context=context,
+        revocation_digests=tuple(digests),
+        revoked_from_ns=revoked_from,
+        window=governed_paper_protective_window(authority, revoked_from_ns=revoked_from),
+        archive=archive,
+        archive_digest=archive_verification.recomputed_digest,
+        excursion=excursion,
+    )
 
 
 def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901 - one linear derivation
@@ -843,6 +1087,7 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
         if mark != (cycle.reservation_mark_record_digest, cycle.reservation_mark_price):
             raise _fail("reservation_mark_not_reproduced_by_the_archive")
     head_digest, closing_head, successors, effective, attested = _closing(inputs, cycle, genesis.sleeve_id, end)
+    protection = _day_protection(inputs, prior, genesis=genesis, start=start, end=end)
     invalidated = (
         prior.invalidated_from_ns if prior is not None and prior.invalidated_from_ns is not None else effective
     )
@@ -852,10 +1097,13 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
     if window is not None:
         windows, days = (*windows, window), (*days, day)
     schedule = HistoricalExecutionAdmissionSchedule(
-        schema_version=HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION,
+        schema_version=HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION
+        if protection is None
+        else HISTORICAL_EXECUTION_PROTECTIVE_ADMISSION_SCHEDULE_SCHEMA_VERSION,
         schedule_id=f"{genesis.genesis_id}-schedule",
         windows=windows,
         invalidated_from_ns=invalidated,
+        protective_windows=() if protection is None or protection.window is None else (protection.window,),
     )
     facts: dict[str, object] = {
         "seal_id": seal_id,
@@ -873,7 +1121,7 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
         "cycle_phase": cycle.phase.value,
         "prior_seal_digest": "" if prior is None else prior.seal_digest,
         "schedule": schedule,
-        "schedule_digest": edge_sha256_text(edge_canonical_json(_to_payload(schedule))),
+        "schedule_digest": historical_execution_admission_schedule_digest(schedule),
         "authorized_day_indexes": days,
         "invalidated_from_ns": invalidated,
         "closing_head_authority_digest": head_digest,
@@ -905,20 +1153,40 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
         "close_position_quantity": "",
         "close_cumulative_funding": "",
     }
+    if protection is not None:
+        facts.update(
+            protective_authority_digest=protection.authority.authority_digest,
+            protective_revocation_digests=protection.revocation_digests,
+            protective_revoked_from_ns=protection.revoked_from_ns,
+            ohlc_archive_digest=protection.archive_digest,
+            ohlc_bar_count=len(protection.archive.bars),
+        )
+        empty.update(
+            open_excursion_deciding_day_index=None,
+            open_excursion_deciding_cycle_digest=None,
+            pending_protective_attempt_time_ns=None,
+            day_protective_obligation_count=0,
+            outstanding_protective_obligation_count=0,
+        )
+    protective = protection is not None
     try:
         if not attested:
             raise _Blocked("closing_head_not_attested")
-        replay = _replay(inputs, authority, schedule, start, end)
+        if protection is not None and protection.context is None:
+            raise _Blocked("protective_authority_not_authorized")
+        replay = _replay(inputs, authority, schedule, start, end, protection)
         facts.update(
-            _derive_day(authority, cycle, prior, reservation, pending_reservation, replay, dataset, start, end)
+            _derive_day(
+                authority, cycle, prior, reservation, pending_reservation, protection, replay, dataset, start, end
+            )
         )
         # The engine ran under the schedule the entry-safety refusals completed; a blocked day keeps the opening one.
         facts["schedule"] = replay.schedule
-        facts["schedule_digest"] = edge_sha256_text(edge_canonical_json(_to_payload(replay.schedule)))
-        return _SealProof(facts, ())
+        facts["schedule_digest"] = historical_execution_admission_schedule_digest(replay.schedule)
+        return _SealProof(facts, (), protective)
     except _Blocked as blocked:
         facts.update(empty)
-        return _SealProof(facts, (_reason(blocked.code),))
+        return _SealProof(facts, (_reason(blocked.code),), protective)
 
 
 @dataclass(frozen=True)
@@ -936,14 +1204,35 @@ def _replay(
     schedule: HistoricalExecutionAdmissionSchedule,
     start: int,
     end: int,
+    protection: _DayProtection | None,
 ) -> _Replay:
     """The authenticated prefix replay over ``[G, E_{k+1})``: run, economics, entry safety and governed outcome.
 
     Every artifact is built here. The economics validates the archive's economic series first, so an archive it cannot
     compute keeps its BLOCKED day; only then do the entry-safety refusals complete the schedule the engine re-runs under.
+    A protective lineage builds the economics under the authority's position-management policy and the day's OHLC
+    archive, and the entry gate evaluates rule set v2 on the same protective context.
     """
 
     genesis = authority.genesis
+    position_management: HistoricalExecutionPositionManagementInputs | None = None
+    gate_protection: GovernedPaperEntrySafetyProtection | None = None
+    if protection is not None:
+        context = protection.context
+        if context is None:
+            raise _Blocked("protective_authority_not_authorized")
+        position_management = HistoricalExecutionPositionManagementInputs(
+            policy=context.position_management_policy,
+            expected_policy_digest=context.authority.position_management_policy_digest,
+            approval=context.position_management_approval,
+            ohlc_archive=protection.archive,
+            expected_ohlc_archive_digest=protection.archive_digest,
+        )
+        gate_protection = GovernedPaperEntrySafetyProtection(
+            position_management_policy=context.position_management_policy,
+            ohlc_archive=protection.archive,
+            protective_window=protection.window,
+        )
     run = build_historical_decision_run(
         inputs.dataset,
         authority.executable_binding,
@@ -967,6 +1256,7 @@ def _replay(
         economics_approval=authority.economics_approval,
         result_id=f"{inputs.seal_id}-economics",
         correlation_id=inputs.correlation_id,
+        position_management=position_management,
     )
     if (
         economics.status is not EdgeEvidenceStatus.READY
@@ -975,7 +1265,11 @@ def _replay(
     ):
         raise _Blocked(f"economics_not_computed:{economics.gate_verdict.value}")
     entry_safety = build_governed_paper_entry_safety_evidence(
-        authority=authority, run=run, dataset=inputs.dataset, invalidated_from_ns=schedule.invalidated_from_ns
+        authority=authority,
+        run=run,
+        dataset=inputs.dataset,
+        invalidated_from_ns=schedule.invalidated_from_ns,
+        protection=gate_protection,
     )
     schedule = replace(schedule, entry_refused_decision_sequences=entry_safety.refused_decision_sequences)
     outcome = simulate_historical_execution_governed_paper(
@@ -986,12 +1280,13 @@ def _replay(
     return _Replay(run.run_digest, economics.result_digest, outcome, entry_safety, schedule)
 
 
-def _derive_day(  # noqa: C901, PLR0912 - one linear derivation of the day
+def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the day
     authority: GovernedPaperGenesisAuthority,
     cycle: GovernedPaperCycleAuthority,
     prior: GovernedPaperDaySeal | None,
     reservation: GovernedPaperCycleReservation | None,
     pending_reservation: GovernedPaperCycleReservation | None,
+    protection: _DayProtection | None,
     replay: _Replay,
     dataset: HistoricalPitDataset,
     start: int,
@@ -1014,9 +1309,17 @@ def _derive_day(  # noqa: C901, PLR0912 - one linear derivation of the day
             if not start <= intent.decision_time_ns < end:
                 raise _fail("pending_intent_without_its_deciding_cycle")
             pending_day, pending_digest = cycle.day_index, cycle.cycle_digest
+    # A protective attempt the replay's end left in flight (outcome v3): made today, or the previous seal's own.
+    pending_attempt = outcome.pending_protective_attempt_time_ns
+    prior_attempt = None if prior is None else prior.pending_protective_attempt_time_ns
+    if pending_attempt is not None and pending_attempt != prior_attempt and not start <= pending_attempt < end:
+        raise _fail("pending_protective_attempt_without_its_day")
     excluded_open = () if prior_pending is None else (prior_pending,)
     prefix_open = historical_execution_governed_paper_prefix_digest(
-        outcome, before_ns=start, excluded_decision_sequences=excluded_open
+        outcome,
+        before_ns=start,
+        excluded_decision_sequences=excluded_open,
+        excluded_protective_attempt_times=() if prior_attempt is None else (prior_attempt,),
     )
     if prior is not None and prefix_open != prior.prefix_digest_close:
         raise _fail("sealed_prefix_rewritten")
@@ -1024,7 +1327,22 @@ def _derive_day(  # noqa: C901, PLR0912 - one linear derivation of the day
         outcome,
         before_ns=end,
         excluded_decision_sequences=() if pending_sequence is None else (pending_sequence,),
+        excluded_protective_attempt_times=() if pending_attempt is None else (pending_attempt,),
     )
+
+    # The deciding cycle of an excursion (DEC-1 lineage): the cycle that decided its opening intent, which is today's,
+    # the pending cycle, or the excursion cycle the previous seal named for the excursion open at E_k.
+    def opening_cycle(record: HistoricalExecutionExcursionProtection) -> tuple[int, str, GovernedPaperCycleReservation]:
+        opening = decided[record.opening_intent_id]
+        deciding_day = (opening.decision_time_ns - genesis.genesis_start_ns) // _UTC_DAY_NS
+        if deciding_day == cycle.day_index and reservation is not None:
+            return cycle.day_index, cycle.cycle_digest, reservation
+        if prior is not None and opening.decision_sequence == prior_pending and pending_reservation is not None:
+            return prior.pending_deciding_day_index, prior.pending_deciding_cycle_digest, pending_reservation  # type: ignore[return-value]
+        excursion = None if protection is None else protection.excursion
+        if record.opened_at_ns < start and excursion is not None and deciding_day == excursion.cycle.day_index:
+            return excursion.cycle.day_index, excursion.cycle.cycle_digest, excursion
+        raise _fail("excursion_without_its_deciding_cycle")
 
     # B4: every settlement of the day must be exactly representable over the engine's own factors.
     day_funding = [item for item in outcome.funding_cashflows if start <= item.liability_time_ns < end]
@@ -1055,6 +1373,9 @@ def _derive_day(  # noqa: C901, PLR0912 - one linear derivation of the day
         chain = _Chain(state, list(prior.episodes), list(prior.episode_deciding_cycle_digests))
     transitions = {item.fill_digest: item for item in outcome.position_transitions}
     marks = {item.trigger_digest: item for item in outcome.valuations if item.trigger_digest is not None}
+    attempted = {item.attempt_id: item for item in outcome.protective_attempts}
+    obligations = {item.obligation_id: item for item in outcome.protective_obligations}
+    protections = {item.protection_id: item for item in outcome.excursion_protections}
     states_at: list[tuple[int, PaperPositionState]] = []
     day_fills = [
         item
@@ -1062,23 +1383,46 @@ def _derive_day(  # noqa: C901, PLR0912 - one linear derivation of the day
         if item.outcome in _EXECUTED and item.execution_time_ns is not None and start <= item.execution_time_ns < end
     ]
     for fill in day_fills:
-        intent = decided[fill.intent_id]
-        deciding_day = (intent.decision_time_ns - genesis.genesis_start_ns) // _UTC_DAY_NS
-        if deciding_day == cycle.day_index and reservation is not None:
-            deciding = reservation
-        elif (
-            prior_pending is not None and intent.decision_sequence == prior_pending and pending_reservation is not None
-        ):
-            deciding = pending_reservation
+        attempt = attempted.get(fill.intent_id)
+        if attempt is None:
+            intent = decided[fill.intent_id]
+            deciding_day = (intent.decision_time_ns - genesis.genesis_start_ns) // _UTC_DAY_NS
+            if deciding_day == cycle.day_index and reservation is not None:
+                deciding = reservation
+            elif (
+                prior_pending is not None
+                and intent.decision_sequence == prior_pending
+                and pending_reservation is not None
+            ):
+                deciding = pending_reservation
+            else:
+                raise _fail("fill_without_its_deciding_cycle")
+            authorized = (
+                deciding.cycle.long_authorized
+                if fill.side is HistoricalExecutionSide.BUY
+                else deciding.cycle.short_authorized
+            )
+            if authorized is not True:
+                raise _Blocked("fill_side_not_authorized_by_its_deciding_cycle")
+            base, side, requested = (
+                f"{genesis.genesis_id}-d{intent.decision_sequence}",
+                intent.side,
+                intent.requested_quantity,
+            )
         else:
-            raise _fail("fill_without_its_deciding_cycle")
-        authorized = (
-            deciding.cycle.long_authorized
-            if fill.side is HistoricalExecutionSide.BUY
-            else deciding.cycle.short_authorized
-        )
-        if authorized is not True:
-            raise _Blocked("fill_side_not_authorized_by_its_deciding_cycle")
+            # DEC-1: a protective fill is close-only and never bound to a cycle's direction authority; it is projected
+            # through the reservation of the cycle that decided its excursion.
+            deciding = opening_cycle(protections[obligations[attempt.obligation_id].protection_id])[2]
+            if transitions[fill.fill_digest].transition_kind not in (
+                HistoricalExecutionTransitionKind.REDUCE,
+                HistoricalExecutionTransitionKind.CLOSE,
+            ):
+                raise _Blocked("protective_fill_not_close_only")
+            base, side, requested = (
+                f"{genesis.genesis_id}-p{attempt.attempt_time_ns}",
+                attempt.side,
+                attempt.requested_quantity,
+            )
         valuation = marks.get(fill.fill_digest)
         mark_price = None if valuation is None else valuation.mark_price
         if mark_price is None:
@@ -1094,9 +1438,11 @@ def _derive_day(  # noqa: C901, PLR0912 - one linear derivation of the day
         episode = _episode(
             authority,
             deciding,
-            intent,
             fill,
             chain.state,
+            base=base,
+            side=side,
+            requested_quantity=requested,
             mark_price=mark_price,
             transition=transitions[fill.fill_digest],
         )
@@ -1154,7 +1500,26 @@ def _derive_day(  # noqa: C901, PLR0912 - one linear derivation of the day
         raise _Blocked("funding_reconciliation_failed")
     episodes = tuple(chain.episodes)
     funding = tuple(events)
+    derived: dict[str, object] = {}
+    if protection is not None:
+        # The excursion still open at E_{k+1} names its deciding cycle; the next seal must be given exactly that cycle.
+        still_open = [item for item in outcome.excursion_protections if item.closed_at_ns is None]
+        open_day, open_digest = (None, None) if not still_open else opening_cycle(still_open[-1])[:2]
+        derived = {
+            "open_excursion_deciding_day_index": open_day,
+            "open_excursion_deciding_cycle_digest": open_digest,
+            "pending_protective_attempt_time_ns": pending_attempt,
+            "day_protective_obligation_count": sum(
+                1 for item in outcome.protective_obligations if start <= item.created_at_ns < end
+            ),
+            "outstanding_protective_obligation_count": sum(
+                1
+                for item in outcome.protective_obligations
+                if item.status is HistoricalExecutionProtectiveObligationStatus.OUTSTANDING
+            ),
+        }
     return {
+        **derived,
         "decision_run_digest": replay.run_digest,
         "economics_result_digest": replay.economics_digest,
         "governed_outcome_digest": outcome.outcome_digest,
@@ -1186,7 +1551,7 @@ def _derive_day(  # noqa: C901, PLR0912 - one linear derivation of the day
 def _assemble_seal(proof: _SealProof) -> GovernedPaperDaySeal:
     status = GovernedPaperDaySealStatus.BLOCKED if proof.blocked else GovernedPaperDaySealStatus.SEALED
     seed = GovernedPaperDaySeal(
-        schema_version=_SEAL_SCHEMA_VERSION,
+        schema_version=_PROTECTIVE_SEAL_SCHEMA_VERSION if proof.protective else _SEAL_SCHEMA_VERSION,
         status=status,
         sealed=status is GovernedPaperDaySealStatus.SEALED,
         **proof.facts,  # type: ignore[arg-type]
@@ -1228,6 +1593,10 @@ def verify_governed_paper_day_seal(seal: object, inputs: object) -> EdgeEvidence
 
 def _record_digests(dataset: HistoricalPitDataset) -> dict[str, object]:
     return {record.record_digest: record for record in dataset.records}
+
+
+def _bar_digests(archive: HistoricalOhlcBarArchive) -> dict[str, HistoricalOhlcBar]:
+    return {bar.bar_digest: bar for bar in archive.bars}
 
 
 def build_governed_paper_execution_evidence(inputs: GovernedPaperExecutionInputs) -> GovernedPaperExecutionEvidence:  # noqa: C901
@@ -1294,11 +1663,27 @@ def build_governed_paper_execution_evidence(inputs: GovernedPaperExecutionInputs
                 raise _fail(f"archive_rewritten:{day}")
             if any(_visibility(current[name]) <= cycle.window_start_ns for name in set(current) - set(earlier)):
                 raise _fail(f"archive_backfilled_before_the_day:{day}")
+            protection = item.seal_inputs.protection
+            if protection is not None:  # the seal proved the lineage is protective on both days
+                earlier_bars = _bar_digests(inputs.days[day - 1].seal_inputs.protection.ohlc_archive)  # type: ignore[union-attr]
+                current_bars = _bar_digests(protection.ohlc_archive)
+                if not set(earlier_bars) <= set(current_bars):
+                    raise _fail(f"ohlc_archive_rewritten:{day}")
+                if any(
+                    max(current_bars[name].available_at_ns, current_bars[name].finalized_at_ns) <= cycle.window_start_ns
+                    for name in set(current_bars) - set(earlier_bars)
+                ):
+                    raise _fail(f"ohlc_archive_backfilled_before_the_day:{day}")
         pending = item.seal_inputs.pending_cycle
         if pending is not None:
             index = pending.day_index
             if not 0 <= index < day or governed_paper_cycle_authority_digest(pending) != cycles[index].cycle_digest:
                 raise _fail(f"pending_cycle_not_the_lineage_cycle:{day}")
+        excursion = None if item.seal_inputs.protection is None else item.seal_inputs.protection.excursion_cycle
+        if excursion is not None:
+            index = excursion.day_index
+            if not 0 <= index < day or governed_paper_cycle_authority_digest(excursion) != cycles[index].cycle_digest:
+                raise _fail(f"excursion_cycle_not_the_lineage_cycle:{day}")
         cycles.append(cycle)
         seals.append(seal)
         lineage.append([cycle.cycle_digest, seal.seal_digest])
@@ -1328,8 +1713,16 @@ def build_governed_paper_execution_evidence(inputs: GovernedPaperExecutionInputs
     )
     phases = [item.phase.value for item in cycles]
     ordinary = [index for index, value in enumerate(phases) if value == "ORDINARY"]
+    protective = terminal.schema_version == _PROTECTIVE_SEAL_SCHEMA_VERSION
+    extension: dict[str, object] = {}
+    if protective:
+        extension = {
+            "protective_authority_digest": terminal.protective_authority_digest,
+            "terminal_protective_revoked_from_ns": terminal.protective_revoked_from_ns,
+            "terminal_outstanding_protective_obligation_count": terminal.outstanding_protective_obligation_count,
+        }
     seed = GovernedPaperExecutionEvidence(
-        schema_version=_EVIDENCE_SCHEMA_VERSION,
+        schema_version=_PROTECTIVE_EVIDENCE_SCHEMA_VERSION if protective else _EVIDENCE_SCHEMA_VERSION,
         status=status,
         ready=status is GovernedPaperExecutionStatus.READY,
         evidence_id=evidence_id,
@@ -1356,6 +1749,7 @@ def build_governed_paper_execution_evidence(inputs: GovernedPaperExecutionInputs
         lineage_digest=edge_sha256_text(edge_canonical_json(lineage)),
         reason_codes=tuple(sorted(set(reasons))),
         evidence_digest="",
+        **extension,  # type: ignore[arg-type]
     )
     return replace(seed, evidence_digest=edge_payload_digest(_to_payload(seed), _EVIDENCE_DIGEST_FIELD))
 
@@ -1399,6 +1793,7 @@ def governed_paper_cumulative_history(
 
 __all__ = [
     "GOVERNED_PAPER_EXECUTION_NON_CLAIM_FLAGS",
+    "GovernedPaperDayProtectionInputs",
     "GovernedPaperDaySeal",
     "GovernedPaperDaySealInputs",
     "GovernedPaperDaySealStatus",
