@@ -47,6 +47,22 @@ Every other check is BLOCKED with the missing measurement or protection named. F
 ``passive_funding_carry.v1``: it enters SHORT on a positive and LONG on a negative trailing mean of final funding
 rates, the §1.1 Family B funding mean-reversion entry. Any other profile leaves every Family B check BLOCKED.
 
+Protective position management (``PROTECTIVE_POSITION_LIFECYCLE_V1``, rule set v2). Rule set v1 above holds for every
+evaluation without a protective context. When the day seal supplies one, the three §1.9 position-management gates are
+evaluated against it, and the 26 NO-TRADE ids and the other four gates are unchanged. The context holds the verified
+position-management policy the economics applies, its authenticated OHLC archive and the DEC-1 protective window:
+
+* FB-MAX-HOLD PASSes when the protective window covers ``[t, t + 24 h + 2 x max_execution_delay_ns]``, the nominal
+  horizon of the first protective attempt. The engine then enforces the close-only obligation itself; an unfilled
+  obligation stays an auditable breach and never a successful protection. Otherwise the gate is
+  BLOCKED_PROTECTION_UNREPRESENTABLE;
+* FB-STOP PASSes when, in addition, the DEC-7 ATR_4h reading at ``t`` is available. The engine reads the same ATR for
+  the entry it admits. An unavailable reading is BLOCKED_ON_MISSING_INPUT with its reason, among them a positive ATR
+  below half a scale-18 unit (``atr_rounds_to_zero``): an available reading always renders positive, and that
+  rendering is the observed value;
+* FB-STOP-TIGHTENING stays BLOCKED_PROTECTION_UNREPRESENTABLE: its exact reading (DEC-9) needs a human approval no one
+  has given, whether or not the policy executes the proposed reading.
+
 The evidence is digest-bound and paper-only. It proves no venue fact, edge, profitability, readiness or Stage-4
 completion. Exact arithmetic, no float, no ``decimal`` context, and no IO, clock, randomness, network or environment.
 """
@@ -69,14 +85,28 @@ from crypto_core.validation.edge_artifact_core import (
 )
 from crypto_core.validation.governed_paper_execution_authority import GovernedPaperGenesisAuthority
 from crypto_core.validation.historical_decision_run import HistoricalDecisionRun
-from crypto_core.validation.historical_execution_economics import historical_execution_visible_observations
+from crypto_core.validation.historical_execution_economics import (
+    HistoricalExecutionProtectiveWindow,
+    historical_execution_visible_observations,
+)
 from crypto_core.validation.historical_execution_economics_policy import (
     LATENCY_TIER_PRDV4_T1,
     historical_execution_decimal_is_canonical,
     historical_execution_render_amount,
     historical_execution_wire_int_is_valid,
 )
+from crypto_core.validation.historical_ohlc_bar_archive import (
+    HistoricalOhlcBarArchive,
+    historical_ohlc_wilder_atr,
+    verify_historical_ohlc_bar_archive,
+)
 from crypto_core.validation.historical_pit_dataset import HistoricalPitDataset
+from crypto_core.validation.historical_position_management_policy import (
+    MAX_HOLD_NS,
+    TIGHTENING_DEC9_READING_V1,
+    HistoricalPositionManagementPolicy,
+    verify_historical_position_management_policy,
+)
 from crypto_core.validation.strategy_executable_profiles import (
     PASSIVE_FUNDING_CARRY_V1,
     get_strategy_executable_profile,
@@ -97,6 +127,7 @@ _ANTI_TREND_BOUND = Fraction(2, 100)  # §1.9 anti-trend protection, ±2%
 _ENTRY_DIRECTIONS = ("LONG", "SHORT")
 
 GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID = "governed-paper-entry-safety.v1"
+GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_ID = "governed-paper-entry-safety.v2"
 
 GOVERNED_PAPER_ENTRY_SAFETY_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
     ("paper_only", True),
@@ -162,6 +193,28 @@ class GovernedPaperEntrySafetyObservation:
     mark_price: str | None
     lookback_mark_record_digest: str | None
     lookback_mark_price: str | None
+    protection_present: bool = False
+    protective_window_covers: bool = False
+    protective_authority_digest: str | None = None
+    atr_available: bool = False
+    atr_value: str | None = None
+    atr_reason: str = ""
+    atr_window_digest: str | None = None
+    stop_tightening_method_id: str | None = None
+
+
+@dataclass(frozen=True)
+class GovernedPaperEntrySafetyProtection:
+    """The protective context of one evaluation (rule set v2): what the economics applies to an admitted entry.
+
+    Supplied by the day seal from verified authorities: the position-management policy the replayed economics binds,
+    its authenticated OHLC archive (known at the seal) and the DEC-1 protective window, or None when no protective
+    authority covers the lineage.
+    """
+
+    position_management_policy: HistoricalPositionManagementPolicy
+    ohlc_archive: HistoricalOhlcBarArchive
+    protective_window: HistoricalExecutionProtectiveWindow | None
 
 
 @dataclass(frozen=True)
@@ -281,13 +334,6 @@ def _missing(reason: str) -> Callable[[_Observation], _Outcome]:
     return evaluate
 
 
-def _unrepresentable(reason: str) -> Callable[[_Observation], _Outcome]:
-    def evaluate(observation: _Observation) -> _Outcome:
-        return _Outcome(_Status.BLOCKED_PROTECTION_UNREPRESENTABLE, "", reason)
-
-    return evaluate
-
-
 def _family_b(evaluate: Callable[[_Observation], _Outcome]) -> Callable[[_Observation], _Outcome]:
     def gated(observation: _Observation) -> _Outcome:
         if not observation.family_b_applicable:
@@ -359,6 +405,45 @@ def _anti_trend(observation: _Observation) -> _Outcome:
     if triggered:
         return _Outcome(_Status.FAIL, observed, "anti_trend_entry_blocked_and_override_unprovable", evidence)
     return _Outcome(_Status.PASS, observed, "anti_trend_bound_not_crossed", evidence)
+
+
+_HORIZON_NOT_COVERED = "protective_authority_does_not_cover_the_holding_horizon"
+
+
+def _max_hold(observation: _Observation) -> _Outcome:
+    if not observation.protection_present:
+        return _Outcome(
+            _Status.BLOCKED_PROTECTION_UNREPRESENTABLE, "", "holding_period_exit_not_representable_on_the_selected_path"
+        )
+    if not observation.protective_window_covers or observation.protective_authority_digest is None:
+        return _Outcome(_Status.BLOCKED_PROTECTION_UNREPRESENTABLE, "", _HORIZON_NOT_COVERED)
+    evidence = (observation.protective_authority_digest,)
+    return _Outcome(_Status.PASS, "", "max_hold_close_only_obligation_enforced_by_the_engine", evidence)
+
+
+def _stop(observation: _Observation) -> _Outcome:
+    if not observation.protection_present:
+        return _Outcome(
+            _Status.BLOCKED_PROTECTION_UNREPRESENTABLE, "", "atr_4h_stop_exit_not_representable_on_the_selected_path"
+        )
+    if not observation.protective_window_covers or observation.protective_authority_digest is None:
+        return _Outcome(_Status.BLOCKED_PROTECTION_UNREPRESENTABLE, "", _HORIZON_NOT_COVERED)
+    if not observation.atr_available or observation.atr_value is None or observation.atr_window_digest is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", f"atr_4h_unavailable:{observation.atr_reason}")
+    evidence = (observation.protective_authority_digest, observation.atr_window_digest)
+    return _Outcome(_Status.PASS, observation.atr_value, "atr_4h_stop_enforced_by_the_engine", evidence)
+
+
+def _tightening(observation: _Observation) -> _Outcome:
+    if not observation.protection_present:
+        return _Outcome(
+            _Status.BLOCKED_PROTECTION_UNREPRESENTABLE, "", "stop_tightening_not_representable_on_the_selected_path"
+        )
+    if observation.stop_tightening_method_id == TIGHTENING_DEC9_READING_V1:
+        return _Outcome(
+            _Status.BLOCKED_PROTECTION_UNREPRESENTABLE, "", "dec9_tightening_reading_requires_human_approval"
+        )
+    return _Outcome(_Status.BLOCKED_PROTECTION_UNREPRESENTABLE, "", "stop_tightening_not_applied_pending_dec9")
 
 
 _D, _R, _M, _E, _X, _T, _B = (
@@ -568,29 +653,33 @@ _CHECKS: tuple[_Check, ...] = (
         _B,
         "PRDV4 §1.9 position management maximum holding period",
         "maximum_holding_period_24h",
-        _family_b(_unrepresentable("holding_period_exit_not_representable_on_the_selected_path")),
+        _family_b(_max_hold),
     ),
     _Check(
         "FB-STOP",
         _B,
         "PRDV4 §1.9 position management mandatory stop",
         "stop_at_1.5x_atr4h_from_entry",
-        _family_b(_unrepresentable("atr_4h_stop_exit_not_representable_on_the_selected_path")),
+        _family_b(_stop),
     ),
     _Check(
         "FB-STOP-TIGHTENING",
         _B,
         "PRDV4 §1.9 position management time-decay stop",
         "stop_tightened_by_20pct_every_8h",
-        _family_b(_unrepresentable("stop_tightening_not_representable_on_the_selected_path")),
+        _family_b(_tightening),
     ),
 )
 
 
-def governed_paper_entry_safety_rule_set() -> dict[str, object]:
-    """The rule set this module evaluates: every check, in order, with its PRDV4 clause and published threshold."""
+def governed_paper_entry_safety_rule_set(*, protective: bool = False) -> dict[str, object]:
+    """The rule set this module evaluates: every check, in order, with its PRDV4 clause and published threshold.
 
-    return {
+    ``protective=True`` is rule set v2: the same checks, with the §1.9 position-management gates evaluated against the
+    protective context of ``PROTECTIVE_POSITION_LIFECYCLE_V1`` (see the module docstring).
+    """
+
+    rule_set: dict[str, object] = {
         "rule_set_id": GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID,
         "contract_id": "S1_PAPER_ENTRY_SAFETY_CLOSURE_V1",
         "authorities": ["PRDV4 §1.21", "PRDV4 §1.9", "PRDV4 §1.16", "PRDV4 §1.1 Family B"],
@@ -605,14 +694,28 @@ def governed_paper_entry_safety_rule_set() -> dict[str, object]:
             for item in _CHECKS
         ],
     }
+    if protective:
+        rule_set.update(
+            rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_ID,
+            contract_id="PROTECTIVE_POSITION_LIFECYCLE_V1",
+            protective_rule={
+                "FB-MAX-HOLD": "pass_when_the_dec1_protective_window_covers_t_to_t_plus_24h_plus_two_max_execution_delays",
+                "FB-STOP": "pass_when_the_horizon_is_covered_and_the_dec7_atr_4h_reading_at_t_is_available",
+                "FB-STOP-TIGHTENING": "blocked_dec9_tightening_reading_requires_human_approval",
+                "max_hold_ns": MAX_HOLD_NS,
+            },
+        )
+    return rule_set
 
 
-def governed_paper_entry_safety_rule_set_digest() -> str:
-    return edge_sha256_text(edge_canonical_json(governed_paper_entry_safety_rule_set()))
+def governed_paper_entry_safety_rule_set_digest(*, protective: bool = False) -> str:
+    return edge_sha256_text(edge_canonical_json(governed_paper_entry_safety_rule_set(protective=protective)))
 
 
 GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET = governed_paper_entry_safety_rule_set()
 GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest()
+GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET = governed_paper_entry_safety_rule_set(protective=True)
+GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(protective=True)
 
 
 # --- one decision ------------------------------------------------------------------------------------------------------
@@ -652,7 +755,44 @@ def _canonical_observation(observation: object) -> GovernedPaperEntrySafetyObser
         _optional_text(value, name)
         if value is not None and (not historical_execution_decimal_is_canonical(value) or Fraction(value) <= 0):
             raise _fail(f"observation_malformed:{name}")
+    _canonical_protection_facts(observation)
     return observation
+
+
+def _canonical_protection_facts(observation: GovernedPaperEntrySafetyObservation) -> None:
+    """The protective facts are exact types, consistent, and absent (their defaults) without a protective context."""
+
+    for name in ("protection_present", "protective_window_covers", "atr_available"):
+        if type(getattr(observation, name)) is not bool:
+            raise _fail(f"observation_malformed:{name}")
+    for name in ("protective_authority_digest", "atr_window_digest"):
+        value = getattr(observation, name)
+        if value is not None and not edge_is_hex64(value):
+            raise _fail(f"observation_malformed:{name}")
+    value = observation.atr_value
+    if value is not None and (not historical_execution_decimal_is_canonical(value) or Fraction(value) <= 0):
+        raise _fail("observation_malformed:atr_value")
+    if type(observation.atr_reason) is not str:
+        raise _fail("observation_malformed:atr_reason")
+    method = observation.stop_tightening_method_id
+    if method is not None and (type(method) is not str or method == ""):
+        raise _fail("observation_malformed:stop_tightening_method_id")
+    available = observation.atr_value is not None and observation.atr_window_digest is not None
+    if observation.atr_available is not available or (observation.atr_reason == "") is not (
+        available or not observation.protection_present
+    ):
+        raise _fail("observation_malformed:atr_reading_inconsistent")
+    if observation.protective_window_covers and observation.protective_authority_digest is None:
+        raise _fail("observation_malformed:protective_window_without_authority")
+    if not observation.protection_present and (
+        observation.protective_window_covers
+        or observation.protective_authority_digest is not None
+        or observation.atr_available
+        or method is not None
+    ):
+        raise _fail("observation_malformed:protective_facts_without_a_protective_context")
+    if observation.protection_present and method is None:
+        raise _fail("observation_malformed:stop_tightening_method_id")
 
 
 def evaluate_governed_paper_entry_safety(
@@ -700,18 +840,84 @@ def _single_instrument_portfolio(authority: GovernedPaperGenesisAuthority) -> bo
     return len(envelope.sleeve_caps) == 1 and envelope.sleeve_caps[0].sleeve_id == genesis.sleeve_id
 
 
+def _canonical_protection(protection: object, *, instrument: str) -> GovernedPaperEntrySafetyProtection | None:
+    if protection is None:
+        return None
+    if type(protection) is not GovernedPaperEntrySafetyProtection:
+        raise _fail("protection_malformed")
+    policy, archive, window = (
+        protection.position_management_policy,
+        protection.ohlc_archive,
+        protection.protective_window,
+    )
+    if (
+        type(policy) is not HistoricalPositionManagementPolicy
+        or not verify_historical_position_management_policy(policy).intact
+        or type(archive) is not HistoricalOhlcBarArchive
+        or not verify_historical_ohlc_bar_archive(archive).intact
+    ):
+        raise _fail("protection_not_authentic")
+    if policy.instrument != instrument or archive.source.instrument != instrument:
+        raise _fail("protection_not_of_the_genesis_instrument")
+    if (
+        policy.atr_interval_ns not in archive.source.bar_intervals_ns
+        or archive.source.price_semantics is not policy.atr_bar_price_semantics
+    ):
+        raise _fail("protection_archive_not_of_the_policy")
+    if window is not None and (
+        type(window) is not HistoricalExecutionProtectiveWindow
+        or not edge_is_hex64(window.authority_digest)
+        or not historical_execution_wire_int_is_valid(window.window_start_ns, minimum=0)
+        or not historical_execution_wire_int_is_valid(window.window_end_ns, minimum=0)
+        or window.window_end_ns <= window.window_start_ns
+    ):
+        raise _fail("protective_window_malformed")
+    return protection
+
+
+def _protection_facts(
+    protection: GovernedPaperEntrySafetyProtection | None, *, instant: int, max_execution_delay_ns: int
+) -> dict[str, object]:
+    """The protective facts of one entry at ``instant`` (rule set v2), derived exactly as the engine will apply them."""
+
+    if protection is None:
+        return {}
+    policy, window = protection.position_management_policy, protection.protective_window
+    horizon = instant + MAX_HOLD_NS + 2 * max_execution_delay_ns
+    reading = historical_ohlc_wilder_atr(
+        protection.ohlc_archive,
+        interval_ns=policy.atr_interval_ns,
+        at_ns=instant,
+        max_bar_age_ns=policy.atr_max_bar_age_ns,
+    )
+    return {
+        "protection_present": True,
+        "protective_window_covers": window is not None
+        and window.window_start_ns <= instant
+        and horizon < window.window_end_ns,
+        "protective_authority_digest": None if window is None else window.authority_digest,
+        "atr_available": reading.available,
+        "atr_value": reading.rendered_value,
+        "atr_reason": reading.reason,
+        "atr_window_digest": reading.window_digest,
+        "stop_tightening_method_id": policy.stop_tightening_method_id,
+    }
+
+
 def build_governed_paper_entry_safety_evidence(
     *,
     authority: GovernedPaperGenesisAuthority,
     run: HistoricalDecisionRun,
     dataset: HistoricalPitDataset,
     invalidated_from_ns: int | None,
+    protection: GovernedPaperEntrySafetyProtection | None = None,
 ) -> GovernedPaperEntrySafetyEvidence:
     """Evaluate every entry decision of ``run`` over the archive ``dataset`` it was built from (see the module docstring).
 
     The run must be the genesis's own READY + PASS run over this archive and the archive the genesis's; the visible
-    observations re-verify the archive and the economics policy. A malformed or foreign input raises
-    ``GovernedPaperEntrySafetyError``. Pure.
+    observations re-verify the archive and the economics policy. ``protection`` (rule set v2) is the verified protective
+    context the day seal derives; without it the evaluation is rule set v1, unchanged. A malformed or foreign input
+    raises ``GovernedPaperEntrySafetyError``. Pure.
     """
 
     if type(authority) is not GovernedPaperGenesisAuthority:
@@ -721,6 +927,7 @@ def build_governed_paper_entry_safety_evidence(
     if invalidated_from_ns is not None and not historical_execution_wire_int_is_valid(invalidated_from_ns, minimum=0):
         raise _fail("invalidated_from_ns_invalid")
     genesis = authority.genesis
+    protection = _canonical_protection(protection, instrument=genesis.instrument)
     if run.status is not EdgeEvidenceStatus.READY or run.gate_verdict is not EdgeGateVerdict.PASS:
         raise _fail("decision_run_not_ready")
     if (
@@ -765,12 +972,18 @@ def build_governed_paper_entry_safety_evidence(
             mark_price=None if mark is None else mark[1],
             lookback_mark_record_digest=None if lookback is None else lookback[0],
             lookback_mark_price=None if lookback is None else lookback[1],
+            **_protection_facts(  # type: ignore[arg-type]
+                protection, instant=instant, max_execution_delay_ns=policy.max_execution_delay_ns
+            ),
         )
         decisions.append(evaluate_governed_paper_entry_safety(observation))
+    protective = protection is not None
     seed = GovernedPaperEntrySafetyEvidence(
         schema_version=_SCHEMA_VERSION,
-        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID,
-        rule_set_digest=governed_paper_entry_safety_rule_set_digest(),
+        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_ID
+        if protective
+        else GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID,
+        rule_set_digest=governed_paper_entry_safety_rule_set_digest(protective=protective),
         genesis_id=genesis.genesis_id,
         genesis_digest=genesis.genesis_digest,
         run_digest=run.run_digest,
