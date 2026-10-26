@@ -6,9 +6,10 @@ engine (``historical_execution_economics``) applies identically to the historica
 * maximum holding period: a close-only protective obligation at exactly 24 h after the first FLAT -> non-zero executed
   fill of an excursion. Adding to or reducing the excursion never moves that anchor;
 * mandatory stop: ``1.5 x ATR_4h`` from the excursion's opening fill price, with ATR_4h by the human-approved DEC-7
-  method (``WILDER_ATR_14_CONTIGUOUS_COMPLETED_UTC_BARS_V1``) over an authenticated ``HistoricalOhlcBarArchive``, read
-  at the decision instant of the opening intent. A PIT-visible mark at or beyond the stop (LONG: at or below, SHORT: at
-  or above) triggers the close-only obligation; a trigger is never a fill;
+  method (``WILDER_ATR_14_EXACT_OVER_THE_FULL_CONTIGUOUS_RUN_V1``: the exact Wilder recurrence from the seed of the
+  contiguous run through every later true range) over an authenticated ``HistoricalOhlcBarArchive``, read at the
+  decision instant of the opening intent. A PIT-visible mark at or beyond the stop (LONG: at or below, SHORT: at or
+  above) triggers the close-only obligation; a trigger is never a fill;
 * time-decay stop: PRDV4 asks for a 20% tightening every 8 h. Its exact reading is DEC-9 (see below).
 
 Rule identities and PRDV4 doctrine values are code-defined and committed by ``POSITION_MANAGEMENT_RULE_SET_DIGEST``;
@@ -19,7 +20,10 @@ stop-tightening method.
 Method authority. Every method id this module implements carries its authority:
 
 * ``PRDV4_DOCTRINE``: the published 24 h, 1.5 x ATR_4h, 20% and 8 h values;
-* ``HUMAN_AUTHORIZED``: DEC-7, the Wilder ATR, approved by the human for this contract;
+* ``HUMAN_AUTHORIZED``: DEC-7, the exact Wilder ATR(14) recurrence (the mean of the first 14 true ranges, then every
+  later true range of the contiguous run), approved by the human for this contract. Where the method has no reading
+  (warmup, a gap, a stale bar, a value without a positive scale-18 rendering) it is unavailable and the entry is
+  refused: a fail-closed boundary, never another ATR;
 * ``CONTRACT_SPECIFIED``: the engineering of this contract under DEC-1 and its invariants, namely the PIT mark trigger
   and the close-only standing obligation executed by the unchanged fill model. A standing obligation waits for the
   first eligible book: ``max_execution_delay_ns`` bounds the staleness of a decision intent, and a close-only

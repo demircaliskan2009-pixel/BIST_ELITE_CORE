@@ -117,6 +117,53 @@ def atr(archive: HistoricalOhlcBarArchive, at_ns: int, **changes: object):  # no
     return historical_ohlc_wilder_atr(archive, **arguments)  # type: ignore[arg-type]
 
 
+def wilder_oracle(bars: tuple[HistoricalOhlcBar, ...]) -> Fraction:
+    """INDEPENDENT ORACLE: the literal DEC-7 recurrence, in Fraction arithmetic, over EVERY true range of ``bars``.
+
+    ``bars`` is one contiguous run. The seed is the mean of its first 14 true ranges and every later true range is
+    smoothed by ``(13 * ATR + TR) / 14``: no window, no re-seed.
+    """
+
+    ranges = [
+        max(
+            Fraction(bar.high_price) - Fraction(bar.low_price),
+            abs(Fraction(bar.high_price) - Fraction(previous.close_price)),
+            abs(Fraction(bar.low_price) - Fraction(previous.close_price)),
+        )
+        for previous, bar in zip(bars, bars[1:], strict=False)
+    ]
+    value = sum(ranges[:14], Fraction(0)) / 14
+    for item in ranges[14:]:
+        value = (13 * value + item) / 14
+    return value
+
+
+def window_of(bars: tuple[HistoricalOhlcBar, ...]) -> str:
+    return edge_sha256_text(edge_canonical_json([item.bar_digest for item in bars]))
+
+
+def unit_bar(k: int, units: int) -> HistoricalOhlcBar:
+    """SYNTHETIC bar ``k`` whose true range is ``units`` scale-18 units: open == high == close == 100, the low below."""
+
+    opened = T0 + k * H4
+    return build_historical_ohlc_bar(
+        interval_ns=H4,
+        open_time_ns=opened,
+        open_price=d(100),
+        high_price=d(100),
+        low_price=d(Fraction(100) - Fraction(units, 10**18)),
+        close_price=d(100),
+        available_at_ns=opened + H4 + PUBLICATION,
+        finalized_at_ns=opened + H4 + PUBLICATION,
+    )
+
+
+def unit_run(units: tuple[int, ...]) -> tuple[HistoricalOhlcBar, ...]:
+    """A contiguous run of unit bars: bar 0 (no true range) followed by one bar per given unit count."""
+
+    return (unit_bar(0, 0), *(unit_bar(1 + index, value) for index, value in enumerate(units)))
+
+
 # --- A. the Wilder ATR: golden exact vectors ------------------------------------------------------------------------------
 
 
@@ -184,17 +231,116 @@ def test_a_missing_bar_restarts_the_warmup_after_the_gap() -> None:
     assert resumed.value == 3 and resumed.run_bar_count == 15  # only the post-gap run, never smoothed across the gap
 
 
-def test_the_series_is_bounded_to_the_last_280_true_ranges() -> None:
-    # 400 contiguous bars: the first 120 true ranges (9) lie outside the bound, the last 280 (2 then 3) inside it
+def test_every_true_range_of_the_run_is_smoothed_from_the_original_seed() -> None:
+    # 400 contiguous bars, 399 true ranges: the seed is the first 14 (9), and each of the 385 after it is smoothed in
     ranges = (9,) * 119 + (2,) * 14 + (3,) * 266
     bars = run_of(ranges)
     reading = atr(archive_of(*bars), after(bars[-1]))
-    expected = Fraction(2)
+    expected = Fraction(9)
+    for value in ranges[14:]:
+        expected = (expected * 13 + value) / 14
+    assert reading.value == expected == wilder_oracle(bars)
+    assert (reading.run_bar_count, reading.window_digest) == (400, window_of(bars))  # every bar of the run is bound
+    assert reading.rendered_value == d(expected)
+    # a 280-true-range re-seed would forget the 9s and smooth only the last 280 (2 then 3): another, wrong, number
+    reseeded = Fraction(2)
     for _ in range(266):
-        expected = (expected * 13 + 3) / 14
-    assert reading.value == expected and reading.run_bar_count == 281
-    assert reading.window_digest == edge_sha256_text(edge_canonical_json([item.bar_digest for item in bars[-281:]]))
-    assert reading.rendered_value is not None and len(str(reading.value.denominator)) < 400  # exact and representable
+        reseeded = (reseeded * 13 + 3) / 14
+    assert reading.value != reseeded
+
+
+@pytest.mark.parametrize(
+    ("first", "rendered"),
+    [(0, "1.999999999635588982"), (198, "2.000000035712279796")],
+)
+def test_the_audited_282_bar_counterexample_keeps_its_first_true_range(first: int, rendered: str) -> None:
+    """P2-DEC7-280-TR-RESEED: 281 true ranges, the first ``first`` and the 280 after it 2; a re-seed reads exactly 2."""
+
+    bars = run_of((first,) + (2,) * 280)
+    reading = atr(archive_of(*bars), after(bars[-1]))
+    assert reading.value == wilder_oracle(bars) and reading.value != 2
+    assert (reading.available, reading.rendered_value, reading.run_bar_count) == (True, rendered, 282)
+    assert reading.window_digest == window_of(bars)
+
+
+def test_every_historical_prefix_changes_the_reading_exactly_as_the_oracle_does() -> None:
+    tail = (2,) * 280  # a 280-true-range re-seed reads exactly 2 for every one of these runs
+    values = []
+    for prefix in ((), (5,), (5, 3) * 25, tuple(k % 9 + 1 for k in range(300)), (1,) * 1000):
+        bars = run_of(prefix + tail)
+        reading = atr(archive_of(*bars), after(bars[-1]))
+        assert (reading.value, reading.run_bar_count) == (wilder_oracle(bars), len(bars))
+        values.append(reading.value)
+    assert values[0] == 2 and len(set(values)) == len(values)  # the prefix is never erased, however long the tail
+
+
+def test_a_long_history_is_exact_over_thousands_of_updates_and_its_rendering_needs_no_integer_text() -> None:
+    ranges = tuple(Fraction((k * 7919) % 400, 100) for k in range(6000))  # SYNTHETIC deterministic true ranges
+    bars = run_of(ranges)
+    archive = archive_of(*bars)
+    reading = atr(archive, after(bars[-1]))
+    expected = wilder_oracle(bars)
+    assert (reading.value, reading.run_bar_count, reading.window_digest) == (expected, 6001, window_of(bars))
+    assert reading.rendered_value == d(expected)
+    # 5,986 smoothing steps: the exact denominator holds more digits than the integer-to-text limit (4,300), and the
+    # reading is still exact and rendered, because nothing ever turns the exact value into text
+    assert reading.value.denominator > 10**4_300
+    assert atr(archive, after(bars[-1])) == reading  # deterministic
+    with decimal.localcontext() as context:
+        context.prec = 2
+        assert atr(archive, after(bars[-1])) == reading
+
+
+def test_a_late_bar_inside_a_long_run_cuts_it_until_it_is_published_and_nothing_leaks_before() -> None:
+    bars = run_of(tuple((k % 7) + 1 for k in range(600)))  # bars 0..600
+    late = replace_publication(bars[581], 100 * HOUR)  # 19 bars before the end; visible 24 h after the last bar
+    archive = archive_of(*bars[:581], late, *bars[582:])
+    cut = atr(archive, after(bars[-1]))
+    assert (cut.value, cut.run_bar_count, cut.window_digest) == (wilder_oracle(bars[582:]), 19, window_of(bars[582:]))
+    assert atr(archive, after(late) - 1, max_bar_age_ns=30 * HOUR) == replace(cut, at_ns=after(late) - 1)
+    joined = atr(archive, after(late), max_bar_age_ns=30 * HOUR)
+    assert (joined.value, joined.run_bar_count) == (wilder_oracle((*bars[:581], late, *bars[582:])), 601)
+    assert joined.value == wilder_oracle(bars)  # the late bar's prices are the same: only its publication moved
+
+
+def test_a_positive_atr_that_rounds_to_zero_at_scale_18_is_unavailable() -> None:
+    """P2-POSITIVE-ATR-RENDER-ZERO: a positive exact ATR below half a scale-18 unit has no positive observation."""
+
+    for units, available in (((7,), False), ((8,), True), ((1,), False)):  # seed means 0.5, 0.571.. and 0.071.. units
+        bars = unit_run(units + (0,) * 13)
+        reading = atr(archive_of(*bars), after(bars[-1]))
+        assert wilder_oracle(bars) > 0  # the exact ATR is strictly positive in every case
+        if available:
+            assert (reading.available, reading.rendered_value) == (True, "0.000000000000000001")
+            assert reading.value == wilder_oracle(bars) and reading.window_digest == window_of(bars)
+        else:  # 0.5 units rounds half-even to 0: no positive rendering
+            assert (
+                reading.available,
+                reading.reason,
+                reading.value,
+                reading.rendered_value,
+                reading.window_digest,
+                reading.latest_bar_close_ns,
+                reading.run_bar_count,
+            ) == (False, "atr_rounds_to_zero", None, None, None, None, 15)
+    # decay: a seed of one unit smoothed by zero true ranges is (13/14)^k units, 0.5136 at k = 9 and 0.4769 at k = 10
+    bars = unit_run((14,) + (0,) * 13 + (0,) * 10)
+    archive = archive_of(*bars)
+    still = atr(archive, after(bars[-2]))
+    assert (still.available, still.rendered_value) == (True, "0.000000000000000001")
+    assert still.value == Fraction(13, 14) ** 9 / 10**18 == wilder_oracle(bars[:-1])
+    gone = atr(archive, after(bars[-1]))
+    assert (gone.available, gone.reason, gone.rendered_value) == (False, "atr_rounds_to_zero", None)
+    assert wilder_oracle(bars) == Fraction(13, 14) ** 10 / 10**18 > 0
+
+
+def test_a_forged_unverified_price_is_refused_and_never_mis_scaled() -> None:
+    bars = run_of(tuple(range(1, 15)))
+    archive = archive_of(*bars)
+    forged = replace(archive, bars=(*archive.bars[:-1], replace(archive.bars[-1], high_price="101.5")))
+    assert not verify_historical_ohlc_bar_archive(forged).intact
+    with pytest.raises(HistoricalOhlcBarArchiveError, match=f"^{code('atr_bar_price_malformed')}$"):
+        atr(forged, after(bars[-1]))
 
 
 def test_only_bars_visible_at_the_instant_are_read_and_a_late_publication_cuts_the_run() -> None:

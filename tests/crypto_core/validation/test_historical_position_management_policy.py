@@ -200,6 +200,26 @@ def test_dec9_is_a_reading_no_human_has_authorized() -> None:
     assert historical_position_management_methods_requiring_human_approval(pending) == ()
 
 
+WITHDRAWN_BOUNDED_ATR_METHOD_ID = "WILDER_ATR_14_OVER_THE_LAST_280_CONTIGUOUS_TRUE_RANGES_V1"
+
+
+def test_the_human_authorized_atr_method_is_the_exact_dec7_recurrence_and_no_bounded_variant() -> None:
+    """P2-DEC7-280-TR-RESEED: the id labelled HUMAN_AUTHORIZED is the full recurrence, and the 280-TR re-seed is gone."""
+
+    assert WILDER_ATR_METHOD_ID == "WILDER_ATR_14_EXACT_OVER_THE_FULL_CONTIGUOUS_RUN_V1"
+    authority = POSITION_MANAGEMENT_METHOD_AUTHORITY
+    assert authority[WILDER_ATR_METHOD_ID] is PositionManagementMethodAuthority.HUMAN_AUTHORIZED
+    assert WITHDRAWN_BOUNDED_ATR_METHOD_ID not in authority
+    assert POSITION_MANAGEMENT_RULE_SET["atr_method_id"] == WILDER_ATR_METHOD_ID
+    assert WITHDRAWN_BOUNDED_ATR_METHOD_ID not in edge_canonical_json(POSITION_MANAGEMENT_RULE_SET)
+    built = policy()
+    assert built.atr_method_id == WILDER_ATR_METHOD_ID
+    # a policy that names the withdrawn bounded method never verifies, even resealed
+    forged = replace(built, atr_method_id=WITHDRAWN_BOUNDED_ATR_METHOD_ID)
+    forged = replace(forged, policy_digest=historical_position_management_policy_digest(forged))
+    assert not verify_historical_position_management_policy(forged).intact
+
+
 def test_an_approval_matches_only_the_exact_policy_and_context() -> None:
     built = policy()
     record = canonical_historical_position_management_approval(approval(built))

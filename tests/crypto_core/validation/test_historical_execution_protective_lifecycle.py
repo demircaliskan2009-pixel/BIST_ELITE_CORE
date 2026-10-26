@@ -8,7 +8,9 @@ The worlds run on real time scales: final funding every 8 h, published 10 s afte
 instant); a mark every 15 min (visible 1 s after its event); a 10 bps book of depth 100 at 30 s past every mark slot
 (visible 1 s later); and flat SYNTHETIC 4 h mark-price bars from four days before the first decision, so ATR_4h is exactly
 the declared bar range (2) and the stop distance is 3. The carry profile (lookback 1) enters SHORT on a final rate above
-the entry threshold, LONG below its negative, and holds while the rate stays beyond the exit threshold.
+the entry threshold, LONG below its negative, and holds while the rate stays beyond the exit threshold. Section B2 swaps
+in long SYNTHETIC histories whose exact full-run ATR is not 2, checked against the independent literal-recurrence oracle
+of ``test_historical_ohlc_bar_archive.py`` rather than against the engine itself.
 """
 
 from __future__ import annotations
@@ -53,6 +55,7 @@ from crypto_core.validation.historical_execution_economics import (
 )
 from crypto_core.validation.historical_execution_economics_policy import HistoricalExecutionApprovalKind
 from crypto_core.validation.historical_ohlc_bar_archive import (
+    WILDER_ATR_METHOD_ID,
     HistoricalOhlcBar,
     HistoricalOhlcBarArchive,
     HistoricalOhlcPriceSemantics,
@@ -66,6 +69,7 @@ from crypto_core.validation.historical_pit_dataset import (
     build_historical_pit_record,
 )
 from crypto_core.validation.historical_position_management_policy import (
+    STOP_ATR_MULTIPLE,
     TIGHTENING_DEC9_READING_V1,
     TIGHTENING_NOT_APPLIED_PENDING_DEC9,
     HistoricalPositionManagementApproval,
@@ -77,12 +81,14 @@ try:  # the module objects pytest collects (basename import), so cached worlds a
     import test_historical_decision_run as runt
     import test_historical_execution_economics as econ
     import test_historical_execution_economics_policy as polt
+    import test_historical_ohlc_bar_archive as ohlct
     import test_strategy_executable_binding as bind
     import test_strategy_executable_profiles as prof
 except ImportError:  # imported outside a pytest session
     from tests.crypto_core.validation import test_historical_decision_run as runt
     from tests.crypto_core.validation import test_historical_execution_economics as econ
     from tests.crypto_core.validation import test_historical_execution_economics_policy as polt
+    from tests.crypto_core.validation import test_historical_ohlc_bar_archive as ohlct
     from tests.crypto_core.validation import test_strategy_executable_binding as bind
     from tests.crypto_core.validation import test_strategy_executable_profiles as prof
 
@@ -625,6 +631,32 @@ def test_a_future_mark_never_triggers_before_it_is_visible() -> None:
     )
 
 
+@functools.cache
+def tiny_range_archive() -> HistoricalOhlcBarArchive:
+    """SYNTHETIC bars -24..24: ONE true range of a single scale-18 unit (bar -23), every other true range 0.
+
+    The exact ATR at D_0 is ``(1/14) x (13/14)^11`` units: strictly positive, and below half a unit at scale 18.
+    """
+
+    bars = []
+    for k in range(-24, 25):
+        opened = ANCHOR + k * H4
+        low = Fraction(100) - Fraction(1, 10**18) if k == -23 else Fraction(100)
+        bars.append(
+            build_historical_ohlc_bar(
+                interval_ns=H4,
+                open_time_ns=opened,
+                open_price=d(100),
+                high_price=d(100),
+                low_price=d(low),
+                close_price=d(100),
+                available_at_ns=opened + H4 + SECOND,
+                finalized_at_ns=opened + H4 + SECOND,
+            )
+        )
+    return build_historical_ohlc_bar_archive(archive_id="ohlc-protective-tiny", source=ohlc_source(), bars=tuple(bars))
+
+
 @pytest.mark.parametrize(
     ("archive", "reason"),
     [
@@ -632,6 +664,7 @@ def test_a_future_mark_never_triggers_before_it_is_visible() -> None:
         (lambda: ohlc_archive(0, 24), "atr_warmup_insufficient"),
         (lambda: ohlc_archive(-24, -1), "atr_bar_stale"),
         (lambda: ohlc_archive(-24, 24, missing=(-5,)), "atr_warmup_insufficient"),
+        (tiny_range_archive, "atr_rounds_to_zero"),  # P2-POSITIVE-ATR-RENDER-ZERO
     ],
 )
 def test_an_unavailable_atr_refuses_the_entry_and_never_estimates_a_stop(archive, reason: str) -> None:  # noqa: ANN001
@@ -645,7 +678,191 @@ def test_the_atr_is_read_at_the_opening_decision_and_bound_into_the_protection()
     first = hold_result().excursion_protections[0]
     assert (first.atr_at_ns, first.atr_interval_ns, first.atr_run_bar_count) == (decision_instant(0), H4, 26)
     assert first.atr_latest_bar_close_ns == ANCHOR + 8 * HOUR  # the bar closing at 8 h is visible at 8 h 1 s
-    assert first.atr_method_id == pm_policy().atr_method_id
+    assert first.atr_method_id == pm_policy().atr_method_id == WILDER_ATR_METHOD_ID
+
+
+# --- B2. the exact full-history ATR on the public engine, verifier and governed replay (P2-DEC7-280-TR-RESEED) ------------
+
+END_2D = ANCHOR + 2 * DAY
+RATES = {"SHORT": (POSITIVE,) * 6, "LONG": (NEGATIVE,) * 6}
+SIGN = {"SHORT": -1, "LONG": 1}
+
+
+@functools.cache
+def long_archive(first_range: int, tail: int = 280) -> HistoricalOhlcBarArchive:
+    """SYNTHETIC 4 h bars ``-tail .. 1`` (bar 1 closes at 8 h): the first true range ``first_range``, every later one 2.
+
+    At D_0 every bar is visible and contiguous: the run is all ``tail + 2`` bars, so ``tail + 1`` true ranges. The
+    withdrawn 280-true-range re-seed read exactly 2 for these histories, whatever ``first_range`` is.
+    """
+
+    bars = tuple(bar(k, true_range=first_range if k == 1 - tail else 2) for k in range(-tail, 2))
+    return build_historical_ohlc_bar_archive(
+        archive_id=f"ohlc-protective-long-{first_range}", source=ohlc_source(), bars=bars
+    )
+
+
+@functools.cache
+def opening_basis(direction: str) -> Fraction:
+    """The executed price of D_0's opening fill: it never depends on the ATR or on any mark after slot 32."""
+
+    protection = computed(managed(world(Path(rates=RATES[direction]), end=END_2D))).excursion_protections[0]
+    assert (protection.direction, protection.opened_at_ns) == (direction, F0)
+    return Fraction(protection.basis_price)
+
+
+def beyond(mark: Fraction, level: Fraction, direction: str) -> bool:
+    """Whether ``mark`` is at or beyond the stop ``level`` (SHORT: at or above, LONG: at or below)."""
+
+    return mark >= level if direction == "SHORT" else mark <= level
+
+
+def first_mark_beyond(level: Fraction, direction: str) -> Fraction:
+    """The first scale-18 mark at or beyond an off-grid stop ``level``."""
+
+    units = level * 10**18
+    assert units.denominator != 1  # the exact full-history stop lies strictly between two scale-18 marks
+    whole = -(-units.numerator // units.denominator) if direction == "SHORT" else units.numerator // units.denominator
+    return Fraction(whole, 10**18)
+
+
+@pytest.mark.parametrize("crossing", [True, False])
+@pytest.mark.parametrize("first_range", [0, 198])
+@pytest.mark.parametrize("direction", ["SHORT", "LONG"])
+def test_the_stop_is_1_5_times_the_exact_full_history_atr_and_its_first_crossing_mark_triggers(
+    direction: str, first_range: int, crossing: bool
+) -> None:
+    archive = long_archive(first_range)
+    atr = ohlct.wilder_oracle(archive.bars)  # the INDEPENDENT oracle, never the engine
+    assert atr != 2 and (atr < 2) is (first_range == 0)
+    basis, sign = opening_basis(direction), SIGN[direction]
+    stop = basis - sign * STOP_ATR_MULTIPLE * atr
+    withdrawn = basis - sign * 3  # the stop of the 280-true-range re-seed, whose ATR was exactly 2
+    trigger_mark = first_mark_beyond(stop, direction)
+    inside_mark = trigger_mark + sign * Fraction(1, 10**18)
+    assert beyond(trigger_mark, stop, direction) and not beyond(inside_mark, stop, direction)
+    if first_range == 0:  # a later stop: the re-seed missed this crossing and held to the 24 h deadline
+        assert not beyond(trigger_mark, withdrawn, direction)
+    else:  # an earlier stop: the re-seed stopped inside the approved one
+        assert beyond(inside_mark, withdrawn, direction)
+    mark = trigger_mark if crossing else inside_mark
+    result = computed(managed(world(Path(rates=RATES[direction], mark=jump(48, mark)), end=END_2D), archive=archive))
+    protection = result.excursion_protections[0]
+    assert (protection.direction, protection.opened_at_ns, Fraction(protection.basis_price)) == (direction, F0, basis)
+    assert (protection.atr_method_id, protection.atr_value, protection.atr_run_bar_count) == (
+        WILDER_ATR_METHOD_ID,
+        d(atr),
+        282,
+    )
+    assert protection.atr_window_digest == ohlct.window_of(archive.bars)  # every one of the 282 bars is bound
+    assert [(item.stop_distance, item.stop_price) for item in protection.stop_levels] == [
+        (d(STOP_ATR_MULTIPLE * atr), d(stop))
+    ]
+    obligation = result.protective_obligations[0]
+    close = protective_fills(result)[0]
+    if crossing:
+        (trigger,) = obligation.triggers
+        assert (trigger.trigger_kind, trigger.trigger_time_ns, trigger.mark_price, trigger.stop_price) == (
+            HistoricalExecutionProtectiveTriggerKind.STOP,
+            slot(48) + VISIBLE,  # 12 h 1 s
+            d(mark),
+            d(stop),
+        )
+        assert close.execution_time_ns == book_visible(48)
+    else:
+        assert [(item.trigger_kind, item.trigger_time_ns) for item in obligation.triggers] == [
+            (HistoricalExecutionProtectiveTriggerKind.MAX_HOLD, F0 + DAY)  # 32 h 31 s
+        ]
+        assert close.execution_time_ns == book_visible(129)
+    assert (close.outcome, obligation.status) == (
+        HistoricalExecutionFillOutcome.FILLED,
+        HistoricalExecutionProtectiveObligationStatus.DISCHARGED,
+    )
+    transitions = {item.fill_digest: item for item in result.position_transitions}
+    assert transitions[close.fill_digest].transition_kind is HistoricalExecutionTransitionKind.CLOSE
+    assert transitions[close.fill_digest].post_quantity == d(0)
+    # governed paper re-runs the one engine and reaches the same exact stop
+    outcome = governed(result, windows=((ANCHOR, END_2D, 1, 1),), protective=((ANCHOR, END_2D + DAY),))
+    assert outcome.fills == result.fills and outcome.position_transitions == result.position_transitions
+    assert outcome.excursion_protections == result.excursion_protections
+    assert outcome.protective_obligations == result.protective_obligations
+
+
+def test_a_full_history_stop_after_the_day_boundary_settles_funding_first_and_closes_partially_then_fully() -> None:
+    archive = long_archive(0)
+    stop = basis() + STOP_ATR_MULTIPLE * ohlct.wilder_oracle(archive.bars)
+    mark = first_mark_beyond(stop, "SHORT")
+    assert mark < basis() + 3  # inside the re-seed's stop: that method held this SHORT to the 24 h deadline
+
+    def book(j: int, mid: Fraction) -> dict[str, str]:
+        return book_at(mid, depth=25 if j in (100, 101) else 100)  # 2% of 25: each close fills 0.5
+
+    triggered_at = slot(100) + VISIBLE  # 25 h 1 s: after the UTC day boundary and the 24 h settlement
+    path = Path(rates=(POSITIVE,) * 6, mark=jump(100, mark), book=book)
+    result = computed(managed(world(path, end=END_2D), archive=archive))
+    settled = [(item.liability_time_ns, item.position_quantity) for item in result.funding_cashflows]
+    assert settled[:2] == [(ANCHOR + 16 * HOUR, d(-1)), (ANCHOR + 24 * HOUR, d(-1))]
+    boundary = [
+        item
+        for item in result.valuations
+        if item.time_ns == ANCHOR + DAY and item.valuation_kind is HistoricalExecutionValuationKind.UTC_DAY_BOUNDARY
+    ]
+    assert len(boundary) == 1 and boundary[0].position_quantity == d(-1)
+    obligation = result.protective_obligations[0]
+    assert [(item.trigger_kind, item.trigger_time_ns) for item in obligation.triggers] == [
+        (HistoricalExecutionProtectiveTriggerKind.STOP, triggered_at)
+    ]
+    fills = protective_fills(result)[:2]
+    assert [(item.outcome, item.filled_quantity, item.execution_time_ns) for item in fills] == [
+        (HistoricalExecutionFillOutcome.PARTIALLY_FILLED, d("0.5"), book_visible(100)),
+        (HistoricalExecutionFillOutcome.FILLED, d("0.5"), book_visible(101)),
+    ]
+    assert [(item.requested_quantity, item.position_quantity) for item in result.protective_attempts[:2]] == [
+        (d(1), d(-1)),
+        (d("0.5"), d("-0.5")),
+    ]
+    assert (obligation.status, obligation.discharged_at_ns, obligation.breach_duration_ns) == (
+        HistoricalExecutionProtectiveObligationStatus.DISCHARGED,
+        book_visible(101),
+        book_visible(101) - triggered_at,
+    )
+    kinds = [item.transition_kind for item in result.position_transitions[:3]]
+    assert kinds == [
+        HistoricalExecutionTransitionKind.OPEN,
+        HistoricalExecutionTransitionKind.REDUCE,
+        HistoricalExecutionTransitionKind.CLOSE,
+    ]
+    # the same evaluation ending while the first attempt waits for its book: an OUTSTANDING obligation, a pending
+    # attempt carried by the governed replay, and the exact breach to the end
+    end = triggered_at + 10 * SECOND
+    pending = computed(managed(world(path, end=end), archive=archive))
+    (open_obligation,) = pending.protective_obligations
+    assert (open_obligation.status, open_obligation.breach_duration_ns, open_obligation.outstanding_quantity) == (
+        HistoricalExecutionProtectiveObligationStatus.OUTSTANDING,
+        end - triggered_at,
+        d(-1),
+    )
+    (unfilled,) = protective_fills(pending)
+    assert (unfilled.outcome, unfilled.reason) == (HistoricalExecutionFillOutcome.UNFILLED, "execution_window_closed")
+    replay = governed(pending, windows=((ANCHOR, end, 0, 1),), protective=((ANCHOR, end + DAY),))
+    assert replay.pending_protective_attempt_time_ns == triggered_at
+    assert replay.protective_obligations == pending.protective_obligations
+
+
+@pytest.mark.parametrize(("offset", "stopped"), [(Fraction(0), True), (-Fraction(1, 10**18), False)])
+def test_a_2002_bar_history_of_equal_true_ranges_keeps_the_exact_stop_equality_boundary(
+    offset: Fraction, stopped: bool
+) -> None:
+    archive = ohlc_archive(-2000, 1)  # every true range 2: the exact ATR over all 2,001 of them is exactly 2
+    level = basis() + 3 + offset
+    result = computed(managed(world(Path(rates=(POSITIVE,) * 6, mark=jump(48, level)), end=END_2D), archive=archive))
+    protection = result.excursion_protections[0]
+    assert (protection.atr_value, protection.atr_run_bar_count) == (d(2), 2002)
+    kinds = [item.trigger_kind for item in result.protective_obligations[0].triggers]
+    if stopped:
+        assert kinds == [HistoricalExecutionProtectiveTriggerKind.STOP]
+    else:
+        assert kinds == [HistoricalExecutionProtectiveTriggerKind.MAX_HOLD]
 
 
 # --- C. DEC-9 tightening (a reading no human approved: synthetic approvals only) -------------------------------------------

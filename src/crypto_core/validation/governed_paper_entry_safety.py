@@ -57,7 +57,9 @@ position-management policy the economics applies, its authenticated OHLC archive
   obligation stays an auditable breach and never a successful protection. Otherwise the gate is
   BLOCKED_PROTECTION_UNREPRESENTABLE;
 * FB-STOP PASSes when, in addition, the DEC-7 ATR_4h reading at ``t`` is available. The engine reads the same ATR for
-  the entry it admits. An unavailable reading is BLOCKED_ON_MISSING_INPUT with its reason;
+  the entry it admits. An unavailable reading is BLOCKED_ON_MISSING_INPUT with its reason, among them a positive ATR
+  below half a scale-18 unit (``atr_rounds_to_zero``): an available reading always renders positive, and that
+  rendering is the observed value;
 * FB-STOP-TIGHTENING stays BLOCKED_PROTECTION_UNREPRESENTABLE: its exact reading (DEC-9) needs a human approval no one
   has given, whether or not the policy executes the proposed reading.
 

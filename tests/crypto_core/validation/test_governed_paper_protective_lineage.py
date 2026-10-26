@@ -51,14 +51,20 @@ from crypto_core.validation.historical_execution_economics import (
     HistoricalExecutionTransitionKind,
     simulate_historical_execution_governed_paper,
 )
-from crypto_core.validation.historical_ohlc_bar_archive import build_historical_ohlc_bar_archive
+from crypto_core.validation.historical_ohlc_bar_archive import (
+    build_historical_ohlc_bar,
+    build_historical_ohlc_bar_archive,
+)
+from crypto_core.validation.historical_position_management_policy import STOP_ATR_MULTIPLE
 
 try:  # the module objects pytest collects (basename import): the shared synthetic worlds and their exact memos
     import test_governed_admitted_variant_paper_execution as gpe
     import test_governed_paper_protective_authority as prot
+    import test_historical_ohlc_bar_archive as ohlct
 except ImportError:  # imported outside a pytest session
     from tests.crypto_core.validation import test_governed_admitted_variant_paper_execution as gpe
     from tests.crypto_core.validation import test_governed_paper_protective_authority as prot
+    from tests.crypto_core.validation import test_historical_ohlc_bar_archive as ohlct
 
 SEALED = GovernedPaperDaySealStatus.SEALED
 V3 = "governed-paper-day-seal.v3"
@@ -319,6 +325,67 @@ def test_the_seal_carries_the_day_archive_and_the_engine_reads_only_bars_known_t
         gpe.instant(3) + 502,
     )
     assert protection.max_hold_deadline_ns == DEADLINE
+
+
+LONG_FIRST_BAR = -300  # SYNTHETIC: 50 days of bars before G
+
+
+@functools.cache
+def long_world_bar(k: int):  # noqa: ANN201
+    """SYNTHETIC: world G's bar ``k``, except the first true range of the long history, which is 8 (high 44, low 36)."""
+
+    if k != LONG_FIRST_BAR + 1:
+        return prot.world_bar(k)
+    opened = gpe.G + k * prot.H4
+    return build_historical_ohlc_bar(
+        interval_ns=prot.H4,
+        open_time_ns=opened,
+        open_price=gpe.d(40),
+        high_price=gpe.d(44),
+        low_price=gpe.d(36),
+        close_price=gpe.d(40),
+        available_at_ns=opened + prot.H4 + prot.SECOND,
+        finalized_at_ns=opened + prot.H4 + prot.SECOND,
+    )
+
+
+@functools.cache
+def long_world_ohlc(day: int):  # noqa: ANN201
+    """The long history sealed at E_(day + 1): exactly the bars visible then, growing without backfill."""
+
+    end = gpe.instant(day + 1)
+    bars = tuple(
+        long_world_bar(k)
+        for k in range(LONG_FIRST_BAR, 6 * (day + 1))
+        if max(long_world_bar(k).available_at_ns, long_world_bar(k).finalized_at_ns) <= end
+    )
+    return build_historical_ohlc_bar_archive(archive_id=f"ohlc-g-long-{day}", source=prot.ohlc_source(), bars=bars)
+
+
+def test_the_day_seal_binds_the_exact_full_history_atr_and_its_stop() -> None:
+    """P2-DEC7-280-TR-RESEED on governed day seals: the first true range 8, every later one 0.4, over 300+ bars."""
+
+    days: tuple = ()
+    for day in range(4):
+        days = (*days, protective_day(days, archive=long_world_ohlc(day)))
+    assert all(item.seal.status is SEALED for item in days)
+    economics, outcome = protected_replay(days[3])
+    # the seal bound exactly this independently rebuilt economics and governed outcome
+    assert (days[3].seal.economics_result_digest, days[3].seal.governed_outcome_digest) == (
+        economics.result_digest,
+        outcome.outcome_digest,
+    )
+    decided = gpe.instant(3) + 10  # the day-3 entry decision reads the ATR
+    run = tuple(bar for bar in long_world_ohlc(3).bars if max(bar.available_at_ns, bar.finalized_at_ns) <= decided)
+    atr = ohlct.wilder_oracle(run)  # the independent oracle
+    assert len(run) > 281 and atr != Fraction("0.4")  # a 280-true-range re-seed read exactly 0.4 here
+    (protection,) = economics.excursion_protections
+    assert (protection.atr_at_ns, protection.atr_value, protection.atr_run_bar_count) == (decided, gpe.d(atr), len(run))
+    assert protection.atr_window_digest == ohlct.window_of(run)
+    assert [item.stop_price for item in protection.stop_levels] == [
+        gpe.d(Fraction(protection.basis_price) + STOP_ATR_MULTIPLE * atr)
+    ]
+    assert outcome.excursion_protections == economics.excursion_protections
 
 
 # --- B. DEC-1: the protective close bypasses invalidation and a zero direction ceiling ------------------------------------------

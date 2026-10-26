@@ -15,22 +15,29 @@ high``. A bar is published once: its availability (the original publication rece
 its close, so only a fully completed bar can be recorded, and its point-in-time visibility is
 ``max(available_at_ns, finalized_at_ns)``. There is one bar per (interval, open time); a revision is refused.
 
-Wilder ATR (``WILDER_ATR_14_OVER_THE_LAST_280_CONTIGUOUS_TRUE_RANGES_V1``, the human-approved DEC-7 method). At an
-instant ``t``, over the bars of one interval that are visible at ``t``:
+Wilder ATR (``WILDER_ATR_14_EXACT_OVER_THE_FULL_CONTIGUOUS_RUN_V1``, the human-approved DEC-7 method). At an instant
+``t``, over the bars of one interval that are visible at ``t``:
 
-* the run is the maximal sequence of consecutive bars ending at the visible bar with the latest open time, bounded to
-  its last 281 bars (280 true ranges). A missing or not-yet-visible bar ends it, so a gap restarts the warmup;
+* the run is the maximal sequence of consecutive bars ending at the visible bar with the latest open time. A missing or
+  not-yet-visible bar ends it, so a gap restarts the warmup;
 * ``TR_i = max(high_i - low_i, |high_i - close_{i-1}|, |low_i - close_{i-1}|)`` for every bar with its predecessor in
   the run;
-* the seed is the arithmetic mean of the first 14 true ranges, and ``ATR_n = (13 * ATR_{n-1} + TR_n) / 14`` after it.
+* the seed is the arithmetic mean of the first 14 true ranges of the run, and ``ATR_n = (13 * ATR_{n-1} + TR_n) / 14``
+  for EVERY later true range of the run. There is no window bound and no re-seed: the reading at ``t`` smooths every
+  true range of the run, from its original seed on.
 
-The arithmetic is exact ``Fraction`` arithmetic, with no float and no ``decimal`` context. Exact smoothing multiplies the
-denominator by 14 at every step, so an unbounded series stops being representable (its scale-18 rendering exceeds the
-integer-to-text limit after a few thousand bars). The bound is the DEC-7 implementation reading that keeps the reading
-exact and finite: the weight left on the seed after 266 smoothing steps is ``(13/14)^266``, below ``3e-9``. The bound
-also makes the reading at ``t`` independent of how far back the archive reaches. A reading is unavailable,
-never estimated, when no bar is visible, when the run holds fewer than 15 bars, when the latest bar closed more than
-the governed maximum bar age before ``t``, or when the ATR is not positive.
+The arithmetic is exact integer arithmetic, with no float, no ``decimal`` context and no rounding. Prices are counted in
+scale-18 units and the ATR is carried as ``N / (P * 10^18)``. The seed has ``N`` equal to the sum of the first 14 true
+ranges and ``P = 14``; each later true range ``u`` maps ``(N, P)`` to ``(13 * N + P * u, 14 * P)``, which is exactly
+``(13 * ATR + TR) / 14``. The exact value gains about 3.8 bits per smoothing step and is never serialized or turned into
+text: ``rendered_value`` is its one ROUND_HALF_EVEN scale-18 rendering by integer division, so no integer-to-text limit
+applies, and a reading costs a deterministic O(n^2) bit operations over a run of n bars, with no bound on n.
+
+A reading is unavailable, never estimated, when no bar is visible, when the run holds fewer than 15 bars, when the
+latest bar closed more than the governed maximum bar age before ``t``, or when the ATR is not positive. A positive
+exact ATR below half a scale-18 unit renders as zero, which is no usable positive observation, so it is unavailable
+too (``atr_rounds_to_zero``): an available reading always carries a positive canonical rendering, and every consumer
+(the engine's entry admission and the paper entry gate) refuses an unavailable one with its reason.
 
 Non-claims: the source is not qualified (M1), its rights are not verified, its historical coverage and the origin of
 its publication times are not proven, and nothing here is a venue fact (D1) or a human adoption (C1). Real paper use
@@ -55,6 +62,7 @@ from crypto_core.validation.edge_artifact_core import (
     verify_edge_artifact_total,
 )
 from crypto_core.validation.historical_execution_economics_policy import (
+    HISTORICAL_EXECUTION_NUMERIC_POLICY_V1,
     historical_execution_decimal_is_canonical,
     historical_execution_render_amount,
     historical_execution_wire_int_is_valid,
@@ -67,9 +75,11 @@ _BAR_DIGEST_FIELD = "bar_digest"
 _UTC_DAY_NS = 86_400_000_000_000
 _INSTRUMENT_EXTRA_CHARS = frozenset("-_./:")
 _ATR_PERIOD = 14
+_PRICE_SCALE = HISTORICAL_EXECUTION_NUMERIC_POLICY_V1.decimal_scale
+_UNITS_PER_ONE = 10**_PRICE_SCALE
+_ZERO_RENDERING = historical_execution_render_amount(Fraction(0))
 
-WILDER_ATR_METHOD_ID = "WILDER_ATR_14_OVER_THE_LAST_280_CONTIGUOUS_TRUE_RANGES_V1"
-_ATR_MAX_TRUE_RANGES = 20 * _ATR_PERIOD  # the DEC-7 representability bound (see the module docstring)
+WILDER_ATR_METHOD_ID = "WILDER_ATR_14_EXACT_OVER_THE_FULL_CONTIGUOUS_RUN_V1"
 
 HISTORICAL_OHLC_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
     ("paper_only", True),
@@ -150,7 +160,8 @@ class HistoricalOhlcAtrReading:
     """One Wilder ATR reading at an instant: the exact value (never serialized) and its rendered evidence.
 
     ``value`` is the exact ATR when ``available``; ``rendered_value`` is its one ROUND_HALF_EVEN scale-18 rendering
-    (artifact output only). ``window_digest`` commits the ordered digests of the bars the reading used.
+    (artifact output only), a positive canonical decimal whenever the reading is available. ``window_digest`` commits
+    the ordered digests of every bar of the run, all of which the reading smoothed.
     """
 
     method_id: str
@@ -511,6 +522,15 @@ def _unavailable(interval_ns: int, at_ns: int, reason: str, count: int = 0) -> H
     )
 
 
+def _price_units(price: str) -> int:
+    """The exact scale-18 unit count of one canonical bar price (a verified archive holds no other)."""
+
+    whole, dot, decimals = price.partition(".")
+    if not (dot and len(decimals) == _PRICE_SCALE and price.isascii() and whole.isdigit() and decimals.isdigit()):
+        raise _fail("atr_bar_price_malformed")
+    return int(whole + decimals)
+
+
 def historical_ohlc_wilder_atr(
     archive: HistoricalOhlcBarArchive,
     *,
@@ -521,8 +541,9 @@ def historical_ohlc_wilder_atr(
     """The DEC-7 Wilder ATR(14) of ``archive`` at ``at_ns`` over the bars of ``interval_ns`` visible then.
 
     ``archive`` must be the canonical, verified archive (callers verify once); malformed arguments raise. An unavailable
-    reading carries its reason (``atr_no_visible_bar``, ``atr_warmup_insufficient``, ``atr_bar_stale`` or
-    ``atr_not_positive``) and no value. Pure.
+    reading carries its reason (``atr_no_visible_bar``, ``atr_warmup_insufficient``, ``atr_bar_stale``,
+    ``atr_not_positive``, ``atr_unrepresentable`` or ``atr_rounds_to_zero``) and no value, rendering or window. An
+    available reading carries the exact ATR over the whole run, its positive rendering and the run's window digest. Pure.
     """
 
     if type(archive) is not HistoricalOhlcBarArchive:
@@ -540,25 +561,30 @@ def historical_ohlc_wilder_atr(
         return _unavailable(interval_ns, at_ns, "atr_no_visible_bar")
     latest = visible[max(visible)]
     run = [latest]
-    while len(run) <= _ATR_MAX_TRUE_RANGES and run[-1].open_time_ns - interval_ns in visible:
+    while run[-1].open_time_ns - interval_ns in visible:
         run.append(visible[run[-1].open_time_ns - interval_ns])
     run.reverse()
     if len(run) < _ATR_PERIOD + 1:
         return _unavailable(interval_ns, at_ns, "atr_warmup_insufficient", len(run))
     if at_ns - latest.close_time_ns > max_bar_age_ns:
         return _unavailable(interval_ns, at_ns, "atr_bar_stale", len(run))
-    ranges: list[Fraction] = []
+    ranges: list[int] = []  # every true range of the run, in scale-18 units
     for previous, bar in zip(run, run[1:], strict=False):
-        high, low, prior_close = Fraction(bar.high_price), Fraction(bar.low_price), Fraction(previous.close_price)
+        high, low = _price_units(bar.high_price), _price_units(bar.low_price)
+        prior_close = _price_units(previous.close_price)
         ranges.append(max(high - low, abs(high - prior_close), abs(low - prior_close)))
-    atr = sum(ranges[:_ATR_PERIOD], Fraction(0)) / _ATR_PERIOD
+    # ATR == numerator / (power * 10^18): the seed, then (13 * ATR + TR) / 14 for every later true range of the run
+    numerator, power = sum(ranges[:_ATR_PERIOD]), _ATR_PERIOD
     for value in ranges[_ATR_PERIOD:]:
-        atr = (atr * (_ATR_PERIOD - 1) + value) / _ATR_PERIOD
-    if atr <= 0:
+        numerator, power = (_ATR_PERIOD - 1) * numerator + power * value, _ATR_PERIOD * power
+    if numerator <= 0:
         return _unavailable(interval_ns, at_ns, "atr_not_positive", len(run))
+    atr = Fraction(numerator, power * _UNITS_PER_ONE)
     rendered = historical_execution_render_amount(atr)
     if rendered is None:
         return _unavailable(interval_ns, at_ns, "atr_unrepresentable", len(run))
+    if rendered == _ZERO_RENDERING:
+        return _unavailable(interval_ns, at_ns, "atr_rounds_to_zero", len(run))
     window = edge_sha256_text(edge_canonical_json([bar.bar_digest for bar in run]))
     return HistoricalOhlcAtrReading(
         WILDER_ATR_METHOD_ID, interval_ns, at_ns, True, "", atr, rendered, len(run), latest.close_time_ns, window

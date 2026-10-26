@@ -14,12 +14,15 @@ this module never installs the test-only permissive rule table. It proves:
 * the test-only permissive table cannot masquerade as the production gate;
 * rule set v2 (``PROTECTIVE_POSITION_LIFECYCLE_V1``): with a verified protective context FB-MAX-HOLD and FB-STOP pass
   exactly when the engine enforces them, FB-STOP-TIGHTENING stays blocked (DEC-9), every NO-TRADE id is unchanged and
-  rule set v1 keeps its accepted identity.
+  rule set v1 keeps its accepted identity;
+* a positive ATR that rounds to zero at scale 18 is an explicit BLOCKED FB-STOP, on the public evidence builder and
+  across a four-day protective lineage, never an uncaught malformed observation (P2-POSITIVE-ATR-RENDER-ZERO).
 """
 
 from __future__ import annotations
 
 import decimal
+import functools
 import json
 from dataclasses import replace
 from fractions import Fraction
@@ -61,7 +64,13 @@ from crypto_core.validation.historical_execution_economics import (
     simulate_historical_execution_governed_paper,
 )
 from crypto_core.validation.historical_execution_economics_policy import LATENCY_TIER_PRDV4_T1
-from crypto_core.validation.historical_ohlc_bar_archive import HistoricalOhlcPriceSemantics
+from crypto_core.validation.historical_ohlc_bar_archive import (
+    HistoricalOhlcBarArchive,
+    HistoricalOhlcPriceSemantics,
+    build_historical_ohlc_bar,
+    build_historical_ohlc_bar_archive,
+    historical_ohlc_wilder_atr,
+)
 from crypto_core.validation.historical_position_management_policy import (
     MAX_HOLD_NS,
     TIGHTENING_DEC9_READING_V1,
@@ -71,9 +80,13 @@ from crypto_core.validation.historical_position_management_policy import (
 try:  # the module objects pytest collects (basename import): the shared synthetic worlds and their exact memos
     import test_governed_admitted_variant_paper_execution as gpe
     import test_governed_paper_protective_authority as prot
+    import test_governed_paper_protective_lineage as lineage
+    import test_historical_ohlc_bar_archive as ohlct
 except ImportError:  # imported outside a pytest session
     from tests.crypto_core.validation import test_governed_admitted_variant_paper_execution as gpe
     from tests.crypto_core.validation import test_governed_paper_protective_authority as prot
+    from tests.crypto_core.validation import test_governed_paper_protective_lineage as lineage
+    from tests.crypto_core.validation import test_historical_ohlc_bar_archive as ohlct
 
 _PREFIX = "governed_paper_entry_safety"
 S = GovernedPaperEntrySafetyStatus
@@ -904,3 +917,98 @@ def test_world_g_entries_are_evaluated_against_the_engine_horizon_and_atr() -> N
     last_trade = prot.world_ohlc(3, source=prot.ohlc_source(price_semantics=HistoricalOhlcPriceSemantics.LAST_TRADE))
     with pytest.raises(GovernedPaperEntrySafetyError, match=code("protection_archive_not_of_the_policy")):
         evaluated(world_protection(horizon + 1, ohlc_archive=last_trade))
+
+
+# --- E. a positive ATR that rounds to zero at scale 18 (P2-POSITIVE-ATR-RENDER-ZERO) -----------------------------------------
+
+ROUNDS_TO_ZERO = code("FB-STOP:atr_4h_unavailable:atr_rounds_to_zero")
+
+
+@functools.cache
+def tiny_world_bar(k: int):  # noqa: ANN201
+    """SYNTHETIC 4 h bar ``k`` of world G: open == high == close == 40; bar FIRST_BAR + 1 alone dips one scale-18 unit."""
+
+    opened = gpe.G + k * prot.H4
+    low = Fraction(40) - Fraction(1, 10**18) if k == prot.FIRST_BAR + 1 else Fraction(40)
+    return build_historical_ohlc_bar(
+        interval_ns=prot.H4,
+        open_time_ns=opened,
+        open_price=d(40),
+        high_price=d(40),
+        low_price=d(low),
+        close_price=d(40),
+        available_at_ns=opened + prot.H4 + prot.SECOND,
+        finalized_at_ns=opened + prot.H4 + prot.SECOND,
+    )
+
+
+@functools.cache
+def tiny_world_ohlc(day: int) -> HistoricalOhlcBarArchive:
+    """World G's archive sealed at E_(day + 1), with ONE true range of one unit: a positive ATR rendering as zero."""
+
+    end = gpe.instant(day + 1)
+    bars = tuple(
+        tiny_world_bar(k)
+        for k in range(prot.FIRST_BAR, 6 * (day + 1))
+        if max(tiny_world_bar(k).available_at_ns, tiny_world_bar(k).finalized_at_ns) <= end
+    )
+    return build_historical_ohlc_bar_archive(archive_id=f"ohlc-g-tiny-{day}", source=prot.ohlc_source(), bars=bars)
+
+
+def test_a_positive_atr_rounding_to_zero_blocks_fb_stop_on_the_public_evidence_builder() -> None:
+    assert entry_safety._CHECKS is PRODUCTION_CHECKS  # noqa: SLF001 - the production table, never the permissive one
+    item = gated_days("G", 4)[3]
+    authority, run, _ = run_and_evidence(item)
+    instant = gpe.instant(3) + 10  # the day-3 entry decision
+    archive = tiny_world_ohlc(3)
+    policy = prot.pm_policy()
+    reading = historical_ohlc_wilder_atr(
+        archive, interval_ns=policy.atr_interval_ns, at_ns=instant, max_bar_age_ns=policy.atr_max_bar_age_ns
+    )
+    visible = tuple(bar for bar in archive.bars if max(bar.available_at_ns, bar.finalized_at_ns) <= instant)
+    exact = ohlct.wilder_oracle(visible)  # the independent oracle: strictly positive, rendered zero
+    assert exact > 0 and d(exact) == d(0)
+    assert (reading.available, reading.reason, reading.value, reading.rendered_value, reading.window_digest) == (
+        False,
+        "atr_rounds_to_zero",
+        None,
+        None,
+        None,
+    )
+    assert reading.run_bar_count == len(visible)
+    horizon = instant + MAX_HOLD_NS + 2 * authority.economics_policy.max_execution_delay_ns
+    evidence = build_governed_paper_entry_safety_evidence(
+        authority=authority,
+        run=run,
+        dataset=item.seal_inputs.dataset,
+        invalidated_from_ns=None,
+        protection=world_protection(horizon + 1, ohlc_archive=archive),
+    )
+    (entry,) = [decision for decision in evidence.decisions if decision.decision_time_ns == instant]
+    stop = check_of(entry, "FB-STOP")
+    assert (stop.status, stop.observed, stop.reason, stop.evidence_record_digests) == (BLOCKED, "", ROUNDS_TO_ZERO, ())
+    assert check_of(entry, "FB-MAX-HOLD").status is S.PASS
+    assert (entry.entry_permitted, entry.first_failure_check_id) == (False, "NT-D01")
+
+
+def test_a_four_day_protective_lineage_with_a_rounding_to_zero_atr_seals_every_day_on_the_production_table() -> None:
+    assert entry_safety._CHECKS is PRODUCTION_CHECKS  # noqa: SLF001 - the production table, never the permissive one
+    days: tuple = ()
+    for day in range(4):  # days 0, 1 and 2 hold no entry; day 3 evaluates world G's SHORT entry
+        days = (*days, lineage.protective_day(days, archive=tiny_world_ohlc(day)))
+    for item in days:
+        seal = item.seal
+        assert (seal.status, seal.reason_codes, seal.episodes) == (GovernedPaperDaySealStatus.SEALED, (), ())
+        assert seal.entry_safety_rule_set_digest == GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_DIGEST
+        assert seal.ohlc_archive_digest == tiny_world_ohlc(seal.day_index).archive_digest
+        verification = verify_governed_paper_day_seal(seal, item.seal_inputs)
+        assert (verification.intact, verification.reason_codes) == (True, ())
+    (entry,) = days[3].seal.entry_safety_decisions
+    stop = check_of(entry, "FB-STOP")
+    assert (stop.status, stop.reason) == (BLOCKED, ROUNDS_TO_ZERO)
+    assert (entry.entry_permitted, entry.first_failure_check_id) == (False, "NT-D01")
+    assert days[3].seal.close_position_quantity == gpe.d(0) and days[3].seal.day_protective_obligation_count == 0
+    evidence = lineage.evidence_of(days)
+    assert (evidence.status, evidence.terminal_episode_count) == (GovernedPaperExecutionStatus.READY, 0)
+    verification = verify_governed_paper_execution_evidence(evidence, gpe.evidence_inputs(days, gpe.scenario("G")))
+    assert (verification.intact, verification.reason_codes) == (True, ())
