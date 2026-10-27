@@ -1293,18 +1293,26 @@ def _replay(
     ):
         raise _Blocked(f"economics_not_computed:{economics.gate_verdict.value}")
 
-    def evaluated(refused: tuple[int, ...]) -> GovernedPaperEntrySafetyEvidence:
-        """The gate under the schedule refusing ``refused``; with a governed portfolio (rule set v3) only."""
+    evaluations: dict[tuple[int, ...], GovernedPaperEntrySafetyEvidence] = {}
 
-        trial = replace(schedule, entry_refused_decision_sequences=refused)
-        return build_governed_paper_entry_safety_evidence(
-            authority=authority,
-            run=run,
-            dataset=inputs.dataset,
-            invalidated_from_ns=schedule.invalidated_from_ns,
-            protection=gate_protection,
-            portfolio=GovernedPaperEntrySafetyPortfolio(economics, trial),
-        )
+    def evaluated(refused: tuple[int, ...]) -> GovernedPaperEntrySafetyEvidence:
+        """The gate under the schedule refusing ``refused``; with a governed portfolio (rule set v3) only.
+
+        Pure in ``refused`` within this replay, so each schedule is evaluated once: the fixed point's own evaluation is
+        the one sealed.
+        """
+
+        if refused not in evaluations:
+            trial = replace(schedule, entry_refused_decision_sequences=refused)
+            evaluations[refused] = build_governed_paper_entry_safety_evidence(
+                authority=authority,
+                run=run,
+                dataset=inputs.dataset,
+                invalidated_from_ns=schedule.invalidated_from_ns,
+                protection=gate_protection,
+                portfolio=GovernedPaperEntrySafetyPortfolio(economics, trial),
+            )
+        return evaluations[refused]
 
     if protection is not None and protection.portfolio_no_trade:
         refused = governed_paper_entry_safety_sequential_refusals(

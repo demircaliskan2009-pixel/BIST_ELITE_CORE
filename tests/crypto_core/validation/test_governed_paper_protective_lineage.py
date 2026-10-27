@@ -37,10 +37,7 @@ from crypto_core.validation.governed_admitted_variant_paper_execution import (
     verify_governed_paper_day_seal,
     verify_governed_paper_execution_evidence,
 )
-from crypto_core.validation.governed_paper_execution_authority import (
-    build_governed_paper_cycle_authority,
-    governed_paper_genesis_authority,
-)
+from crypto_core.validation.governed_paper_execution_authority import build_governed_paper_cycle_authority
 from crypto_core.validation.governed_paper_protective_authority import (
     build_governed_paper_protective_authority,
     governed_paper_protective_context,
@@ -189,7 +186,8 @@ def protected_replay(item: object):  # noqa: ANN201
     """The day's replay rebuilt independently through the public engine functions, with its protection."""
 
     inputs = item.seal_inputs  # type: ignore[attr-defined]
-    view = governed_paper_genesis_authority(inputs.genesis, inputs.genesis_inputs)
+    # through the module attribute: the exact identity memo of ``gpe.apply_memos`` (a pure re-proof of the same objects)
+    view = gpe.authority.governed_paper_genesis_authority(inputs.genesis, inputs.genesis_inputs)
     genesis = view.genesis
     context = governed_paper_protective_context(inputs.protection.authority, inputs.protection.authority_inputs)
     run = gpe.execution.build_historical_decision_run(

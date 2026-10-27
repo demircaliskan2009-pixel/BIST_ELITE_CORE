@@ -474,7 +474,8 @@ def run_and_evidence(item: object):  # noqa: ANN201
     """The day's decision run and its entry-safety evidence, rebuilt independently through the public builders."""
 
     inputs = item.seal_inputs  # type: ignore[attr-defined]
-    authority = governed_paper_genesis_authority(inputs.genesis, inputs.genesis_inputs)
+    # through the module attribute: the exact identity memo of ``gpe.apply_memos`` (a pure re-proof of the same objects)
+    authority = gpe.authority.governed_paper_genesis_authority(inputs.genesis, inputs.genesis_inputs)
     genesis = authority.genesis
     run = gpe.execution.build_historical_decision_run(
         inputs.dataset,
