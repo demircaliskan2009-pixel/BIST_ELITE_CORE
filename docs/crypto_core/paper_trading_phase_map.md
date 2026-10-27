@@ -359,3 +359,21 @@ Protective position lifecycle (`PROTECTIVE_POSITION_LIFECYCLE_V1`, recorded 2026
   refused, first by NT-D01: the 22 missing NO-TRADE inputs and the other Family B gates are unchanged;
 - REAL_PAPER_EXECUTION stays BLOCKED: no qualified OHLC source (M1), no accepted venue facts (D1) and no C1-C9
   decisions exist. Every bar, policy value and approval in the tests is synthetic.
+
+Native NO-TRADE portfolio measurement (`S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1`, recorded 2026-10-26):
+
+- the governed re-run records, at each decision instant and before its admission, the exact governed portfolio then
+  known (decision portfolio v1): the position, any order in flight, the NAV at the fresh visible mark and the NAV at
+  the UTC midnight that starts the decision's day. A settlement whose final funding rate is published after the
+  decision is excluded from both, so ex-post funding accounting never reaches a decision. A partial first day, or a
+  decision at the midnight itself, has no day-start NAV, and none is substituted (no genesis or other baseline);
+- entry gate rule set v3 evaluates that snapshot: NT-R02 FAILS strictly below -2% of the day-start NAV (equality does
+  not trigger), NT-R04 FAILS strictly above 25% of NAV at the fresh visible mark, and NT-R03 PASSES at zero only with
+  no position and no order in flight, and is otherwise BLOCKED (no position risk measure is defined). Each is BLOCKED
+  wherever the snapshot cannot support a reading, and only a one-sleeve paper portfolio is measured;
+- admission is sequential: each entry is evaluated on the portfolio its admitted predecessors produce (the unique
+  fixed point, never a neutral replay). Day seal v4 and lineage evidence v4 bind it for a lineage that opts in from
+  day 0; v1-v3 artifacts and rule sets v1/v2 are byte-identical;
+- every S1 entry is still refused first by NT-D01. The NT-R02 reading (current UTC day, day-start NAV) and the NT-R04
+  reading are engineering adjudications, not governance values, and the engine's initial equity implies no C1-C9
+  decision (C5 included). REAL_PAPER_EXECUTION stays BLOCKED. Every value and approval in the tests is synthetic.

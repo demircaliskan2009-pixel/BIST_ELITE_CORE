@@ -63,6 +63,32 @@ position-management policy the economics applies, its authenticated OHLC archive
 * FB-STOP-TIGHTENING stays BLOCKED_PROTECTION_UNREPRESENTABLE: its exact reading (DEC-9) needs a human approval no one
   has given, whether or not the policy executes the proposed reading.
 
+Native portfolio measurement (``S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1``, rule set v3). Rule sets v1 and v2 hold for
+every evaluation without a governed portfolio. When the day seal also supplies the replayed economics and the schedule
+under evaluation, the one engine DERIVES the decision portfolio of that schedule
+(``simulate_historical_execution_governed_paper_decision_portfolio``): the paper portfolio as known at each decision
+instant, before its admission, with every funding settlement whose final rate is not yet visible excluded. Its NAV is
+the engine's own equity over the economics policy's ``initial_equity``; no C5 or other C1-C9 approval is claimed or
+implied. Three NO-TRADE ids are evaluated on it, and only while the paper portfolio is exactly the genesis sleeve
+(otherwise BLOCKED):
+
+* NT-R02 (daily loss limit): ``(NAV(t) − NAV(d)) / NAV(d)`` with ``d`` the UTC midnight that starts the decision's day
+  and ``NAV(d)`` the engine's valuation at ``d`` (the initial one when the run starts exactly then). It FAILs when
+  strictly below −2%; equality passes. The day-start NAV is never substituted: a partial first day, a decision exactly
+  at the boundary or a non-positive day-start NAV is BLOCKED, and so is an unavailable NAV (an open position without
+  a fresh visible mark, or an amount outside the numeric policy's representation domain);
+* NT-R03 (open risk cap): PRDV4 defines no position-risk measure, so an open position is BLOCKED. Without a position
+  and without an order in flight, on an available positive NAV, the open risk is exactly zero and the check passes;
+* NT-R04 (position concentration): ``|q| x mark(t) / NAV(t)`` FAILs when strictly above 25%, on an available
+  positive NAV and the fresh visible mark; otherwise BLOCKED.
+
+The admissions are sequential: an entry is evaluated on the portfolio that the admitted entries before it produced. The
+day seal finds the one schedule whose refusals are its own (``governed_paper_entry_safety_sequential_refusals``):
+starting from every entry refused, each round re-derives the decision portfolio under the previous refusals. Because a
+decision's portfolio depends only on the admissions before it, round k is exact for the first k entries, so the
+fixed point exists, is unique and is reached in at most one round more than there are entries. Every other check is
+unchanged, and a refusal never reaches an exit.
+
 The evidence is digest-bound and paper-only. It proves no venue fact, edge, profitability, readiness or Stage-4
 completion. Exact arithmetic, no float, no ``decimal`` context, and no IO, clock, randomness, network or environment.
 """
@@ -86,8 +112,13 @@ from crypto_core.validation.edge_artifact_core import (
 from crypto_core.validation.governed_paper_execution_authority import GovernedPaperGenesisAuthority
 from crypto_core.validation.historical_decision_run import HistoricalDecisionRun
 from crypto_core.validation.historical_execution_economics import (
+    HistoricalExecutionAdmissionSchedule,
+    HistoricalExecutionDecisionPortfolioSnapshot,
+    HistoricalExecutionEconomicsError,
+    HistoricalExecutionEconomicsResult,
     HistoricalExecutionProtectiveWindow,
     historical_execution_visible_observations,
+    simulate_historical_execution_governed_paper_decision_portfolio,
 )
 from crypto_core.validation.historical_execution_economics_policy import (
     LATENCY_TIER_PRDV4_T1,
@@ -123,11 +154,18 @@ _TIER_LATENCY_BUDGET_NS = {LATENCY_TIER_PRDV4_T1: 100_000_000}  # §1.16 T1 Crit
 _LATENCY_BREACH_MULTIPLE = 5  # NT-X01
 _STARTUP_WARMUP_NS = 5 * 60 * _NS_PER_SECOND  # NT-T01
 _RETURN_LOOKBACK_NS = 4 * 3600 * _NS_PER_SECOND  # §1.9 r_4h
+_DAILY_LOSS_LIMIT = Fraction(-2, 100)  # NT-R02 (§1.21, §8.2): intraday PnL / NAV strictly below -2%
+_CONCENTRATION_CAP = Fraction(25, 100)  # NT-R04 (§1.21, §8.2): a single position strictly above 25% of NAV
+_UTC_DAY_NS = 86_400 * _NS_PER_SECOND
+_DAY_START_REASONS = ("partial_first_utc_day", "day_start_valued_after_the_decision", "day_start_nav_unrepresentable")
+_NAV_REASONS = ("no_fresh_visible_mark", "nav_unrepresentable")
+_ZERO_RENDERING = "0.000000000000000000"  # the zero open risk of an empty portfolio, at the numeric policy's scale 18
 _ANTI_TREND_BOUND = Fraction(2, 100)  # §1.9 anti-trend protection, ±2%
 _ENTRY_DIRECTIONS = ("LONG", "SHORT")
 
 GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID = "governed-paper-entry-safety.v1"
 GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_ID = "governed-paper-entry-safety.v2"
+GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET_ID = "governed-paper-entry-safety.v3"
 
 GOVERNED_PAPER_ENTRY_SAFETY_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
     ("paper_only", True),
@@ -201,6 +239,31 @@ class GovernedPaperEntrySafetyObservation:
     atr_reason: str = ""
     atr_window_digest: str | None = None
     stop_tightening_method_id: str | None = None
+    # Rule set v3 only: the governed decision portfolio of the decision (absent without one, as in rule sets v1/v2).
+    portfolio_present: bool = False
+    portfolio_snapshot_digest: str | None = None
+    position_quantity: str | None = None
+    order_in_flight: bool = False
+    position_mark_record_digest: str | None = None
+    position_mark_price: str | None = None
+    portfolio_nav: str | None = None
+    portfolio_nav_reason: str = ""
+    day_start_ns: int | None = None
+    day_start_nav: str | None = None
+    day_start_reason: str = ""
+
+
+@dataclass(frozen=True)
+class GovernedPaperEntrySafetyPortfolio:
+    """The governed portfolio of one evaluation (rule set v3): the replayed economics and the schedule under evaluation.
+
+    Supplied by the day seal. The decision portfolio itself is derived here by the one engine, never accepted; the
+    schedule's entry refusals are the admissions the evaluation is conditioned on, and the seal proves they are the
+    evaluation's own (``governed_paper_entry_safety_sequential_refusals``).
+    """
+
+    economics: HistoricalExecutionEconomicsResult
+    schedule: HistoricalExecutionAdmissionSchedule
 
 
 @dataclass(frozen=True)
@@ -446,6 +509,96 @@ def _tightening(observation: _Observation) -> _Outcome:
     return _Outcome(_Status.BLOCKED_PROTECTION_UNREPRESENTABLE, "", "stop_tightening_not_applied_pending_dec9")
 
 
+@dataclass(frozen=True)
+class _Portfolio:
+    """A measured governed portfolio: its snapshot evidence and its exact position."""
+
+    evidence: tuple[str, ...]
+    quantity: Fraction
+
+
+def _measured_portfolio(observation: _Observation, legacy_reason: str) -> _Outcome | _Portfolio:
+    """The BLOCKED outcome without a measured governed portfolio, else the measured portfolio.
+
+    Without a governed portfolio (rule sets v1 and v2) the outcome is exactly the earlier missing-input outcome.
+    """
+
+    if not observation.portfolio_present:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", legacy_reason)
+    if not observation.single_instrument_portfolio:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "paper_portfolio_holds_more_than_the_genesis_sleeve")
+    digest, quantity = observation.portfolio_snapshot_digest, observation.position_quantity
+    if digest is None or quantity is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "governed_portfolio_not_computed")
+    return _Portfolio((digest,), Fraction(quantity))
+
+
+def _nav_unavailable(observation: _Observation) -> str:
+    return f"nav_unavailable:{observation.portfolio_nav_reason}"
+
+
+def _daily_loss(observation: _Observation) -> _Outcome:
+    measured = _measured_portfolio(observation, "intraday_portfolio_pnl_and_nav_not_measured_at_the_decision_instant")
+    if isinstance(measured, _Outcome):
+        return measured
+    evidence = measured.evidence
+    start_text, nav_text = observation.day_start_nav, observation.portfolio_nav
+    if start_text is None:
+        reason = f"utc_day_start_nav_unavailable:{observation.day_start_reason}"
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", reason, evidence)
+    if nav_text is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", _nav_unavailable(observation), evidence)
+    start = Fraction(start_text)
+    if start <= 0:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "utc_day_start_nav_not_positive", evidence)
+    change = (Fraction(nav_text) - start) / start
+    observed = historical_execution_render_amount(change)
+    if observed is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "intraday_pnl_ratio_unrepresentable", evidence)
+    if change < _DAILY_LOSS_LIMIT:
+        return _Outcome(_Status.FAIL, observed, "intraday_loss_beyond_2pct_of_the_day_start_nav", evidence)
+    return _Outcome(_Status.PASS, observed, "intraday_loss_within_2pct_of_the_day_start_nav", evidence)
+
+
+def _open_risk(observation: _Observation) -> _Outcome:
+    measured = _measured_portfolio(observation, "portfolio_position_risk_not_measured_at_the_decision_instant")
+    if isinstance(measured, _Outcome):
+        return measured
+    evidence = measured.evidence
+    if measured.quantity != 0:
+        reason = "position_risk_measure_undefined_for_an_open_position"
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", reason, evidence)
+    if observation.order_in_flight:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "an_order_in_flight_may_open_exposure", evidence)
+    nav_text = observation.portfolio_nav
+    if nav_text is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", _nav_unavailable(observation), evidence)
+    if Fraction(nav_text) <= 0:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "portfolio_equity_not_positive", evidence)
+    return _Outcome(_Status.PASS, _ZERO_RENDERING, "no_position_and_no_order_in_flight_carry_risk", evidence)
+
+
+def _concentration(observation: _Observation) -> _Outcome:
+    measured = _measured_portfolio(observation, "portfolio_position_concentration_not_measured_at_the_decision_instant")
+    if isinstance(measured, _Outcome):
+        return measured
+    evidence = measured.evidence
+    nav_text, mark_text = observation.portfolio_nav, observation.position_mark_price
+    if nav_text is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", _nav_unavailable(observation), evidence)
+    nav = Fraction(nav_text)
+    if nav <= 0:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "nav_not_positive", evidence)
+    # an available NAV values an open position at its fresh visible mark; a flat portfolio has no mark
+    share = Fraction(0) if mark_text is None else abs(measured.quantity) * Fraction(mark_text) / nav
+    observed = historical_execution_render_amount(share)
+    if observed is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "position_share_unrepresentable", evidence)
+    if share > _CONCENTRATION_CAP:
+        return _Outcome(_Status.FAIL, observed, "single_position_above_25pct_of_nav", evidence)
+    return _Outcome(_Status.PASS, observed, "single_position_within_25pct_of_nav", evidence)
+
+
 _D, _R, _M, _E, _X, _T, _B = (
     _Family.DATA,
     _Family.RISK,
@@ -497,21 +650,21 @@ _CHECKS: tuple[_Check, ...] = (
         _R,
         "PRDV4 §1.21 NT-R02 daily loss limit",
         "intraday_pnl_over_nav_lt_minus_2pct",
-        _missing("intraday_portfolio_pnl_and_nav_not_measured_at_the_decision_instant"),
+        _daily_loss,
     ),
     _Check(
         "NT-R03",
         _R,
         "PRDV4 §1.21 NT-R03 open risk cap",
         "sum_position_risk_over_equity_gt_4pct",
-        _missing("portfolio_position_risk_not_measured_at_the_decision_instant"),
+        _open_risk,
     ),
     _Check(
         "NT-R04",
         _R,
         "PRDV4 §1.21 NT-R04 position concentration",
         "any_position_gt_25pct_of_nav",
-        _missing("portfolio_position_concentration_not_measured_at_the_decision_instant"),
+        _concentration,
     ),
     _Check(
         "NT-R05",
@@ -672,12 +825,17 @@ _CHECKS: tuple[_Check, ...] = (
 )
 
 
-def governed_paper_entry_safety_rule_set(*, protective: bool = False) -> dict[str, object]:
+def governed_paper_entry_safety_rule_set(*, protective: bool = False, portfolio: bool = False) -> dict[str, object]:
     """The rule set this module evaluates: every check, in order, with its PRDV4 clause and published threshold.
 
     ``protective=True`` is rule set v2: the same checks, with the §1.9 position-management gates evaluated against the
-    protective context of ``PROTECTIVE_POSITION_LIFECYCLE_V1`` (see the module docstring).
+    protective context of ``PROTECTIVE_POSITION_LIFECYCLE_V1`` (see the module docstring). ``portfolio=True`` (only
+    with ``protective=True``) is rule set v3: rule set v2 with NT-R02, NT-R03 and NT-R04 evaluated on the governed
+    decision portfolio of ``S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1``.
     """
+
+    if portfolio and not protective:
+        raise _fail("portfolio_rule_set_needs_the_protective_rule_set")
 
     rule_set: dict[str, object] = {
         "rule_set_id": GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID,
@@ -705,17 +863,50 @@ def governed_paper_entry_safety_rule_set(*, protective: bool = False) -> dict[st
                 "max_hold_ns": MAX_HOLD_NS,
             },
         )
+    if portfolio:
+        rule_set.update(
+            rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET_ID,
+            contract_id="S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1",
+            portfolio_rule={
+                "source": "historical_execution_governed_paper_decision_portfolio_v1_derived_by_the_one_engine",
+                "instant": "the_decision_instant_before_its_admission_after_same_instant_funding_and_protective_rules",
+                "scope": "the_paper_portfolio_is_exactly_the_genesis_sleeve_otherwise_blocked",
+                "nav": "initial_equity_plus_realized_minus_fees_plus_funding_plus_unrealized_at_the_fresh_visible_mark",
+                "unavailable": "a_nav_without_a_fresh_visible_mark_or_an_amount_outside_the_numeric_domain_is_blocked",
+                "funding_currency": "a_settlement_whose_final_rate_is_not_visible_at_the_decision_instant_is_excluded",
+                "NT-R02": "nav_minus_utc_day_start_nav_over_utc_day_start_nav_strictly_below_minus_2pct",
+                "NT-R02_day_start": "the_engine_valuation_at_the_utc_midnight_otherwise_blocked_never_substituted",
+                "NT-R03": "zero_open_risk_only_without_a_position_and_an_order_in_flight_otherwise_blocked",
+                "NT-R04": "abs_quantity_times_the_fresh_visible_mark_over_positive_nav_strictly_above_25pct",
+                "admission": "each_entry_on_the_portfolio_its_admitted_predecessors_produced_the_unique_fixed_point",
+                "daily_loss_limit": _render_threshold(_DAILY_LOSS_LIMIT),
+                "concentration_cap": _render_threshold(_CONCENTRATION_CAP),
+            },
+        )
     return rule_set
 
 
-def governed_paper_entry_safety_rule_set_digest(*, protective: bool = False) -> str:
-    return edge_sha256_text(edge_canonical_json(governed_paper_entry_safety_rule_set(protective=protective)))
+def _render_threshold(value: Fraction) -> str:
+    rendered = historical_execution_render_amount(value)
+    if rendered is None:  # pragma: no cover - the PRDV4 thresholds are representable
+        raise _fail("threshold_unrepresentable")
+    return rendered
+
+
+def governed_paper_entry_safety_rule_set_digest(*, protective: bool = False, portfolio: bool = False) -> str:
+    return edge_sha256_text(
+        edge_canonical_json(governed_paper_entry_safety_rule_set(protective=protective, portfolio=portfolio))
+    )
 
 
 GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET = governed_paper_entry_safety_rule_set()
 GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest()
 GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET = governed_paper_entry_safety_rule_set(protective=True)
 GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(protective=True)
+GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET = governed_paper_entry_safety_rule_set(protective=True, portfolio=True)
+GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(
+    protective=True, portfolio=True
+)
 
 
 # --- one decision ------------------------------------------------------------------------------------------------------
@@ -756,7 +947,77 @@ def _canonical_observation(observation: object) -> GovernedPaperEntrySafetyObser
         if value is not None and (not historical_execution_decimal_is_canonical(value) or Fraction(value) <= 0):
             raise _fail(f"observation_malformed:{name}")
     _canonical_protection_facts(observation)
+    _canonical_portfolio_facts(observation)
     return observation
+
+
+_PORTFOLIO_FACTS = (
+    "portfolio_snapshot_digest",
+    "position_quantity",
+    "position_mark_record_digest",
+    "position_mark_price",
+    "portfolio_nav",
+    "day_start_ns",
+    "day_start_nav",
+)
+
+
+def _canonical_portfolio_facts(observation: GovernedPaperEntrySafetyObservation) -> None:  # noqa: C901
+    """The portfolio facts are exact types and one consistent snapshot, and absent without a governed portfolio."""
+
+    if type(observation.portfolio_present) is not bool:
+        raise _fail("observation_malformed:portfolio_present")
+    if type(observation.order_in_flight) is not bool:
+        raise _fail("observation_malformed:order_in_flight")
+    reason = observation.day_start_reason
+    if type(reason) is not str or (reason != "" and reason not in _DAY_START_REASONS):
+        raise _fail("observation_malformed:day_start_reason")
+    nav_reason = observation.portfolio_nav_reason
+    if type(nav_reason) is not str or (nav_reason != "" and nav_reason not in _NAV_REASONS):
+        raise _fail("observation_malformed:portfolio_nav_reason")
+    snapshot = observation.portfolio_snapshot_digest
+    if not observation.portfolio_present or snapshot is None:
+        if any(getattr(observation, name) is not None for name in _PORTFOLIO_FACTS) or observation.order_in_flight:
+            raise _fail("observation_malformed:portfolio_facts_without_a_snapshot")
+        if reason or nav_reason:
+            raise _fail("observation_malformed:portfolio_facts_without_a_snapshot")
+        if observation.portfolio_present and not observation.protection_present:
+            raise _fail("observation_malformed:portfolio_without_a_protective_context")
+        return
+    if not observation.protection_present:
+        raise _fail("observation_malformed:portfolio_without_a_protective_context")
+    if not edge_is_hex64(snapshot):
+        raise _fail("observation_malformed:portfolio_snapshot_digest")
+    for name in ("position_quantity", "position_mark_price", "portfolio_nav", "day_start_nav"):
+        value = getattr(observation, name)
+        if value is not None and not historical_execution_decimal_is_canonical(value):
+            raise _fail(f"observation_malformed:{name}")
+    if observation.position_quantity is None:
+        raise _fail("observation_malformed:position_quantity")
+    mark_digest, mark_price = observation.position_mark_record_digest, observation.position_mark_price
+    if (mark_digest is None) is not (mark_price is None) or (
+        mark_digest is not None and not edge_is_hex64(mark_digest)
+    ):
+        raise _fail("observation_malformed:position_mark")
+    if mark_price is not None and Fraction(mark_price) <= 0:
+        raise _fail("observation_malformed:position_mark_price")
+    if (observation.portfolio_nav is None) is not (nav_reason != ""):
+        raise _fail("observation_malformed:portfolio_nav_reason")
+    stale = nav_reason == "no_fresh_visible_mark"
+    if Fraction(observation.position_quantity) == 0:  # a flat portfolio is valued without a mark
+        if mark_price is not None or stale:
+            raise _fail("observation_malformed:flat_portfolio_inconsistent")
+    elif (mark_price is None) is not stale:  # an open position is valued exactly when its mark is fresh
+        raise _fail("observation_malformed:open_position_nav_inconsistent")
+    day = observation.day_start_ns
+    if (
+        not historical_execution_wire_int_is_valid(day, minimum=0)
+        or day % _UTC_DAY_NS != 0  # type: ignore[operator]
+        or not day <= observation.decision_time_ns < day + _UTC_DAY_NS  # type: ignore[operator]
+    ):
+        raise _fail("observation_malformed:day_start_ns")
+    if (observation.day_start_nav is None) is not (reason != ""):
+        raise _fail("observation_malformed:day_start_reason")
 
 
 def _canonical_protection_facts(observation: GovernedPaperEntrySafetyObservation) -> None:
@@ -904,6 +1165,93 @@ def _protection_facts(
     }
 
 
+def governed_paper_entry_safety_portfolio_facts(
+    snapshot: HistoricalExecutionDecisionPortfolioSnapshot | None,
+) -> dict[str, object]:
+    """The rule set v3 observation facts of one decision: its governed decision snapshot, or none when not computed."""
+
+    if snapshot is None:
+        return {"portfolio_present": True}
+    if type(snapshot) is not HistoricalExecutionDecisionPortfolioSnapshot:
+        raise _fail("portfolio_snapshot_malformed")
+    return {
+        "portfolio_present": True,
+        "portfolio_snapshot_digest": snapshot.snapshot_digest,
+        "position_quantity": snapshot.position_quantity,
+        "order_in_flight": snapshot.order_in_flight,
+        "position_mark_record_digest": snapshot.mark_record_digest,
+        "position_mark_price": snapshot.mark_price,
+        "portfolio_nav": snapshot.nav,
+        "portfolio_nav_reason": snapshot.nav_reason,
+        "day_start_ns": snapshot.day_start_ns,
+        "day_start_nav": snapshot.day_start_nav,
+        "day_start_reason": snapshot.day_start_reason,
+    }
+
+
+def _portfolio_snapshots(
+    portfolio: object,
+    *,
+    run: HistoricalDecisionRun,
+    economics_policy_digest: str,
+    protection: GovernedPaperEntrySafetyProtection | None,
+) -> dict[int, HistoricalExecutionDecisionPortfolioSnapshot] | None:
+    """The decision snapshots the one engine derives for this evaluation (rule set v3), keyed by decision sequence."""
+
+    if portfolio is None:
+        return None
+    if type(portfolio) is not GovernedPaperEntrySafetyPortfolio:
+        raise _fail("portfolio_malformed")
+    if protection is None:
+        raise _fail("portfolio_without_a_protective_context")
+    economics = portfolio.economics
+    if type(economics) is not HistoricalExecutionEconomicsResult:
+        raise _fail("portfolio_economics_malformed")
+    if (
+        economics.run_digest != run.run_digest
+        or economics.economics_policy_digest != economics_policy_digest
+        or economics.position_management_policy_digest != protection.position_management_policy.policy_digest
+        or economics.ohlc_archive_digest != protection.ohlc_archive.archive_digest
+    ):
+        raise _fail("portfolio_economics_not_of_this_evaluation")
+    try:  # derived, never accepted: the engine re-proves the economics and re-runs it under the schedule
+        derived = simulate_historical_execution_governed_paper_decision_portfolio(
+            economics, expected_result_digest=economics.result_digest, schedule=portfolio.schedule
+        )
+    except HistoricalExecutionEconomicsError as exc:
+        raise _fail("portfolio_not_derivable") from exc
+    return {item.decision_sequence: item for item in derived.snapshots}
+
+
+def governed_paper_entry_safety_entry_sequences(run: HistoricalDecisionRun) -> tuple[int, ...]:
+    """The decisions this gate evaluates, in time order: every one whose resulting direction is LONG or SHORT."""
+
+    if type(run) is not HistoricalDecisionRun:
+        raise _fail("decision_run_or_archive_malformed")
+    return tuple(item.decision_sequence for item in run.decisions if item.resulting_direction in _ENTRY_DIRECTIONS)
+
+
+def governed_paper_entry_safety_sequential_refusals(
+    entries: tuple[int, ...], refusals_under: Callable[[tuple[int, ...]], tuple[int, ...]]
+) -> tuple[int, ...]:
+    """The refusals of rule set v3's sequential admission: the unique schedule that refuses exactly its own refusals.
+
+    ``entries`` are the entry decisions in time order; ``refusals_under(refused)`` evaluates every entry on the decision
+    portfolio of the schedule refusing ``refused``. Starting from every entry refused, each round replaces the refusals
+    by the evaluation under them. A decision's portfolio depends only on the admissions before it, so round k is exact
+    for the first k entries and the rounds settle on the fixed point within ``len(entries) + 1`` evaluations. A
+    non-converging evaluation (impossible for a causal one) raises ``GovernedPaperEntrySafetyError``.
+    """
+
+    refused = entries
+    for _ in range(len(entries) + 1):
+        following = refusals_under(refused)
+        if following == refused:
+            return refused
+        refused = following
+    raise _fail("sequential_admission_not_converged")
+
+
 def build_governed_paper_entry_safety_evidence(
     *,
     authority: GovernedPaperGenesisAuthority,
@@ -911,13 +1259,16 @@ def build_governed_paper_entry_safety_evidence(
     dataset: HistoricalPitDataset,
     invalidated_from_ns: int | None,
     protection: GovernedPaperEntrySafetyProtection | None = None,
+    portfolio: GovernedPaperEntrySafetyPortfolio | None = None,
 ) -> GovernedPaperEntrySafetyEvidence:
     """Evaluate every entry decision of ``run`` over the archive ``dataset`` it was built from (see the module docstring).
 
     The run must be the genesis's own READY + PASS run over this archive and the archive the genesis's; the visible
     observations re-verify the archive and the economics policy. ``protection`` (rule set v2) is the verified protective
-    context the day seal derives; without it the evaluation is rule set v1, unchanged. A malformed or foreign input
-    raises ``GovernedPaperEntrySafetyError``. Pure.
+    context the day seal derives; without it the evaluation is rule set v1, unchanged. ``portfolio`` (rule set v3, only
+    with ``protection``) is the replayed protective economics of this run and the schedule under evaluation, from which
+    the one engine derives the decision portfolio. A malformed or foreign input raises ``GovernedPaperEntrySafetyError``.
+    Pure.
     """
 
     if type(authority) is not GovernedPaperGenesisAuthority:
@@ -940,6 +1291,9 @@ def build_governed_paper_entry_safety_evidence(
     ):
         raise _fail("decision_run_or_archive_not_of_the_genesis")
     policy = authority.economics_policy
+    snapshots = _portfolio_snapshots(
+        portfolio, run=run, economics_policy_digest=genesis.economics_policy_digest, protection=protection
+    )
     observations = historical_execution_visible_observations(dataset, policy=policy, instrument=genesis.instrument)
     registered = get_strategy_executable_profile(PASSIVE_FUNDING_CARRY_V1)
     family_b = (
@@ -975,15 +1329,22 @@ def build_governed_paper_entry_safety_evidence(
             **_protection_facts(  # type: ignore[arg-type]
                 protection, instant=instant, max_execution_delay_ns=policy.max_execution_delay_ns
             ),
+            **(  # type: ignore[arg-type]
+                {}
+                if snapshots is None
+                else governed_paper_entry_safety_portfolio_facts(snapshots.get(decision.decision_sequence))
+            ),
         )
         decisions.append(evaluate_governed_paper_entry_safety(observation))
-    protective = protection is not None
+    protective, measured = protection is not None, snapshots is not None
     seed = GovernedPaperEntrySafetyEvidence(
         schema_version=_SCHEMA_VERSION,
-        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_ID
+        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET_ID
+        if measured
+        else GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_ID
         if protective
         else GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID,
-        rule_set_digest=governed_paper_entry_safety_rule_set_digest(protective=protective),
+        rule_set_digest=governed_paper_entry_safety_rule_set_digest(protective=protective, portfolio=measured),
         genesis_id=genesis.genesis_id,
         genesis_digest=genesis.genesis_digest,
         run_digest=run.run_digest,

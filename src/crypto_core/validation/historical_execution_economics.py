@@ -177,6 +177,28 @@ nanosecond, as in v1. In a governed re-run, schedule v3 adds the neutral protect
 attempt and its fill need a protective window, never a cycle window, a direction ceiling, the reservation price, the
 entry refusals or the absence of an invalidation; outcome v3 carries the protective ledgers and the pending attempt.
 The synthetic stress method does not support position-managed results and refuses them.
+
+Governed decision portfolio (``S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1``).
+``simulate_historical_execution_governed_paper_decision_portfolio`` is the same governed re-run, which also records, at
+every decision of the frozen trace, the portfolio as known at that instant BEFORE the decision is admitted (after the
+funding settlements and protective rules of the same nanosecond, before its fills). Its outcome is byte-identical to
+``simulate_historical_execution_governed_paper`` under the same schedule, and the recording changes no ledger. One
+snapshot holds:
+
+* the exact position, and whether an order (a decision intent or a protective attempt) is still in flight;
+* the NAV as known then: initial equity + realized gross − fees + funding + unrealized at the latest fresh visible mark
+  (none needed while flat). A settlement whose final rate is not yet visible at the decision instant is excluded
+  (``unpublished_funding``), so ex-post settlement accounting never reaches back into an earlier instant. The NAV is
+  unavailable, with its ``nav_reason``, for an open position without a fresh mark and for an exact NAV outside the
+  numeric policy's representation domain;
+* the NAV at the start of the decision's UTC day, as known at the decision instant: the engine's own valuation at that
+  UTC midnight (the initial valuation when the run starts exactly then, a day-boundary valuation otherwise), with the
+  same unpublished settlements excluded. It is unavailable, never substituted, on a partial first day (the run started
+  after that midnight), for a decision exactly at the boundary (the boundary valuation follows the decision) and when
+  it lies outside the representation domain.
+
+Only admitted economic transitions earlier in the event order reach a snapshot: a rejected or unfilled intent leaves no
+state, and no later mark, fill, rate or admission is read. Each amount is rendered once from exact state.
 """
 
 from __future__ import annotations
@@ -1414,6 +1436,11 @@ class _Simulation:
         self.next_mark_check: tuple[int, int] | None = None
         self.protective_fills: dict[int, tuple[_Attempt, _Book]] = {}
         self.fill_index = len(run.decisions)  # protective fill events follow the decision indexes
+        # The governed decision portfolio (S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1): recorded only when a governed
+        # re-run asks for it, and never part of any ledger.
+        self.decision_snapshots: list[HistoricalExecutionDecisionPortfolioSnapshot] | None = None
+        self.day_start: tuple[int, Fraction] | None = None  # (instant, exact equity) of the latest day-start valuation
+        self.settlements: list[tuple[int, int, Fraction]] = []  # (liability, rate visibility, exact cashflow)
 
     def _transformed_marks(self, marks: _MarkCursor) -> _MarkCursor:
         """Construction hook: the mark observations as the simulation reads them (identity; a stress run overrides)."""
@@ -1441,6 +1468,7 @@ class _Simulation:
     def _valuation(self, kind: HistoricalExecutionValuationKind, time_ns: int, trigger: str | None) -> None:
         mark = self.marks.at(time_ns, kind.value.lower()) if self.position.quantity != 0 else None
         unrealized = self.position.unrealized(None if mark is None else mark.price)
+        equity = self._equity(unrealized)
         record = HistoricalExecutionValuation(
             valuation_sequence=len(self.ledgers.valuations),
             valuation_kind=kind,
@@ -1454,10 +1482,12 @@ class _Simulation:
             cumulative_realized_gross_pnl=_amount(self.realized, "cumulative_realized_gross_pnl"),
             cumulative_fees=_amount(self.fees, "cumulative_fees"),
             cumulative_funding=_amount(self.funding_total, "cumulative_funding"),
-            equity=_amount(self._equity(unrealized), "equity"),
+            equity=_amount(equity, "equity"),
             valuation_digest="",
         )
         self.ledgers.valuations.append(_sealed(record, "valuation_digest"))  # type: ignore[arg-type]
+        if kind in (HistoricalExecutionValuationKind.INITIAL, HistoricalExecutionValuationKind.UTC_DAY_BOUNDARY):
+            self.day_start = (time_ns, equity)
 
     def _settle(self, record: HistoricalPitRecord, liability_ns: int) -> None:
         key = (record.series_id, record.instrument, record.sequence_id)
@@ -1490,6 +1520,8 @@ class _Simulation:
         sealed: HistoricalExecutionFundingCashflow = _sealed(cashflow, "cashflow_digest")  # type: ignore[assignment]
         self.ledgers.funding.append(sealed)
         self.funding_total += amount
+        if self.decision_snapshots is not None:  # booked at the liability; its rate is known only from its visibility
+            self.settlements.append((liability_ns, _visibility(record), amount))  # type: ignore[arg-type]
         _amount(self.funding_total, "cumulative_funding")
         if self.trade is not None:
             self.trade.funding.append(sealed.cashflow_digest)
@@ -1632,6 +1664,55 @@ class _Simulation:
         """Admission hook at the fill instant: a refusal reason, or None (the historical model admits every fill)."""
 
         return None
+
+    def _decision_snapshot(self, decision: HistoricalDecisionRecord, time_ns: int) -> None:
+        """Record the portfolio as known at this decision instant, before its admission (only when asked to)."""
+
+        if self.decision_snapshots is None:
+            return
+        # Every settlement so far is liable at or before this instant; one whose final rate is not visible yet is unknown.
+        unpublished = [(liability, amount) for liability, visible, amount in self.settlements if visible > time_ns]
+        quantity = self.position.quantity
+        mark = None if quantity == 0 else self._fresh_mark(time_ns)
+        nav: str | None = None
+        nav_reason = "no_fresh_visible_mark"
+        if quantity == 0 or mark is not None:
+            unrealized = self.position.unrealized(None if mark is None else mark.price)
+            nav = historical_execution_render_amount(
+                self._equity(unrealized) - sum((amount for _, amount in unpublished), Fraction(0))
+            )
+            nav_reason = "" if nav is not None else "nav_unrepresentable"
+        day = time_ns // _UTC_DAY_NS * _UTC_DAY_NS
+        day_nav: str | None = None
+        if self.day_start is None or self.day_start[0] > day:
+            reason = "partial_first_utc_day"
+        elif self.day_start[0] < day:
+            reason = "day_start_valued_after_the_decision"
+        else:
+            day_nav = historical_execution_render_amount(
+                self.day_start[1] - sum((amount for liability, amount in unpublished if liability <= day), Fraction(0))
+            )
+            reason = "" if day_nav is not None else "day_start_nav_unrepresentable"
+        record = HistoricalExecutionDecisionPortfolioSnapshot(
+            decision_sequence=decision.decision_sequence,
+            decision_time_ns=time_ns,
+            decision_digest=decision.decision_digest,
+            position_quantity=_amount(quantity, "position_quantity"),
+            order_in_flight=self.decision_in_flight or self.attempt_in_flight,
+            mark_record_digest=None if mark is None else mark.record.record_digest,
+            mark_price=None if mark is None else historical_execution_render_amount(mark.price),
+            nav=nav,
+            nav_reason=nav_reason,
+            day_start_ns=day,
+            day_start_nav=day_nav,
+            day_start_reason=reason,
+            unpublished_funding=historical_execution_render_amount(
+                sum((amount for _, amount in unpublished), Fraction(0))
+            ),
+            unpublished_settlement_count=len(unpublished),
+            snapshot_digest="",
+        )
+        self.decision_snapshots.append(_sealed(record, "snapshot_digest"))  # type: ignore[arg-type]
 
     # -- position management (PROTECTIVE_POSITION_LIFECYCLE_V1); every method below is inert without a policy --
 
@@ -2309,6 +2390,7 @@ class _Simulation:
             elif priority == _PRIORITY_PROTECTIVE:
                 self._protective_event(time_ns, index)
             elif priority == _PRIORITY_DECISION:
+                self._decision_snapshot(decisions[index], time_ns)
                 intent = self._intent(decisions[index])
                 if intent is None:
                     continue
@@ -2792,6 +2874,7 @@ _GOVERNED_SCHEMA_VERSION = HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VE
 HISTORICAL_EXECUTION_PROTECTIVE_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION = "historical-execution-governed-paper-outcome.v3"
 _PROTECTIVE_GOVERNED_SCHEMA_VERSION = HISTORICAL_EXECUTION_PROTECTIVE_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION
 _GOVERNED_DIGEST_FIELD = "outcome_digest"
+_PORTFOLIO_DIGEST_FIELD = "portfolio_digest"
 _GOVERNED_REASON_PREFIX = "governed_paper_"
 # The intent of the last decision is PENDING only when the evaluation end, not the market, left it unfilled.
 _PENDING_REASONS = frozenset({"execution_window_closed", "no_eligible_book_observation"})
@@ -2923,6 +3006,77 @@ class HistoricalExecutionGovernedPaperOutcome:
     pending_protective_attempt_digest: str | None = None
 
 
+HISTORICAL_EXECUTION_GOVERNED_PAPER_DECISION_PORTFOLIO_SCHEMA_VERSION = (
+    "historical-execution-governed-paper-decision-portfolio.v1"
+)
+
+
+@dataclass(frozen=True)
+class HistoricalExecutionDecisionPortfolioSnapshot:
+    """The governed portfolio as known at one decision instant, before that decision is admitted.
+
+    Every amount is rendered once from exact engine state. ``nav`` and ``day_start_nav`` exclude the settlements whose
+    final rate is not yet visible at the decision instant (``unpublished_funding``, ``unpublished_settlement_count``).
+    ``nav`` is None with its ``nav_reason`` when an open position has no fresh visible mark or the exact NAV is outside
+    the representation domain. ``day_start_nav`` is the NAV at ``day_start_ns``, the UTC midnight that starts the
+    decision's day, and is None with its ``day_start_reason`` when the engine has not valued that instant before the
+    decision or the amount is outside the representation domain.
+    """
+
+    decision_sequence: int
+    decision_time_ns: int
+    decision_digest: str
+    position_quantity: str
+    order_in_flight: bool
+    mark_record_digest: str | None
+    mark_price: str | None
+    nav: str | None
+    nav_reason: str
+    day_start_ns: int
+    day_start_nav: str | None
+    day_start_reason: str
+    unpublished_funding: str | None
+    unpublished_settlement_count: int
+    snapshot_digest: str
+
+
+@dataclass(frozen=True)
+class HistoricalExecutionGovernedPaperDecisionPortfolio:
+    """One snapshot per decision of the frozen trace, in order, from ONE governed re-run under one schedule.
+
+    ``outcome_digest`` is that re-run's governed outcome, byte-identical to ``simulate_historical_execution_governed_paper``
+    under the same schedule. ``simulated`` is False exactly when that re-run could not be computed, and then there is no
+    snapshot. A deterministic paper record, never an account balance, a venue fact or an approved risk value.
+    """
+
+    schema_version: str
+    schedule: HistoricalExecutionAdmissionSchedule
+    schedule_digest: str
+    baseline_result_id: str
+    baseline_result_digest: str
+    run_digest: str
+    instrument: str
+    evaluation_start_ns: int
+    evaluation_end_ns: int
+    outcome_digest: str
+    simulated: bool
+    snapshots: tuple[HistoricalExecutionDecisionPortfolioSnapshot, ...]
+    snapshot_ledger_digest: str
+    reason_codes: tuple[str, ...]
+    portfolio_digest: str
+    paper_only: bool = True
+    execution_authorized: bool = False
+    venue_fill_truth_proven: bool = False
+    venue_orders_created: bool = False
+    real_orders_enabled: bool = False
+    real_money_enabled: bool = False
+    live_ready: bool = False
+    shadow_ready: bool = False
+    operational_readiness: bool = False
+    edge_proven: bool = False
+    profitability_proven: bool = False
+
+
 _GOVERNED_V3_FIELDS = (
     "excursion_protections",
     "protective_obligations",
@@ -2953,7 +3107,13 @@ class _Window:
 class _GovernedPaperSimulation(_Simulation):
     """The historical simulation with one declared admission schedule applied at its two admission hooks."""
 
-    def __init__(self, *, schedule: HistoricalExecutionAdmissionSchedule, **arguments: object) -> None:
+    def __init__(
+        self,
+        *,
+        schedule: HistoricalExecutionAdmissionSchedule,
+        record_decision_portfolio: bool = False,
+        **arguments: object,
+    ) -> None:
         self.windows = tuple(
             _Window(
                 item.window_start_ns,
@@ -2972,6 +3132,8 @@ class _GovernedPaperSimulation(_Simulation):
         )
         self.protective_starts = [start for start, _ in self.protective_windows]
         super().__init__(**arguments)  # type: ignore[arg-type]
+        if record_decision_portfolio:
+            self.decision_snapshots = []
 
     def _in_protective_window(self, time_ns: int) -> bool:
         index = bisect.bisect_right(self.protective_starts, time_ns) - 1
@@ -3272,6 +3434,18 @@ def simulate_historical_execution_governed_paper(
     computed (an unrepresentable or stale value on its own path) is ``simulated=False`` with its reason. Pure.
     """
 
+    return _governed_run(result, expected_result_digest, schedule, record_decision_portfolio=False)[0]
+
+
+def _governed_run(
+    result: HistoricalExecutionEconomicsResult,
+    expected_result_digest: str,
+    schedule: HistoricalExecutionAdmissionSchedule,
+    *,
+    record_decision_portfolio: bool,
+) -> tuple[HistoricalExecutionGovernedPaperOutcome, tuple[HistoricalExecutionDecisionPortfolioSnapshot, ...]]:
+    """The one governed re-run: its outcome, and its decision snapshots when asked to record them."""
+
     schedule = canonical_historical_execution_admission_schedule(schedule)
     baseline = _governed_baseline(result, expected_result_digest)
     protective = baseline.position_management is not None
@@ -3284,8 +3458,9 @@ def simulate_historical_execution_governed_paper(
     ):
         raise _fail("admission_schedule_outside_evaluation_window")
     try:
-        ledgers = _GovernedPaperSimulation(
+        simulation = _GovernedPaperSimulation(
             schedule=schedule,
+            record_decision_portfolio=record_decision_portfolio,
             run=baseline.run,
             run_digest=result.run_digest,
             dataset=baseline.dataset,
@@ -3295,9 +3470,10 @@ def simulate_historical_execution_governed_paper(
             mark_series=result.mark_series_id,
             book_series=result.order_book_series_id,
             position_management=baseline.position_management,
-        ).run_all()
+        )
+        ledgers = simulation.run_all()
     except _EconomicFailure as failure:
-        return _governed_outcome(
+        failed = _governed_outcome(
             result,
             schedule,
             simulated=False,
@@ -3306,7 +3482,8 @@ def simulate_historical_execution_governed_paper(
             reasons=(_reason(failure.code),),
             protective=protective,
         )
-    return _governed_outcome(
+        return failed, ()
+    outcome = _governed_outcome(
         result,
         schedule,
         simulated=True,
@@ -3315,6 +3492,60 @@ def simulate_historical_execution_governed_paper(
         reasons=(),
         protective=protective,
     )
+    return outcome, tuple(simulation.decision_snapshots or ())
+
+
+def simulate_historical_execution_governed_paper_decision_portfolio(
+    result: HistoricalExecutionEconomicsResult,
+    *,
+    expected_result_digest: str,
+    schedule: HistoricalExecutionAdmissionSchedule,
+) -> HistoricalExecutionGovernedPaperDecisionPortfolio:
+    """The governed re-run under ``schedule`` with its decision portfolio (see the module docstring).
+
+    The authorities, refusals and failure modes are exactly those of ``simulate_historical_execution_governed_paper``,
+    whose outcome under the same inputs is the one ``outcome_digest`` binds. Pure.
+    """
+
+    outcome, snapshots = _governed_run(result, expected_result_digest, schedule, record_decision_portfolio=True)
+    seed = HistoricalExecutionGovernedPaperDecisionPortfolio(
+        schema_version=HISTORICAL_EXECUTION_GOVERNED_PAPER_DECISION_PORTFOLIO_SCHEMA_VERSION,
+        schedule=outcome.schedule,
+        schedule_digest=outcome.schedule_digest,
+        baseline_result_id=outcome.baseline_result_id,
+        baseline_result_digest=outcome.baseline_result_digest,
+        run_digest=outcome.run_digest,
+        instrument=outcome.instrument,
+        evaluation_start_ns=outcome.evaluation_start_ns,
+        evaluation_end_ns=outcome.evaluation_end_ns,
+        outcome_digest=outcome.outcome_digest,
+        simulated=outcome.simulated,
+        snapshots=snapshots,
+        snapshot_ledger_digest=_ledger_digest(snapshots),
+        reason_codes=outcome.reason_codes,
+        portfolio_digest="",
+    )
+    return replace(seed, portfolio_digest=edge_payload_digest(_to_payload(seed), _PORTFOLIO_DIGEST_FIELD))
+
+
+def historical_execution_governed_paper_decision_portfolio_to_dict(
+    portfolio: HistoricalExecutionGovernedPaperDecisionPortfolio,
+) -> dict[str, object]:
+    """Canonical JSON-ready mapping of a decision portfolio, including its self-digest."""
+
+    return _to_payload(portfolio)
+
+
+def historical_execution_governed_paper_decision_portfolio_digest(
+    portfolio: HistoricalExecutionGovernedPaperDecisionPortfolio,
+) -> str:
+    """Recompute the canonical decision-portfolio digest, excluding only ``portfolio_digest``.
+
+    A consumer re-proves a supplied portfolio by recomputing this digest and re-running
+    ``simulate_historical_execution_governed_paper_decision_portfolio`` over the same result and ``schedule``.
+    """
+
+    return edge_payload_digest(_to_payload(portfolio), _PORTFOLIO_DIGEST_FIELD)
 
 
 def historical_execution_governed_paper_outcome_to_dict(
@@ -4376,6 +4607,7 @@ def verify_historical_execution_economics(result: object) -> EdgeEvidenceVerific
 
 __all__ = [
     "HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION",
+    "HISTORICAL_EXECUTION_GOVERNED_PAPER_DECISION_PORTFOLIO_SCHEMA_VERSION",
     "HISTORICAL_EXECUTION_GOVERNED_PAPER_NON_CLAIM_FLAGS",
     "HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION",
     "HISTORICAL_EXECUTION_NON_CLAIM_FLAGS",
@@ -4393,12 +4625,14 @@ __all__ = [
     "historical_execution_admission_schedule_to_dict",
     "HistoricalExecutionAdmissionSchedule",
     "HistoricalExecutionAdmissionWindow",
+    "HistoricalExecutionDecisionPortfolioSnapshot",
     "HistoricalExecutionEconomicsError",
     "HistoricalExecutionEconomicsResult",
     "HistoricalExecutionFeeCashflow",
     "HistoricalExecutionFill",
     "HistoricalExecutionFillOutcome",
     "HistoricalExecutionFundingCashflow",
+    "HistoricalExecutionGovernedPaperDecisionPortfolio",
     "HistoricalExecutionGovernedPaperOutcome",
     "HistoricalExecutionIntent",
     "HistoricalExecutionIntentAction",
@@ -4421,6 +4655,8 @@ __all__ = [
     "historical_execution_economics_from_payload",
     "historical_execution_economics_payload_is_well_formed",
     "historical_execution_economics_to_dict",
+    "historical_execution_governed_paper_decision_portfolio_digest",
+    "historical_execution_governed_paper_decision_portfolio_to_dict",
     "historical_execution_governed_paper_outcome_digest",
     "historical_execution_governed_paper_outcome_to_dict",
     "historical_execution_governed_paper_prefix_digest",
@@ -4429,6 +4665,7 @@ __all__ = [
     "historical_execution_stress_outcome_to_dict",
     "historical_execution_stress_scenario_digest",
     "simulate_historical_execution_governed_paper",
+    "simulate_historical_execution_governed_paper_decision_portfolio",
     "simulate_historical_execution_stress",
     "verify_historical_execution_economics",
 ]

@@ -10,7 +10,10 @@ instant); a mark every 15 min (visible 1 s after its event); a 10 bps book of de
 the declared bar range (2) and the stop distance is 3. The carry profile (lookback 1) enters SHORT on a final rate above
 the entry threshold, LONG below its negative, and holds while the rate stays beyond the exit threshold. Section B2 swaps
 in long SYNTHETIC histories whose exact full-run ATR is not 2, checked against the independent literal-recurrence oracle
-of ``test_historical_ohlc_bar_archive.py`` rather than against the engine itself.
+of ``test_historical_ohlc_bar_archive.py`` rather than against the engine itself. Section G checks the governed decision
+portfolio (S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1) against an independent oracle built from the outcome's public
+ledgers, the archive's publication instants and the public visible-mark rule; every amount of these worlds is exactly
+representable at scale 18, so the oracle is exact.
 """
 
 from __future__ import annotations
@@ -29,9 +32,11 @@ from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_PROTECTIVE_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HistoricalExecutionAdmissionSchedule,
     HistoricalExecutionAdmissionWindow,
+    HistoricalExecutionDecisionPortfolioSnapshot,
     HistoricalExecutionEconomicsError,
     HistoricalExecutionEconomicsResult,
     HistoricalExecutionFillOutcome,
+    HistoricalExecutionGovernedPaperDecisionPortfolio,
     HistoricalExecutionGovernedPaperOutcome,
     HistoricalExecutionPositionManagementInputs,
     HistoricalExecutionProtectiveObligationStatus,
@@ -47,9 +52,13 @@ from crypto_core.validation.historical_execution_economics import (
     historical_execution_economics_digest,
     historical_execution_economics_from_payload,
     historical_execution_economics_to_dict,
+    historical_execution_governed_paper_decision_portfolio_digest,
+    historical_execution_governed_paper_decision_portfolio_to_dict,
     historical_execution_governed_paper_outcome_digest,
     historical_execution_governed_paper_prefix_digest,
+    historical_execution_latest_visible_mark,
     simulate_historical_execution_governed_paper,
+    simulate_historical_execution_governed_paper_decision_portfolio,
     simulate_historical_execution_stress,
     verify_historical_execution_economics,
 )
@@ -1208,3 +1217,364 @@ def test_stress_refuses_a_position_managed_baseline() -> None:
     )
     with pytest.raises(HistoricalExecutionEconomicsError, match=code("stress_position_management_unsupported")):
         simulate_historical_execution_stress(result, expected_result_digest=result.result_digest, scenario=scenario)
+
+
+# --- G. the governed decision portfolio (S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1) -----------------------------------------
+
+# The accepted-main identities (main 99518b37) of the world this section reuses: recording a decision portfolio
+# changes neither the economics nor the governed outcome.
+ACCEPTED_MAIN_HOLD_RESULT = "d106c6899663fc63d31158cedd65b9387b64c8c5189d5ae91025f0df159e47dc"
+ACCEPTED_MAIN_HOLD_GOVERNED = "4e77e8e5f74edcb0532936a8aec8b54f9bdb979f9c6d5f45f8ed7371e6b37f72"
+FLAT_PATH = Path(rates=(POSITIVE,) * 6)
+STOPPED_OUT = Path(rates=(POSITIVE,) * 6, mark=jump(48, 310))  # SYNTHETIC: the D_0 SHORT stops out ~2.1% of NAV down
+# SYNTHETIC: a 60-character mark visible at 16 h 6 s, before D_1 at 16 h 10 s, values the open SHORT outside the domain
+NAV_SPIKE = Path(rates=(POSITIVE,) * 6, extra_marks=((ANCHOR + 2 * FUNDING + 5 * SECOND, Fraction(9 * 10**40)),))
+STALE_D1 = ((1, 2 * HOUR),)  # SYNTHETIC: record 1 published 2 h after its 16 h settlement: D_1 decides at 18 h
+
+
+def mark_gap(j: int) -> Fraction | None:
+    return None if 63 <= j < 73 else Fraction(100)  # SYNTHETIC: no mark from 15 h 45 min to 18 h
+
+
+MARK_GAP = Path(rates=(POSITIVE,) * 6, mark=mark_gap)
+
+
+def published_records(path: Path, published: tuple[tuple[int, int], ...]) -> tuple:
+    """``records_of(path)`` with final funding record ``k`` visible ``delay`` after its liability, per ``(k, delay)``."""
+
+    delays = dict(published)
+    rows = []
+    for record in records_of(path):
+        if record.series_id != "funding-final" or record.sequence_id not in delays:
+            rows.append(record)
+            continue
+        visible = ANCHOR + (record.sequence_id + 1) * FUNDING + delays[record.sequence_id]
+        rows.append(
+            build_historical_pit_record(
+                series_id=record.series_id,
+                data_requirement_key="funding_rate",
+                instrument=INS,
+                sequence_id=record.sequence_id,
+                event_time_ns=record.event_time_ns,
+                available_at_ns=visible,
+                finalized_at_ns=visible,
+                revision_vintage_id=None,
+                values=record.values,
+            )
+        )
+    return tuple(rows)
+
+
+@functools.cache
+def variant_world(
+    path: Path, *, end: int, published: tuple[tuple[int, int], ...] = (), start: int = ANCHOR
+) -> econ.World:
+    """A SYNTHETIC world of ``path`` with the given final-rate publication instants and evaluation start."""
+
+    manifest, admission, registry = _chain()
+    dataset = build_historical_pit_dataset(
+        manifest,
+        expected_source_manifest_digest=manifest.source_packet_evidence_digest,
+        expected_data_requirement_registry_digest=data_requirement_registry_digest(registry),
+        dataset_id="dataset-protective-variant",
+        correlation_id="corr-1",
+        source_reference="archive:history",
+        rights_status="own_research",
+        rights_reference="license-1",
+        records=published_records(path, published),
+    )
+    binding = bind.executable_binding(admission, binding_id="binding-1")
+    run = runt.decision_run(
+        dataset,
+        binding,
+        instrument=INS,
+        evaluation_start_ns=start,
+        evaluation_end_ns=end,
+        parameter_assignment=prof.params(n="1"),
+    )
+    return econ.World(run, dataset, registry)
+
+
+def both_sides(
+    start: int = ANCHOR, end: int = END_2D, refused: tuple[int, ...] = ()
+) -> HistoricalExecutionAdmissionSchedule:
+    """SYNTHETIC v3 schedule: one LONG and SHORT cycle window over ``[start, end)``, protected a day past it."""
+
+    return replace(
+        schedule(windows=((start, end, 1, 1),), protective=((start, end + DAY),)),
+        entry_refused_decision_sequences=refused,
+    )
+
+
+def governed_under(
+    result: HistoricalExecutionEconomicsResult, admission: HistoricalExecutionAdmissionSchedule
+) -> HistoricalExecutionGovernedPaperOutcome:
+    outcome = simulate_historical_execution_governed_paper(
+        result, expected_result_digest=result.result_digest, schedule=admission
+    )
+    assert outcome.simulated is True, outcome.reason_codes
+    return outcome
+
+
+def portfolio_of(
+    result: HistoricalExecutionEconomicsResult, admission: HistoricalExecutionAdmissionSchedule
+) -> HistoricalExecutionGovernedPaperDecisionPortfolio:
+    portfolio = simulate_historical_execution_governed_paper_decision_portfolio(
+        result, expected_result_digest=result.result_digest, schedule=admission
+    )
+    assert portfolio.simulated is True, portfolio.reason_codes
+    return portfolio
+
+
+def snapshot_at(
+    portfolio: HistoricalExecutionGovernedPaperDecisionPortfolio, at_ns: int
+) -> HistoricalExecutionDecisionPortfolioSnapshot:
+    (found,) = [item for item in portfolio.snapshots if item.decision_time_ns == at_ns]
+    return found
+
+
+def midnight_equity(outcome: HistoricalExecutionGovernedPaperOutcome, day_ns: int) -> str:
+    (found,) = [
+        item.equity
+        for item in outcome.valuations
+        if item.time_ns == day_ns and item.valuation_kind is HistoricalExecutionValuationKind.UTC_DAY_BOUNDARY
+    ]
+    return found
+
+
+def nav_oracle(w: econ.World, outcome: HistoricalExecutionGovernedPaperOutcome, at_ns: int) -> tuple[str | None, int]:
+    """INDEPENDENT ORACLE: ``(NAV known at a decision instant, unpublished settlement count)`` from public facts only.
+
+    The state is the outcome's latest valuation before the decision in the engine's equal-instant order (the initial
+    and settlement valuations of that instant precede it; its fills and its day boundary follow it). A settlement whose
+    final record is not yet visible at the instant is removed, and an open position is valued at the public visible
+    mark of the instant (no NAV when there is none).
+    """
+
+    visible = {
+        item.record_digest: max(item.available_at_ns, item.finalized_at_ns)  # type: ignore[type-var]
+        for item in w.dataset.records
+        if item.series_id == "funding-final"
+    }
+    first = (HistoricalExecutionValuationKind.INITIAL, HistoricalExecutionValuationKind.FUNDING_SETTLEMENT)
+    state = [
+        item
+        for item in outcome.valuations
+        if item.time_ns < at_ns or (item.time_ns == at_ns and item.valuation_kind in first)
+    ][-1]
+    unpublished = [
+        Fraction(item.cashflow_amount)
+        for item in outcome.funding_cashflows
+        if item.liability_time_ns <= at_ns and visible[item.funding_record_digest] > at_ns
+    ]
+    cash = (
+        Fraction(economics_policy().initial_equity)
+        + Fraction(state.cumulative_realized_gross_pnl)
+        - Fraction(state.cumulative_fees)
+        + Fraction(state.cumulative_funding)
+        - sum(unpublished, Fraction(0))
+    )
+    quantity = Fraction(state.position_quantity)
+    if quantity == 0:
+        return d(cash), len(unpublished)
+    mark = historical_execution_latest_visible_mark(w.dataset, policy=economics_policy(), instrument=INS, at_ns=at_ns)
+    if mark is None:
+        return None, len(unpublished)
+    average = Fraction(state.average_entry_price)  # type: ignore[arg-type]
+    return d(cash + quantity * (Fraction(mark[1]) - average)), len(unpublished)
+
+
+def test_the_decision_portfolio_is_the_one_governed_run_and_changes_no_accepted_identity() -> None:
+    result = hold_result()
+    assert result.result_digest == ACCEPTED_MAIN_HOLD_RESULT
+    outcome = governed(result)
+    assert outcome.outcome_digest == ACCEPTED_MAIN_HOLD_GOVERNED
+    portfolio = portfolio_of(result, schedule())
+    assert (portfolio.outcome_digest, portfolio.schedule_digest, portfolio.reason_codes) == (
+        outcome.outcome_digest,
+        outcome.schedule_digest,
+        (),
+    )
+    decisions = world(HOLD, end=HOLD_END).run.decisions
+    assert [(item.decision_sequence, item.decision_time_ns, item.decision_digest) for item in portfolio.snapshots] == [
+        (item.decision_sequence, item.decision_time_ns, item.decision_digest) for item in decisions
+    ]
+    assert portfolio.portfolio_digest == historical_execution_governed_paper_decision_portfolio_digest(portfolio)
+    payload = historical_execution_governed_paper_decision_portfolio_to_dict(portfolio)
+    assert (payload["portfolio_digest"], len(payload["snapshots"])) == (portfolio.portfolio_digest, len(decisions))  # type: ignore[arg-type]
+    assert portfolio_of(result, schedule()) == portfolio  # deterministic
+    forged = replace(portfolio, snapshots=(replace(portfolio.snapshots[0], nav=d(1)), *portfolio.snapshots[1:]))
+    assert historical_execution_governed_paper_decision_portfolio_digest(forged) != portfolio.portfolio_digest
+    assert (portfolio.paper_only, portfolio.execution_authorized, portfolio.venue_fill_truth_proven) == (
+        True,
+        False,
+        False,
+    )
+
+
+@pytest.mark.parametrize("path", [HOLD, STOPPED_OUT], ids=["hold", "stopped_out"])
+def test_every_snapshot_is_the_exact_nav_known_before_its_decision(path: Path) -> None:
+    w = world(path, end=HOLD_END if path is HOLD else END_2D)
+    admission = schedule() if path is HOLD else both_sides()
+    result = computed(managed(w))
+    outcome = governed_under(result, admission)
+    portfolio = portfolio_of(result, admission)
+    assert portfolio.outcome_digest == outcome.outcome_digest
+    for item in portfolio.snapshots:
+        assert (item.nav, item.unpublished_settlement_count) == nav_oracle(w, outcome, item.decision_time_ns), item
+        assert (item.nav_reason, item.day_start_reason) == ("", ""), item  # every mark is fresh, every day valued
+        mark = historical_execution_latest_visible_mark(
+            w.dataset, policy=economics_policy(), instrument=INS, at_ns=item.decision_time_ns
+        )
+        held = item.position_quantity != d(0)
+        assert (item.mark_record_digest, item.mark_price) == (mark if held else (None, None)), item
+        assert item.order_in_flight is False
+
+
+def test_a_same_day_stop_out_loss_is_in_the_next_decisions_nav_and_its_day_start_is_the_midnight_valuation() -> None:
+    result = computed(managed(world(STOPPED_OUT, end=END_2D)))
+    outcome = governed_under(result, both_sides())
+    opened, after_stop, next_day = (
+        snapshot_at(portfolio_of(result, both_sides()), decision_instant(k)) for k in range(3)
+    )
+    # day 0 starts at the run's start, a UTC midnight: its initial valuation is the day-start NAV
+    assert (opened.position_quantity, opened.nav, opened.day_start_ns, opened.day_start_nav) == (
+        d(0),
+        d(10_000),
+        ANCHOR,
+        d(10_000),
+    )
+    close = protective_fills(outcome)[0]
+    assert close.execution_time_ns == book_visible(48) < decision_instant(1)  # the stop-out precedes D_1
+    assert (after_stop.position_quantity, after_stop.day_start_ns, after_stop.day_start_nav) == (
+        d(0),
+        ANCHOR,
+        d(10_000),
+    )
+    assert Fraction(after_stop.nav) - 10_000 < -200  # type: ignore[arg-type]  # the realized loss and both fees
+    assert (next_day.day_start_ns, next_day.day_start_nav, next_day.day_start_reason) == (
+        ANCHOR + DAY,
+        midnight_equity(outcome, ANCHOR + DAY),
+        "",
+    )
+
+
+def test_a_final_rate_published_after_the_decision_never_reaches_its_snapshot() -> None:
+    """Ex-post settlement accounting: record 1 settles at 16 h but is published only at 25 h, after the D_2 decision."""
+
+    w = variant_world(FLAT_PATH, end=END_2D, published=((1, 9 * HOUR),))
+    result = computed(managed(w))
+    outcome = governed_under(result, both_sides())
+    portfolio = portfolio_of(result, both_sides())
+    (late,) = [item for item in outcome.funding_cashflows if item.liability_time_ns == ANCHOR + 2 * FUNDING]
+    before, after = snapshot_at(portfolio, decision_instant(2)), snapshot_at(portfolio, ANCHOR + 25 * HOUR)
+    assert (before.unpublished_settlement_count, before.unpublished_funding) == (1, late.cashflow_amount)
+    assert (before.nav, 1) == nav_oracle(w, outcome, before.decision_time_ns)
+    midnight = midnight_equity(outcome, ANCHOR + DAY)  # the booked equity, which already holds that settlement
+    assert Fraction(before.day_start_nav) == Fraction(midnight) - Fraction(late.cashflow_amount)  # type: ignore[arg-type]
+    # once published, the same settlement is known: in the NAV and in the day-start NAV alike
+    assert (after.unpublished_settlement_count, after.unpublished_funding, after.day_start_nav) == (0, d(0), midnight)
+    assert (after.nav, 0) == nav_oracle(w, outcome, after.decision_time_ns)
+    assert Fraction(after.nav) - Fraction(before.nav) == Fraction(late.cashflow_amount)  # type: ignore[arg-type]
+
+
+def test_the_day_start_is_never_substituted_on_a_partial_first_day_or_at_the_boundary_itself() -> None:
+    start = ANCHOR + HOUR  # the run starts an hour after the first UTC midnight
+    partial = portfolio_of(computed(managed(variant_world(FLAT_PATH, end=END_2D, start=start))), both_sides(start))
+    first_day = [item for item in partial.snapshots if item.decision_time_ns < ANCHOR + DAY]
+    assert [(item.day_start_ns, item.day_start_nav, item.day_start_reason) for item in first_day] == [
+        (ANCHOR, None, "partial_first_utc_day")
+    ] * 2
+    later = [item for item in partial.snapshots if item.decision_time_ns >= ANCHOR + DAY]
+    assert later and all(item.day_start_nav is not None and item.day_start_reason == "" for item in later)
+    w = variant_world(FLAT_PATH, end=END_2D, published=((2, 0),))  # record 2 visible exactly at the second midnight
+    result = computed(managed(w))
+    outcome = governed_under(result, both_sides())
+    at_midnight = snapshot_at(portfolio_of(result, both_sides()), ANCHOR + DAY)
+    assert (at_midnight.day_start_ns, at_midnight.day_start_nav, at_midnight.day_start_reason) == (
+        ANCHOR + DAY,
+        None,
+        "day_start_valued_after_the_decision",
+    )
+    # the settlement liable at that nanosecond precedes the decision, and its final rate is visible at it
+    assert any(item.liability_time_ns == ANCHOR + DAY for item in outcome.funding_cashflows)
+    assert (at_midnight.nav, at_midnight.unpublished_settlement_count) == nav_oracle(w, outcome, ANCHOR + DAY)
+    assert at_midnight.unpublished_settlement_count == 0
+
+
+def test_a_fill_at_the_decision_nanosecond_follows_it_and_a_pending_protective_exit_is_in_flight() -> None:
+    def book(j: int, mid: Fraction) -> dict[str, str] | None:
+        return None if 60 <= j < 64 else book_at(mid)  # the stop's first eligible book is slot 64's (16 h 31 s)
+
+    path = Path(rates=(POSITIVE,) * 6, mark=jump(60, 104), book=book)
+    w = variant_world(path, end=END_2D, published=((1, 31 * SECOND),))  # D_1 decides at that book's instant
+    result = computed(managed(w))
+    outcome = governed_under(result, both_sides())
+    decided = ANCHOR + 2 * FUNDING + 31 * SECOND
+    attempt, close = outcome.protective_attempts[0], protective_fills(outcome)[0]
+    assert attempt.attempt_time_ns == slot(60) + VISIBLE < decided == close.execution_time_ns == book_visible(64)
+    portfolio = portfolio_of(result, both_sides())
+    snapshot = snapshot_at(portfolio, decided)
+    assert (snapshot.position_quantity, snapshot.order_in_flight, snapshot.mark_price) == (d(-1), True, d(104))
+    assert (snapshot.nav, snapshot.unpublished_settlement_count) == nav_oracle(w, outcome, decided)
+    following = snapshot_at(portfolio, decision_instant(2))  # the close filled after D_1: D_2 decides FLAT
+    assert (following.position_quantity, following.order_in_flight) == (d(0), False)
+
+
+def test_rejected_and_unfilled_intents_leave_no_portfolio_state() -> None:
+    def book(j: int, mid: Fraction) -> dict[str, str] | None:
+        return None if 32 <= j < 64 else book_at(mid)  # no book from 8 h to 16 h: D_0's entry expires unfilled
+
+    unfilled = computed(managed(world(Path(rates=(POSITIVE,) * 6, book=book), end=END_2D)))
+    assert [item.outcome for item in unfilled.fills[:1]] == [HistoricalExecutionFillOutcome.UNFILLED]
+    expired = snapshot_at(portfolio_of(unfilled, both_sides()), decision_instant(1))
+    assert (expired.position_quantity, expired.order_in_flight, expired.nav) == (d(0), False, d(10_000))
+    flat_ = computed(managed(world(FLAT_PATH, end=END_2D)))
+    first = flat_.intents[0].decision_sequence
+    refused = both_sides(refused=(first,))
+    assert [item.outcome for item in governed_under(flat_, refused).fills[:1]] == [
+        HistoricalExecutionFillOutcome.REJECTED
+    ]
+    rejected = snapshot_at(portfolio_of(flat_, refused), decision_instant(1))
+    assert (rejected.position_quantity, rejected.order_in_flight, rejected.nav) == (d(0), False, d(10_000))
+    neutral = snapshot_at(portfolio_of(flat_, both_sides()), decision_instant(1))
+    assert neutral.position_quantity == d(-1) and Fraction(neutral.nav) < 10_000  # type: ignore[arg-type]
+
+
+def test_a_nav_outside_the_numeric_domain_is_an_explicit_unavailable_reading_never_a_failed_run() -> None:
+    """A SYNTHETIC mark spike visible just before D_1 values the open SHORT outside the scale-18 domain at that instant.
+
+    The spike also triggers the stop, whose close fills at the next book (16 h 31 s) with the position already valued
+    nowhere else, so the run completes and only the snapshot at D_1 cannot render its NAV.
+    """
+
+    result = computed(managed(world(NAV_SPIKE, end=END_2D)))
+    portfolio = portfolio_of(result, both_sides())
+    snapshot = snapshot_at(portfolio, decision_instant(1))
+    assert (snapshot.position_quantity, snapshot.mark_price, snapshot.nav, snapshot.nav_reason) == (
+        d(-1),
+        d(9 * 10**40),
+        None,
+        "nav_unrepresentable",
+    )
+    assert snapshot.order_in_flight is True  # the stop the spike triggered still waits for its book
+    assert (snapshot.day_start_nav, snapshot.day_start_reason) == (d(10_000), "")
+    assert all(item.nav is not None and item.nav_reason == "" for item in portfolio.snapshots if item is not snapshot)
+
+
+def test_an_open_position_without_a_fresh_mark_has_no_nav_and_never_a_substituted_one() -> None:
+    """D_1 decides at 18 h on an open SHORT whose latest visible mark (15 h 30 min) is older than the 1 h staleness bound.
+
+    The 16 h settlement still reads a fresh mark (30 min old), so the run completes; only the decision snapshot, which
+    never reaches back to a stale price, cannot value the position.
+    """
+
+    w = variant_world(MARK_GAP, end=END_2D, published=STALE_D1)
+    snapshot = snapshot_at(portfolio_of(computed(managed(w)), both_sides()), ANCHOR + 18 * HOUR)
+    assert (snapshot.position_quantity, snapshot.mark_record_digest, snapshot.mark_price) == (d(-1), None, None)
+    assert (snapshot.nav, snapshot.nav_reason) == (None, "no_fresh_visible_mark")
+    visible = historical_execution_latest_visible_mark(
+        w.dataset, policy=economics_policy(), instrument=INS, at_ns=ANCHOR + 18 * HOUR
+    )
+    assert visible is None  # the public visible-mark rule agrees: there is no fresh mark at the decision
+    assert (snapshot.day_start_nav, snapshot.day_start_reason) == (d(10_000), "")  # the day start needs no mark

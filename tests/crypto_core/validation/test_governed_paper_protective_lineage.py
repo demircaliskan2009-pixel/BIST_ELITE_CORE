@@ -7,7 +7,9 @@ is a real human decision, and nothing here approves DEC-9, grants C1-C9 or prove
 ENTRY GATE SUBSTITUTION (SYNTHETIC, TEST-ONLY), as in the lineage tests: the production entry gate refuses every S1
 entry of these worlds, so this module exercises the protective mechanics an admitted entry reaches with the rule table
 explicitly replaced by the test-only permissive table. ``test_governed_paper_entry_safety.py`` proves rule set v2 under
-the production table.
+the production table. Section F (S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1: day seal v4 and lineage evidence v4) runs
+the permissive table followed by the three PRODUCTION portfolio checks (NT-R02, NT-R03, NT-R04), so the measured governed
+portfolio alone decides an entry there; the same test module proves rule set v3 under the production table.
 
 In world G the carry profile enters SHORT on day 3 (fill at E_3 + 502 ns) and its own exit would come on day 7. Under a
 protective authority the 24 h deadline at E_4 + 502 ns issues a close-only attempt; world G's next book is visible at
@@ -109,6 +111,7 @@ def protection_for(
     authority: tuple | None = None,
     revocations: tuple = (),
     archive: object | None = None,
+    portfolio_no_trade: bool = False,
 ) -> GovernedPaperDayProtectionInputs:
     """The protective inputs of ``day``: the world's authority, the day's OHLC archive and the open excursion's cycle."""
 
@@ -125,6 +128,7 @@ def protection_for(
         ohlc_archive=prot.world_ohlc(day) if archive is None else archive,
         excursion_cycle_inputs=None if excursion is None else excursion[0],
         excursion_cycle=None if excursion is None else excursion[1],
+        portfolio_no_trade=portfolio_no_trade,
     )
 
 
@@ -623,3 +627,132 @@ def test_world_g_without_protection_is_byte_identical_to_accepted_main() -> None
         ACCEPTED_MAIN_WORLD_G["day9_schedule"],
     )
     assert all(item.seal.schema_version == "governed-paper-day-seal.v2" for item in days)
+
+
+# --- F. rule set v3: the native portfolio NO-TRADE lineage (seal v4, evidence v4) ------------------------------------------
+
+V4 = "governed-paper-day-seal.v4"
+PASS = gpe.entry_safety.GovernedPaperEntrySafetyStatus.PASS
+PORTFOLIO_IDS = ("NT-R02", "NT-R03", "NT-R04")
+# Captured at import, before the module fixture installs the permissive table: the PRODUCTION portfolio checks.
+NATIVE_PORTFOLIO_CHECKS = tuple(item for item in gpe.entry_safety._CHECKS if item.check_id in PORTFOLIO_IDS)  # noqa: SLF001
+# SYNTHETIC, TEST-ONLY: the permissive table followed by the three native portfolio checks, so that the measured portfolio
+# alone decides an entry of these worlds.
+PERMISSIVE_WITH_NATIVE_PORTFOLIO = (*gpe.TEST_ONLY_PERMISSIVE_ENTRY_CHECKS, *NATIVE_PORTFOLIO_CHECKS)
+# The accepted-main identities (main 99518b37) of world G's protective lineage under the permissive table: the native
+# portfolio contract leaves every v3 seal and the v3 evidence byte-identical.
+ACCEPTED_MAIN_PROTECTIVE_G = {
+    "seals": {
+        0: "c8dcc99cc1510fd796d27faea3d4b83660761e3c628e76edf45a3ee0d108ca52",
+        1: "c7f159dbb95b8f21936a029cc3e0b589fa095cd004926a5b457a1ad9b161ff31",
+        2: "361a3259010813a9279d1c9e37bfa2f676014205a065969e1564c68ae0f89edb",
+        3: "bb504d20f62af04e8cd2f0296811b817bc5b34231b52aff21d3fa5236c0ab1c6",
+        4: "18479b7f194571c84b37826d2ac7501c9bd63b8f20d9e361b251ee7f9bb03bef",
+        5: "cdf9d34815d6af8345628db6416bac971825c21bd5d2efd8dbb289d6d602e3d4",
+        6: "6920afa5b014e5d3da6ca20334a3db840df51b0e1029c226e5abfee29b5b58df",
+    },
+    "evidence": "ba727c6b2da841dae6bdb0e30777e229b9fe232d996b03e384eb368d358ef495",
+}
+
+
+@pytest.fixture
+def native_portfolio_gate(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SYNTHETIC, TEST-ONLY: the permissive table plus the native portfolio checks, for this test only."""
+
+    lineage("G", 7)  # the v3 lineage is built (or reused) under the module's permissive table, never under this one
+    monkeypatch.setattr(gpe.entry_safety, "_CHECKS", PERMISSIVE_WITH_NATIVE_PORTFOLIO)
+
+
+@functools.cache
+def portfolio_lineage(count: int) -> tuple:
+    """World G's first ``count`` protective days with the native portfolio checks (seal v4), under that table only."""
+
+    assert gpe.entry_safety._CHECKS is PERMISSIVE_WITH_NATIVE_PORTFOLIO  # noqa: SLF001
+    if count == 0:
+        return ()
+    days = portfolio_lineage(count - 1)
+    return (*days, protective_day(days, portfolio_no_trade=True))
+
+
+def check_of(decision: object, check_id: str):  # noqa: ANN201
+    return next(item for item in decision.checks if item.check_id == check_id)  # type: ignore[attr-defined]
+
+
+def test_the_protective_lineage_keeps_its_accepted_main_identity() -> None:
+    days = lineage("G", 7)
+    assert {index: item.seal.seal_digest for index, item in enumerate(days)} == ACCEPTED_MAIN_PROTECTIVE_G["seals"]
+    assert evidence_of(days).evidence_digest == ACCEPTED_MAIN_PROTECTIVE_G["evidence"]
+
+
+def test_the_native_portfolio_lineage_refuses_only_what_its_portfolio_cannot_admit(native_portfolio_gate: None) -> None:
+    legacy, days = lineage("G", 7), portfolio_lineage(7)
+    digest = gpe.entry_safety.governed_paper_entry_safety_rule_set_digest(protective=True, portfolio=True)
+    for item in days:
+        seal = item.seal
+        assert (seal.schema_version, seal.status, seal.reason_codes) == (V4, SEALED, ())
+        assert seal.entry_safety_rule_set_digest == digest
+        verification = verify_governed_paper_day_seal(seal, item.seal_inputs)
+        assert (verification.intact, verification.reason_codes) == (True, ())
+    entry, held = (decision for item in days for decision in item.seal.entry_safety_decisions)
+    # day 3: flat at the decision, no intraday PnL and no exposure on its governed snapshot: the entry is admitted
+    assert (entry.entry_permitted, entry.first_failure_check_id) == (True, "")
+    assert [(check_of(entry, name).status, check_of(entry, name).observed) for name in PORTFOLIO_IDS] == [
+        (PASS, gpe.d(0))
+    ] * 3
+    # day 5: the day-3 SHORT is still open at the decision (its protective close fills after it): NT-R03 is BLOCKED
+    risk = check_of(held, "NT-R03")
+    assert (held.entry_permitted, held.first_failure_check_id, risk.reason) == (
+        False,
+        "NT-R03",
+        "governed_paper_entry_safety:NT-R03:position_risk_measure_undefined_for_an_open_position",
+    )
+    assert (check_of(held, "NT-R02").status, check_of(held, "NT-R04").status) == (PASS, PASS)
+    assert Fraction(check_of(held, "NT-R04").observed) > 0  # the open SHORT's share of NAV, on the fresh visible mark
+    # refusing a decision that holds the SHORT changes nothing: the engine has no magnitude-increasing intent to refuse
+    for earlier, later in zip(legacy, days, strict=True):
+        assert protected_replay(later)[1].fills == protected_replay(earlier)[1].fills
+        assert (later.seal.episodes, later.seal.funding_events) == (earlier.seal.episodes, earlier.seal.funding_events)
+    assert [item.seal.schedule.entry_refused_decision_sequences for item in days] == [()] * 5 + [
+        (held.decision_sequence,)
+    ] * 2
+    assert all(item.seal.schedule.entry_refused_decision_sequences == () for item in legacy)
+    evidence = evidence_of(days)
+    assert (evidence.schema_version, evidence.status) == (
+        "governed-paper-execution-evidence.v4",
+        GovernedPaperExecutionStatus.READY,
+    )
+    verification = verify_governed_paper_execution_evidence(evidence, gpe.evidence_inputs(days, gpe.scenario("G")))
+    assert (verification.intact, verification.reason_codes) == (True, ())
+
+
+def test_a_forged_native_portfolio_fact_never_verifies_even_resealed(native_portfolio_gate: None) -> None:
+    item = portfolio_lineage(6)[5]
+    seal, inputs = item.seal, item.seal_inputs
+    (held,) = seal.entry_safety_decisions
+    admitted = replace(held, entry_permitted=True, first_failure_check_id="", first_failure_reason="")
+    for changes in (
+        {"entry_safety_decisions": (admitted,)},
+        {"schedule": replace(seal.schedule, entry_refused_decision_sequences=())},
+        {"entry_safety_rule_set_digest": gpe.entry_safety.governed_paper_entry_safety_rule_set_digest(protective=True)},
+        {"schema_version": V3},
+    ):
+        for forged in (replace(seal, **changes), reseal(seal, **changes)):
+            assert not verify_governed_paper_day_seal(forged, inputs).intact
+    assert verify_governed_paper_day_seal(seal, inputs).intact
+
+
+def test_a_native_portfolio_lineage_is_one_from_day_0_or_never(native_portfolio_gate: None) -> None:
+    native, legacy = portfolio_lineage(2), lineage("G", 2)
+
+    def switched(item: object, value: object):  # noqa: ANN202
+        inputs = item.seal_inputs  # type: ignore[attr-defined]
+        return replace(inputs, protection=replace(inputs.protection, portfolio_no_trade=value))
+
+    with gpe.refused("portfolio_no_trade_lineage_switched"):
+        build_governed_paper_day_seal(switched(native[1], False))
+    with gpe.refused("portfolio_no_trade_lineage_switched"):
+        build_governed_paper_day_seal(switched(legacy[1], True))
+    with gpe.refused("protection_inputs_malformed:portfolio_no_trade"):
+        build_governed_paper_day_seal(switched(native[1], 1))
+    with gpe.refused("protective_lineage_switched"):
+        build_governed_paper_day_seal(replace(native[1].seal_inputs, protection=None))
