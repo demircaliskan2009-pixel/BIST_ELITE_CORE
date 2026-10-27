@@ -59,12 +59,14 @@ Without protection inputs, every seal and evidence is exactly the accepted v2 ar
 
 Native portfolio NO-TRADE lineage (``S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1``, seal v4 and evidence v4). A protective
 lineage whose protection inputs set ``portfolio_no_trade`` does so on every day from day 0, and never switches. Its
-entry gate evaluates rule set v3: NT-R02, NT-R03 and NT-R04 on the governed decision portfolio the one engine derives
-under the schedule. The admissions are sequential (``governed_paper_entry_safety_sequential_refusals``): the replay
-starts from every entry refused and re-evaluates under the previous round's refusals until the schedule refuses
-exactly the entries its own evaluation refuses, the unique causal fixed point, so each entry is judged on the portfolio
-its admitted predecessors produced. The engine then re-runs under that schedule. Every other rule is the v3 lineage's,
-and without ``portfolio_no_trade`` every protective seal and evidence is exactly the accepted v3 artifact.
+schedule is the engine's information-time schedule v4: every admission of its replay, at a decision and at a fill, reads
+the publication-visible equity, and an entry fill above 25% of NAV is refused at the fill. Its entry gate evaluates rule
+set v3: NT-R02, NT-R03 and NT-R04 on the governed decision portfolio the one engine derives under the schedule. The
+admissions are sequential (``governed_paper_entry_safety_sequential_refusals``): the replay starts from every entry
+refused and re-evaluates under the previous round's refusals until the schedule refuses exactly the entries its own
+evaluation refuses, the unique causal fixed point, so each entry is judged on the portfolio its admitted predecessors
+produced. The engine then re-runs under that schedule. Every other rule is the v3 lineage's, and without
+``portfolio_no_trade`` every protective seal and evidence is exactly the accepted v3 artifact.
 """
 
 from __future__ import annotations
@@ -135,6 +137,7 @@ from crypto_core.validation.historical_decision_run import build_historical_deci
 from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION,
+    HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_PROTECTIVE_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HistoricalExecutionAdmissionSchedule,
     HistoricalExecutionAdmissionWindow,
@@ -1126,6 +1129,8 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
     schedule = HistoricalExecutionAdmissionSchedule(
         schema_version=HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION
         if protection is None
+        else HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION
+        if protection.portfolio_no_trade
         else HISTORICAL_EXECUTION_PROTECTIVE_ADMISSION_SCHEDULE_SCHEMA_VERSION,
         schedule_id=f"{genesis.genesis_id}-schedule",
         windows=windows,
@@ -1239,7 +1244,8 @@ def _replay(
     Every artifact is built here. The economics validates the archive's economic series first, so an archive it cannot
     compute keeps its BLOCKED day; only then do the entry-safety refusals complete the schedule the engine re-runs under.
     A protective lineage builds the economics under the authority's position-management policy and the day's OHLC
-    archive, and the entry gate evaluates rule set v2 on the same protective context.
+    archive, and the entry gate evaluates rule set v2 on the same protective context; a native portfolio lineage
+    evaluates rule set v3 on the decision portfolio of its information-time schedule v4.
     """
 
     genesis = authority.genesis

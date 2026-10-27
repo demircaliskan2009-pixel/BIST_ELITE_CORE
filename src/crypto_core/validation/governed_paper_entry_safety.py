@@ -66,21 +66,31 @@ position-management policy the economics applies, its authenticated OHLC archive
 Native portfolio measurement (``S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1``, rule set v3). Rule sets v1 and v2 hold for
 every evaluation without a governed portfolio. When the day seal also supplies the replayed economics and the schedule
 under evaluation, the one engine DERIVES the decision portfolio of that schedule
-(``simulate_historical_execution_governed_paper_decision_portfolio``): the paper portfolio as known at each decision
-instant, before its admission, with every funding settlement whose final rate is not yet visible excluded. Its NAV is
-the engine's own equity over the economics policy's ``initial_equity``; no C5 or other C1-C9 approval is claimed or
-implied. Three NO-TRADE ids are evaluated on it, and only while the paper portfolio is exactly the genesis sleeve
-(otherwise BLOCKED):
+(``simulate_historical_execution_governed_paper_decision_portfolio``, information-time schedule v4 only): the paper
+portfolio as known at each decision instant, before its admission. Under that schedule every admission, at a decision
+and at a fill alike, reads the publication-visible equity: a funding settlement whose final rate is not yet visible
+reaches no admission, position or snapshot before its publication. The NAV is the engine's own equity over the
+economics policy's ``initial_equity``; no C5 or other C1-C9 approval is claimed or implied. Each snapshot also carries
+the decision's candidate: the position its intent targets if admitted and filled in full. Three NO-TRADE ids are
+evaluated on it, and only while the paper portfolio is exactly the genesis sleeve (otherwise BLOCKED):
 
 * NT-R02 (daily loss limit): ``(NAV(t) − NAV(d)) / NAV(d)`` with ``d`` the UTC midnight that starts the decision's day
   and ``NAV(d)`` the engine's valuation at ``d`` (the initial one when the run starts exactly then). It FAILs when
   strictly below −2%; equality passes. The day-start NAV is never substituted: a partial first day, a decision exactly
   at the boundary or a non-positive day-start NAV is BLOCKED, and so is an unavailable NAV (an open position without
   a fresh visible mark, or an amount outside the numeric policy's representation domain);
-* NT-R03 (open risk cap): PRDV4 defines no position-risk measure, so an open position is BLOCKED. Without a position
-  and without an order in flight, on an available positive NAV, the open risk is exactly zero and the check passes;
-* NT-R04 (position concentration): ``|q| x mark(t) / NAV(t)`` FAILs when strictly above 25%, on an available
-  positive NAV and the fresh visible mark; otherwise BLOCKED.
+* NT-R03 (open risk cap): PRDV4 defines no position-risk measure. The CURRENT open risk is measured only while there is
+  no position and no order in flight, where it is exactly zero; an open position or an order in flight is BLOCKED. A
+  candidate that increases the magnitude of the position is a PROSPECTIVE entry whose position risk has no approved
+  measure, so it is BLOCKED (``prospective_entry_position_risk_measure_undefined``), with the current zero recorded as
+  observed: a zero present risk never approves a new position's risk;
+* NT-R04 (position concentration): on an available positive NAV, the current share ``|q| x mark(t) / NAV(t)`` FAILs when
+  strictly above 25%. A candidate that increases the magnitude of the position FAILs when its own share at the decision
+  instant, ``|candidate| x mark(t) / (NAV(t) − its taker fee at mark(t))``, is strictly above 25% (equality passes), and
+  is BLOCKED without that projection. The projection is the decision-time reading only: the later fill executes at an
+  unknown book, and the engine refuses there every exposure-increasing fill whose exact post-fill share of the
+  publication-visible equity is strictly above 25% (``governed_paper_position_concentration_exceeded_at_fill``), so no
+  admitted entry ever holds more than 25% of NAV at its fill.
 
 The admissions are sequential: an entry is evaluated on the portfolio that the admitted entries before it produced. The
 day seal finds the one schedule whose refusals are its own (``governed_paper_entry_safety_sequential_refusals``):
@@ -112,6 +122,7 @@ from crypto_core.validation.edge_artifact_core import (
 from crypto_core.validation.governed_paper_execution_authority import GovernedPaperGenesisAuthority
 from crypto_core.validation.historical_decision_run import HistoricalDecisionRun
 from crypto_core.validation.historical_execution_economics import (
+    HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP,
     HistoricalExecutionAdmissionSchedule,
     HistoricalExecutionDecisionPortfolioSnapshot,
     HistoricalExecutionEconomicsError,
@@ -155,10 +166,12 @@ _LATENCY_BREACH_MULTIPLE = 5  # NT-X01
 _STARTUP_WARMUP_NS = 5 * 60 * _NS_PER_SECOND  # NT-T01
 _RETURN_LOOKBACK_NS = 4 * 3600 * _NS_PER_SECOND  # §1.9 r_4h
 _DAILY_LOSS_LIMIT = Fraction(-2, 100)  # NT-R02 (§1.21, §8.2): intraday PnL / NAV strictly below -2%
-_CONCENTRATION_CAP = Fraction(25, 100)  # NT-R04 (§1.21, §8.2): a single position strictly above 25% of NAV
+# NT-R04 (§1.21, §8.2): a single position strictly above 25% of NAV; the one constant the engine's fill-time bound reads
+_CONCENTRATION_CAP = HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP
 _UTC_DAY_NS = 86_400 * _NS_PER_SECOND
 _DAY_START_REASONS = ("partial_first_utc_day", "day_start_valued_after_the_decision", "day_start_nav_unrepresentable")
 _NAV_REASONS = ("no_fresh_visible_mark", "nav_unrepresentable")
+_CANDIDATE_REASONS = ("no_fresh_visible_mark", "nav_unavailable", "candidate_nav_unrepresentable")
 _ZERO_RENDERING = "0.000000000000000000"  # the zero open risk of an empty portfolio, at the numeric policy's scale 18
 _ANTI_TREND_BOUND = Fraction(2, 100)  # §1.9 anti-trend protection, ±2%
 _ENTRY_DIRECTIONS = ("LONG", "SHORT")
@@ -244,13 +257,16 @@ class GovernedPaperEntrySafetyObservation:
     portfolio_snapshot_digest: str | None = None
     position_quantity: str | None = None
     order_in_flight: bool = False
-    position_mark_record_digest: str | None = None
-    position_mark_price: str | None = None
+    portfolio_mark_record_digest: str | None = None  # the snapshot's fresh visible mark, open position or not
+    portfolio_mark_price: str | None = None
     portfolio_nav: str | None = None
     portfolio_nav_reason: str = ""
     day_start_ns: int | None = None
     day_start_nav: str | None = None
     day_start_reason: str = ""
+    candidate_position_quantity: str | None = None
+    candidate_nav: str | None = None
+    candidate_nav_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -511,10 +527,17 @@ def _tightening(observation: _Observation) -> _Outcome:
 
 @dataclass(frozen=True)
 class _Portfolio:
-    """A measured governed portfolio: its snapshot evidence and its exact position."""
+    """A measured governed portfolio: its snapshot evidence, its exact position and the decision's exact candidate."""
 
     evidence: tuple[str, ...]
     quantity: Fraction
+    candidate: Fraction
+
+    @property
+    def entry(self) -> bool:
+        """Whether the candidate increases the magnitude of the position: a prospective entry."""
+
+        return abs(self.candidate) > abs(self.quantity)
 
 
 def _measured_portfolio(observation: _Observation, legacy_reason: str) -> _Outcome | _Portfolio:
@@ -528,9 +551,10 @@ def _measured_portfolio(observation: _Observation, legacy_reason: str) -> _Outco
     if not observation.single_instrument_portfolio:
         return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "paper_portfolio_holds_more_than_the_genesis_sleeve")
     digest, quantity = observation.portfolio_snapshot_digest, observation.position_quantity
-    if digest is None or quantity is None:
+    candidate = observation.candidate_position_quantity
+    if digest is None or quantity is None or candidate is None:
         return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "governed_portfolio_not_computed")
-    return _Portfolio((digest,), Fraction(quantity))
+    return _Portfolio((digest,), Fraction(quantity), Fraction(candidate))
 
 
 def _nav_unavailable(observation: _Observation) -> str:
@@ -575,6 +599,12 @@ def _open_risk(observation: _Observation) -> _Outcome:
         return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", _nav_unavailable(observation), evidence)
     if Fraction(nav_text) <= 0:
         return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "portfolio_equity_not_positive", evidence)
+    # CURRENT_POSITION_MEASUREMENT: no position and no order in flight carry exactly zero open risk (the observed value).
+    # PROSPECTIVE_ENTRY_ELIGIBILITY: the position an entry would open has no approved risk measure, so zero present risk
+    # never approves it.
+    if measured.entry:
+        reason = "prospective_entry_position_risk_measure_undefined"
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, _ZERO_RENDERING, reason, evidence)
     return _Outcome(_Status.PASS, _ZERO_RENDERING, "no_position_and_no_order_in_flight_carry_risk", evidence)
 
 
@@ -583,20 +613,36 @@ def _concentration(observation: _Observation) -> _Outcome:
     if isinstance(measured, _Outcome):
         return measured
     evidence = measured.evidence
-    nav_text, mark_text = observation.portfolio_nav, observation.position_mark_price
+    nav_text, mark_text = observation.portfolio_nav, observation.portfolio_mark_price
     if nav_text is None:
         return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", _nav_unavailable(observation), evidence)
     nav = Fraction(nav_text)
     if nav <= 0:
         return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "nav_not_positive", evidence)
-    # an available NAV values an open position at its fresh visible mark; a flat portfolio has no mark
+    # an available NAV values an open position at its fresh visible mark; a flat portfolio holds no exposure
     share = Fraction(0) if mark_text is None else abs(measured.quantity) * Fraction(mark_text) / nav
     observed = historical_execution_render_amount(share)
     if observed is None:
         return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "position_share_unrepresentable", evidence)
     if share > _CONCENTRATION_CAP:
         return _Outcome(_Status.FAIL, observed, "single_position_above_25pct_of_nav", evidence)
-    return _Outcome(_Status.PASS, observed, "single_position_within_25pct_of_nav", evidence)
+    if not measured.entry:
+        return _Outcome(_Status.PASS, observed, "single_position_within_25pct_of_nav", evidence)
+    # The prospective entry, at the decision mark net of its own taker fee; its fill is bounded exactly by the engine.
+    candidate_text = observation.candidate_nav
+    if candidate_text is None or mark_text is None:  # the canonical facts bind a candidate NAV to a fresh mark
+        reason = f"candidate_nav_unavailable:{observation.candidate_nav_reason}"
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", reason, evidence)
+    candidate_nav = Fraction(candidate_text)
+    if candidate_nav <= 0:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "candidate_nav_not_positive", evidence)
+    share = abs(measured.candidate) * Fraction(mark_text) / candidate_nav
+    observed = historical_execution_render_amount(share)
+    if observed is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "candidate_share_unrepresentable", evidence)
+    if share > _CONCENTRATION_CAP:
+        return _Outcome(_Status.FAIL, observed, "candidate_position_above_25pct_of_nav", evidence)
+    return _Outcome(_Status.PASS, observed, "candidate_position_within_25pct_of_nav_and_bounded_at_its_fill", evidence)
 
 
 _D, _R, _M, _E, _X, _T, _B = (
@@ -869,15 +915,18 @@ def governed_paper_entry_safety_rule_set(*, protective: bool = False, portfolio:
             contract_id="S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1",
             portfolio_rule={
                 "source": "historical_execution_governed_paper_decision_portfolio_v1_derived_by_the_one_engine",
+                "schedule": "information_time_admission_schedule_v4_of_a_position_managed_baseline",
                 "instant": "the_decision_instant_before_its_admission_after_same_instant_funding_and_protective_rules",
                 "scope": "the_paper_portfolio_is_exactly_the_genesis_sleeve_otherwise_blocked",
                 "nav": "initial_equity_plus_realized_minus_fees_plus_funding_plus_unrealized_at_the_fresh_visible_mark",
                 "unavailable": "a_nav_without_a_fresh_visible_mark_or_an_amount_outside_the_numeric_domain_is_blocked",
-                "funding_currency": "a_settlement_whose_final_rate_is_not_visible_at_the_decision_instant_is_excluded",
+                "funding_currency": "a_settlement_whose_final_rate_is_not_visible_reaches_no_decision_or_fill_admission",
+                "candidate": "the_position_the_decision_intent_targets_if_admitted_and_filled_in_full",
                 "NT-R02": "nav_minus_utc_day_start_nav_over_utc_day_start_nav_strictly_below_minus_2pct",
                 "NT-R02_day_start": "the_engine_valuation_at_the_utc_midnight_otherwise_blocked_never_substituted",
-                "NT-R03": "zero_open_risk_only_without_a_position_and_an_order_in_flight_otherwise_blocked",
-                "NT-R04": "abs_quantity_times_the_fresh_visible_mark_over_positive_nav_strictly_above_25pct",
+                "NT-R03": "zero_current_open_risk_only_flat_without_an_order_in_flight_a_prospective_entry_is_blocked",
+                "NT-R04": "the_current_share_and_an_entry_candidates_share_net_of_its_fee_at_the_mark_strictly_above_25pct",
+                "NT-R04_fill": "the_engine_refuses_an_entry_fill_whose_exact_post_fill_share_is_strictly_above_25pct",
                 "admission": "each_entry_on_the_portfolio_its_admitted_predecessors_produced_the_unique_fixed_point",
                 "daily_loss_limit": _render_threshold(_DAILY_LOSS_LIMIT),
                 "concentration_cap": _render_threshold(_CONCENTRATION_CAP),
@@ -954,15 +1003,17 @@ def _canonical_observation(observation: object) -> GovernedPaperEntrySafetyObser
 _PORTFOLIO_FACTS = (
     "portfolio_snapshot_digest",
     "position_quantity",
-    "position_mark_record_digest",
-    "position_mark_price",
+    "portfolio_mark_record_digest",
+    "portfolio_mark_price",
     "portfolio_nav",
     "day_start_ns",
     "day_start_nav",
+    "candidate_position_quantity",
+    "candidate_nav",
 )
 
 
-def _canonical_portfolio_facts(observation: GovernedPaperEntrySafetyObservation) -> None:  # noqa: C901
+def _canonical_portfolio_facts(observation: GovernedPaperEntrySafetyObservation) -> None:  # noqa: C901, PLR0912
     """The portfolio facts are exact types and one consistent snapshot, and absent without a governed portfolio."""
 
     if type(observation.portfolio_present) is not bool:
@@ -975,11 +1026,14 @@ def _canonical_portfolio_facts(observation: GovernedPaperEntrySafetyObservation)
     nav_reason = observation.portfolio_nav_reason
     if type(nav_reason) is not str or (nav_reason != "" and nav_reason not in _NAV_REASONS):
         raise _fail("observation_malformed:portfolio_nav_reason")
+    candidate_reason = observation.candidate_nav_reason
+    if type(candidate_reason) is not str or (candidate_reason != "" and candidate_reason not in _CANDIDATE_REASONS):
+        raise _fail("observation_malformed:candidate_nav_reason")
     snapshot = observation.portfolio_snapshot_digest
     if not observation.portfolio_present or snapshot is None:
         if any(getattr(observation, name) is not None for name in _PORTFOLIO_FACTS) or observation.order_in_flight:
             raise _fail("observation_malformed:portfolio_facts_without_a_snapshot")
-        if reason or nav_reason:
+        if reason or nav_reason or candidate_reason:
             raise _fail("observation_malformed:portfolio_facts_without_a_snapshot")
         if observation.portfolio_present and not observation.protection_present:
             raise _fail("observation_malformed:portfolio_without_a_protective_context")
@@ -988,27 +1042,35 @@ def _canonical_portfolio_facts(observation: GovernedPaperEntrySafetyObservation)
         raise _fail("observation_malformed:portfolio_without_a_protective_context")
     if not edge_is_hex64(snapshot):
         raise _fail("observation_malformed:portfolio_snapshot_digest")
-    for name in ("position_quantity", "position_mark_price", "portfolio_nav", "day_start_nav"):
+    for name in (
+        "position_quantity",
+        "portfolio_mark_price",
+        "portfolio_nav",
+        "day_start_nav",
+        "candidate_position_quantity",
+        "candidate_nav",
+    ):
         value = getattr(observation, name)
         if value is not None and not historical_execution_decimal_is_canonical(value):
             raise _fail(f"observation_malformed:{name}")
     if observation.position_quantity is None:
         raise _fail("observation_malformed:position_quantity")
-    mark_digest, mark_price = observation.position_mark_record_digest, observation.position_mark_price
+    if observation.candidate_position_quantity is None:
+        raise _fail("observation_malformed:candidate_position_quantity")
+    mark_digest, mark_price = observation.portfolio_mark_record_digest, observation.portfolio_mark_price
     if (mark_digest is None) is not (mark_price is None) or (
         mark_digest is not None and not edge_is_hex64(mark_digest)
     ):
-        raise _fail("observation_malformed:position_mark")
+        raise _fail("observation_malformed:portfolio_mark")
     if mark_price is not None and Fraction(mark_price) <= 0:
-        raise _fail("observation_malformed:position_mark_price")
+        raise _fail("observation_malformed:portfolio_mark_price")
     if (observation.portfolio_nav is None) is not (nav_reason != ""):
         raise _fail("observation_malformed:portfolio_nav_reason")
-    stale = nav_reason == "no_fresh_visible_mark"
-    if Fraction(observation.position_quantity) == 0:  # a flat portfolio is valued without a mark
-        if mark_price is not None or stale:
-            raise _fail("observation_malformed:flat_portfolio_inconsistent")
-    elif (mark_price is None) is not stale:  # an open position is valued exactly when its mark is fresh
-        raise _fail("observation_malformed:open_position_nav_inconsistent")
+    quantity = Fraction(observation.position_quantity)
+    # a flat portfolio is valued without a mark; an open position exactly when the fresh mark exists
+    if (nav_reason == "no_fresh_visible_mark") is not (quantity != 0 and mark_price is None):
+        raise _fail("observation_malformed:portfolio_nav_inconsistent")
+    _canonical_candidate_facts(observation, quantity, candidate_reason)
     day = observation.day_start_ns
     if (
         not historical_execution_wire_int_is_valid(day, minimum=0)
@@ -1018,6 +1080,30 @@ def _canonical_portfolio_facts(observation: GovernedPaperEntrySafetyObservation)
         raise _fail("observation_malformed:day_start_ns")
     if (observation.day_start_nav is None) is not (reason != ""):
         raise _fail("observation_malformed:day_start_reason")
+
+
+def _canonical_candidate_facts(
+    observation: GovernedPaperEntrySafetyObservation, quantity: Fraction, reason: str
+) -> None:
+    """The candidate never reverses the position, and its projected NAV exists exactly for an entry it can value."""
+
+    candidate = Fraction(observation.candidate_position_quantity)  # type: ignore[arg-type]
+    if quantity != 0 and candidate != 0 and (candidate > 0) is not (quantity > 0):
+        raise _fail("observation_malformed:candidate_reverses_the_position")
+    if abs(candidate) <= abs(quantity):  # no entry: nothing is projected
+        if observation.candidate_nav is not None or reason:
+            raise _fail("observation_malformed:candidate_nav_without_an_entry")
+        return
+    if (observation.candidate_nav is None) is not (reason != ""):
+        raise _fail("observation_malformed:candidate_nav_reason")
+    if observation.portfolio_mark_price is None:
+        consistent = reason == "no_fresh_visible_mark"
+    elif observation.portfolio_nav is None:
+        consistent = reason == "nav_unavailable"
+    else:
+        consistent = reason in ("", "candidate_nav_unrepresentable")
+    if not consistent:
+        raise _fail("observation_malformed:candidate_nav_inconsistent")
 
 
 def _canonical_protection_facts(observation: GovernedPaperEntrySafetyObservation) -> None:
@@ -1179,13 +1265,16 @@ def governed_paper_entry_safety_portfolio_facts(
         "portfolio_snapshot_digest": snapshot.snapshot_digest,
         "position_quantity": snapshot.position_quantity,
         "order_in_flight": snapshot.order_in_flight,
-        "position_mark_record_digest": snapshot.mark_record_digest,
-        "position_mark_price": snapshot.mark_price,
+        "portfolio_mark_record_digest": snapshot.mark_record_digest,
+        "portfolio_mark_price": snapshot.mark_price,
         "portfolio_nav": snapshot.nav,
         "portfolio_nav_reason": snapshot.nav_reason,
         "day_start_ns": snapshot.day_start_ns,
         "day_start_nav": snapshot.day_start_nav,
         "day_start_reason": snapshot.day_start_reason,
+        "candidate_position_quantity": snapshot.candidate_position_quantity,
+        "candidate_nav": snapshot.candidate_nav,
+        "candidate_nav_reason": snapshot.candidate_nav_reason,
     }
 
 
@@ -1196,7 +1285,10 @@ def _portfolio_snapshots(
     economics_policy_digest: str,
     protection: GovernedPaperEntrySafetyProtection | None,
 ) -> dict[int, HistoricalExecutionDecisionPortfolioSnapshot] | None:
-    """The decision snapshots the one engine derives for this evaluation (rule set v3), keyed by decision sequence."""
+    """The decision snapshots the one engine derives for this evaluation (rule set v3), keyed by decision sequence.
+
+    Only an information-time schedule v4 has a decision portfolio: any other schedule is ``portfolio_not_derivable``.
+    """
 
     if portfolio is None:
         return None

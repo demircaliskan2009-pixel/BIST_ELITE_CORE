@@ -18,11 +18,14 @@ this module never installs the test-only permissive rule table. It proves:
 * a positive ATR that rounds to zero at scale 18 is an explicit BLOCKED FB-STOP, on the public evidence builder and
   across a four-day protective lineage, never an uncaught malformed observation (P2-POSITIVE-ATR-RENDER-ZERO);
 * rule set v3 (``S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1``): NT-R02, NT-R03 and NT-R04 are evaluated on the governed
-  decision portfolio the one engine derives, at their exact published boundaries and BLOCKED wherever the snapshot
-  cannot support a reading; rule sets v1 and v2 keep their accepted identities; a four-day seal v4 lineage of world G
-  stays READY with every entry still refused by NT-D01; and in the protective lifecycle world, under a TEST-ONLY
-  reading of those three checks alone (no rule table is replaced), a same-day loss beyond 2% refuses the re-entry
-  through the sequential admission, which an evaluation on the neutral replay would get wrong.
+  decision portfolio the one engine derives under the information-time schedule v4, at their exact published
+  boundaries and BLOCKED wherever the snapshot cannot support a reading. NT-R04 reads the decision's entry candidate
+  (P2-R04-PREENTRY-ZERO-MISCLASSIFIES-CANDIDATE: the audit's flat entry of ~50% of NAV now FAILs at its decision and is
+  refused at its fill), and NT-R03 keeps the current zero risk apart from the prospective entry, which stays BLOCKED
+  without an approved position-risk measure. Rule sets v1 and v2 keep their accepted identities; a four-day seal v4
+  lineage of world G stays READY with every entry still refused by NT-D01; and in the protective lifecycle world, under
+  a TEST-ONLY reading of NT-R02 and NT-R04 alone (no rule table is replaced), a same-day loss beyond 2% refuses the
+  re-entry through the sequential admission, while the neutral replay would judge the next day's entry as a hold.
 """
 
 from __future__ import annotations
@@ -30,6 +33,7 @@ from __future__ import annotations
 import decimal
 import functools
 import json
+from collections.abc import Callable
 from dataclasses import replace
 from fractions import Fraction
 
@@ -73,6 +77,8 @@ from crypto_core.validation.governed_paper_entry_safety import (
 from crypto_core.validation.governed_paper_execution_authority import governed_paper_genesis_authority
 from crypto_core.validation.governed_paper_protective_authority import governed_paper_protective_context
 from crypto_core.validation.historical_execution_economics import (
+    HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION,
+    HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP,
     HistoricalExecutionFillOutcome,
     HistoricalExecutionProtectiveWindow,
     historical_execution_latest_visible_mark,
@@ -1037,44 +1043,50 @@ def test_a_four_day_protective_lineage_with_a_rounding_to_zero_atr_seals_every_d
 
 # The accepted-main identity of rule set v2 (main 99518b37) and the identity of the rule set v3 this contract adds.
 ACCEPTED_MAIN_RULE_SET_V2_DIGEST = "5988c063ede8d42648b608c2649f92ca51c66719eccf81f499490088534c3ac2"
-RULE_SET_V3_DIGEST = "b04336551becd1e6c7b5e070545d015473081280230a09b65510b2c97f67c552"
+RULE_SET_V3_DIGEST = "e182a14215d2337a76dfd88e8ca528db3d48495fc95040bcc995577453650609"
 PORTFOLIO_IDS = ("NT-R02", "NT-R03", "NT-R04")
 SNAPSHOT = "8" * 64
-POSITION_MARK = "7" * 64
+PORTFOLIO_MARK = "7" * 64
 DAY_NS = 86_400 * SECOND
 DAY_START = T // DAY_NS * DAY_NS  # the UTC midnight that starts the day of T
-FLAT_PASS = {
+ENTRY_NAV = d("9999.98")  # the NAV of 10000 net of the one-unit candidate's 5 bps taker fee at mark 40
+PROSPECTIVE = "prospective_entry_position_risk_measure_undefined"
+FLAT_ENTRY = {
     "NT-R02": (S.PASS, "intraday_loss_within_2pct_of_the_day_start_nav"),
-    "NT-R03": (S.PASS, "no_position_and_no_order_in_flight_carry_risk"),
-    "NT-R04": (S.PASS, "single_position_within_25pct_of_nav"),
+    "NT-R03": (BLOCKED, PROSPECTIVE),
+    "NT-R04": (S.PASS, "candidate_position_within_25pct_of_nav_and_bounded_at_its_fill"),
 }
 OPEN_RISK = (BLOCKED, "position_risk_measure_undefined_for_an_open_position")
 UNMEASURED = ("paper_portfolio_holds_more_than_the_genesis_sleeve", "governed_portfolio_not_computed")
 
 
 def portfolio(**changes: object) -> GovernedPaperEntrySafetyObservation:
-    """A SYNTHETIC rule set v3 entry observation: flat, NAV 10000 and day-start NAV 10000 on one governed snapshot."""
+    """A SYNTHETIC rule set v3 entry observation: flat, NAV 10000 and day-start NAV 10000 on one governed snapshot, a
+    fresh mark of 40, and the decision's one-unit SHORT entry candidate projected at ``ENTRY_NAV``."""
 
     values: dict[str, object] = {
         "portfolio_present": True,
         "portfolio_snapshot_digest": SNAPSHOT,
         "position_quantity": d(0),
         "order_in_flight": False,
-        "position_mark_record_digest": None,
-        "position_mark_price": None,
+        "portfolio_mark_record_digest": PORTFOLIO_MARK,
+        "portfolio_mark_price": d(40),
         "portfolio_nav": d(10_000),
         "day_start_ns": DAY_START,
         "day_start_nav": d(10_000),
         "day_start_reason": "",
+        "candidate_position_quantity": d(-1),
+        "candidate_nav": ENTRY_NAV,
+        "candidate_nav_reason": "",
     }
     values.update(changes)
     return protected(**values)
 
 
 def held(quantity: object = -1, mark: object = 40, **changes: object) -> GovernedPaperEntrySafetyObservation:
-    """``portfolio`` holding ``quantity`` units valued at the fresh visible ``mark``."""
+    """``portfolio`` holding ``quantity`` units valued at the fresh visible ``mark``, a decision that is no entry."""
 
-    position = {"position_mark_record_digest": POSITION_MARK, "position_mark_price": d(mark)}
+    position = {"portfolio_mark_price": d(mark), "candidate_position_quantity": d(quantity), "candidate_nav": None}
     return portfolio(position_quantity=d(quantity), **{**position, **changes})
 
 
@@ -1091,6 +1103,9 @@ def test_rule_sets_v1_and_v2_keep_their_accepted_identity_and_v3_adds_only_its_p
     assert set(v3) - set(v2) == {"portfolio_rule"}
     rule = v3["portfolio_rule"]
     assert (rule["daily_loss_limit"], rule["concentration_cap"]) == (d("-0.02"), d("0.25"))  # type: ignore[index]
+    # the gate's NT-R04 cap is the one constant the engine's fill-time bound reads
+    assert entry_safety._CONCENTRATION_CAP is HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP == Fraction(1, 4)  # noqa: SLF001
+    assert rule["schedule"] == "information_time_admission_schedule_v4_of_a_position_managed_baseline"  # type: ignore[index]
     assert (
         GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET_DIGEST
         == edge_sha256_text(edge_canonical_json(v3))
@@ -1102,24 +1117,35 @@ def test_rule_sets_v1_and_v2_keep_their_accepted_identity_and_v3_adds_only_its_p
         entry_safety.governed_paper_entry_safety_rule_set(portfolio=True)
 
 
-def test_a_flat_governed_portfolio_passes_r02_r03_and_r04_on_its_snapshot_and_changes_nothing_else() -> None:
-    for direction in ("SHORT", "LONG"):
-        decision = evaluate_governed_paper_entry_safety(portfolio(target_direction=direction))
+def test_a_flat_entry_measures_its_candidate_and_never_reads_zero_present_risk_as_an_approval() -> None:
+    share = d(Fraction(40) / Fraction(ENTRY_NAV))  # the one-unit candidate at mark 40 over its projected NAV
+    for direction, candidate in (("SHORT", -1), ("LONG", 1)):
+        entry = portfolio(target_direction=direction, candidate_position_quantity=d(candidate))
+        decision = evaluate_governed_paper_entry_safety(entry)
         statuses = {item.check_id: item.status for item in decision.checks}
         assert statuses == {
             **EXPECTED_BASE,
             "FB-MAX-HOLD": S.PASS,
             "FB-STOP": S.PASS,
-            **dict.fromkeys(PORTFOLIO_IDS, S.PASS),
+            **{name: status for name, (status, _) in FLAT_ENTRY.items()},
         }
+        observed = {"NT-R02": d(0), "NT-R03": d(0), "NT-R04": share}  # NT-R03 observes the CURRENT zero only
         for name in PORTFOLIO_IDS:
             check = check_of(decision, name)
             assert (check.observed, check.reason, check.evidence_record_digests) == (
-                d(0),
-                code(f"{name}:{FLAT_PASS[name][1]}"),
+                observed[name],
+                code(f"{name}:{FLAT_ENTRY[name][1]}"),
                 (SNAPSHOT,),
             )
         assert (decision.entry_permitted, decision.first_failure_check_id) == (False, "NT-D01")
+        # CURRENT_POSITION_MEASUREMENT alone (a candidate that opens nothing): zero open risk and a zero share pass
+        current = evaluate_governed_paper_entry_safety(
+            replace(entry, candidate_position_quantity=d(0), candidate_nav=None)
+        )
+        assert [(check_of(current, name).status, check_of(current, name).observed) for name in PORTFOLIO_IDS] == [
+            (S.PASS, d(0))
+        ] * 3
+        assert check_of(current, "NT-R03").reason == code("NT-R03:no_position_and_no_order_in_flight_carry_risk")
     # without a governed portfolio (rule sets v1 and v2) each keeps exactly its earlier missing-input outcome
     legacy = evaluate_governed_paper_entry_safety(protected())
     assert [(check_of(legacy, name).status, check_of(legacy, name).reason) for name in PORTFOLIO_IDS] == [
@@ -1179,27 +1205,61 @@ def test_nt_r04_fails_strictly_above_25pct_of_nav_at_the_fresh_visible_mark(
 
 
 @pytest.mark.parametrize(
+    ("candidate", "mark", "candidate_nav", "status"),
+    [
+        ("-1", "2500", "10000", S.PASS),  # exactly 25% of its projected NAV: equality never triggers
+        ("-1", "2500", "9999.999999999999999999", S.FAIL),  # one unit less projected NAV
+        ("1", "2499.999999999999999999", "10000", S.PASS),
+        ("1", "2500.000000000000000001", "10000", S.FAIL),
+        ("-1", "2500", "9998.75", S.FAIL),  # 25% before its own 5 bps fee at the mark, above it after the fee
+        ("-0.5", "6000", "9998.5", S.FAIL),
+    ],
+)
+def test_nt_r04_refuses_an_entry_candidate_strictly_above_25pct_of_its_projected_nav(
+    candidate: str, mark: str, candidate_nav: str, status: S
+) -> None:
+    """P2-R04-PREENTRY-ZERO-MISCLASSIFIES-CANDIDATE: a flat portfolio's zero share never certifies the position its entry
+    opens. The candidate is read at the fresh mark over the NAV net of its own taker fee; its fill is bounded exactly by
+    the engine (``test_historical_execution_protective_lifecycle.py``, section H)."""
+
+    item = portfolio(
+        portfolio_mark_price=d(mark), candidate_position_quantity=d(candidate), candidate_nav=d(candidate_nav)
+    )
+    check = check_of(evaluate_governed_paper_entry_safety(item), "NT-R04")
+    reason = "candidate_position_above_25pct_of_nav" if status is S.FAIL else FLAT_ENTRY["NT-R04"][1]
+    assert (check.status, check.observed, check.reason, check.evidence_record_digests) == (
+        status,
+        d(abs(Fraction(candidate)) * Fraction(mark) / Fraction(candidate_nav)),
+        code(f"NT-R04:{reason}"),
+        (SNAPSHOT,),
+    )
+    # the very same flat portfolio without its candidate holds no exposure: the pre-entry reading alone would pass
+    current = replace(item, candidate_position_quantity=d(0), candidate_nav=None)
+    assert check_of(evaluate_governed_paper_entry_safety(current), "NT-R04").status is S.PASS
+
+
+@pytest.mark.parametrize(
     ("item", "expected"),
     [
         (
             portfolio(day_start_nav=None, day_start_reason="partial_first_utc_day"),
-            {**FLAT_PASS, "NT-R02": (BLOCKED, "utc_day_start_nav_unavailable:partial_first_utc_day")},
+            {**FLAT_ENTRY, "NT-R02": (BLOCKED, "utc_day_start_nav_unavailable:partial_first_utc_day")},
         ),
         (
             portfolio(day_start_nav=None, day_start_reason="day_start_valued_after_the_decision"),
-            {**FLAT_PASS, "NT-R02": (BLOCKED, "utc_day_start_nav_unavailable:day_start_valued_after_the_decision")},
+            {**FLAT_ENTRY, "NT-R02": (BLOCKED, "utc_day_start_nav_unavailable:day_start_valued_after_the_decision")},
         ),
         (
             portfolio(day_start_nav=None, day_start_reason="day_start_nav_unrepresentable"),
-            {**FLAT_PASS, "NT-R02": (BLOCKED, "utc_day_start_nav_unavailable:day_start_nav_unrepresentable")},
+            {**FLAT_ENTRY, "NT-R02": (BLOCKED, "utc_day_start_nav_unavailable:day_start_nav_unrepresentable")},
         ),
-        (portfolio(day_start_nav=d(0)), {**FLAT_PASS, "NT-R02": (BLOCKED, "utc_day_start_nav_not_positive")}),
-        (portfolio(day_start_nav=d(-5)), {**FLAT_PASS, "NT-R02": (BLOCKED, "utc_day_start_nav_not_positive")}),
+        (portfolio(day_start_nav=d(0)), {**FLAT_ENTRY, "NT-R02": (BLOCKED, "utc_day_start_nav_not_positive")}),
+        (portfolio(day_start_nav=d(-5)), {**FLAT_ENTRY, "NT-R02": (BLOCKED, "utc_day_start_nav_not_positive")}),
         (
             portfolio(day_start_nav=d("0.000000000000000001"), portfolio_nav=d(10**30)),
-            {**FLAT_PASS, "NT-R02": (BLOCKED, "intraday_pnl_ratio_unrepresentable")},
+            {**FLAT_ENTRY, "NT-R02": (BLOCKED, "intraday_pnl_ratio_unrepresentable")},
         ),
-        (portfolio(order_in_flight=True), {**FLAT_PASS, "NT-R03": (BLOCKED, "an_order_in_flight_may_open_exposure")}),
+        (portfolio(order_in_flight=True), {**FLAT_ENTRY, "NT-R03": (BLOCKED, "an_order_in_flight_may_open_exposure")}),
         (
             portfolio(portfolio_nav=d(0)),
             {
@@ -1209,7 +1269,12 @@ def test_nt_r04_fails_strictly_above_25pct_of_nav_at_the_fresh_visible_mark(
             },
         ),
         (
-            portfolio(position_quantity=d(-1), portfolio_nav=None, portfolio_nav_reason="no_fresh_visible_mark"),
+            held(
+                portfolio_mark_record_digest=None,
+                portfolio_mark_price=None,
+                portfolio_nav=None,
+                portfolio_nav_reason="no_fresh_visible_mark",
+            ),
             {
                 "NT-R02": (BLOCKED, "nav_unavailable:no_fresh_visible_mark"),
                 "NT-R03": OPEN_RISK,
@@ -1225,7 +1290,12 @@ def test_nt_r04_fails_strictly_above_25pct_of_nav_at_the_fresh_visible_mark(
             },
         ),
         (
-            portfolio(portfolio_nav=None, portfolio_nav_reason="nav_unrepresentable"),
+            portfolio(
+                portfolio_nav=None,
+                portfolio_nav_reason="nav_unrepresentable",
+                candidate_nav=None,
+                candidate_nav_reason="nav_unavailable",
+            ),
             dict.fromkeys(PORTFOLIO_IDS, (BLOCKED, "nav_unavailable:nav_unrepresentable")),
         ),
         (
@@ -1244,14 +1314,37 @@ def test_nt_r04_fails_strictly_above_25pct_of_nav_at_the_fresh_visible_mark(
                 "NT-R04": (BLOCKED, "position_share_unrepresentable"),
             },
         ),
+        # an entry candidate that cannot be projected is never read as a pass
+        (
+            portfolio(
+                portfolio_mark_record_digest=None,
+                portfolio_mark_price=None,
+                candidate_nav=None,
+                candidate_nav_reason="no_fresh_visible_mark",
+            ),
+            {**FLAT_ENTRY, "NT-R04": (BLOCKED, "candidate_nav_unavailable:no_fresh_visible_mark")},
+        ),
+        (
+            portfolio(candidate_nav=None, candidate_nav_reason="candidate_nav_unrepresentable"),
+            {**FLAT_ENTRY, "NT-R04": (BLOCKED, "candidate_nav_unavailable:candidate_nav_unrepresentable")},
+        ),
+        (portfolio(candidate_nav=d(0)), {**FLAT_ENTRY, "NT-R04": (BLOCKED, "candidate_nav_not_positive")}),
+        (
+            portfolio(portfolio_mark_price=d(10**30), candidate_nav=d("0.000000000000000001")),
+            {**FLAT_ENTRY, "NT-R04": (BLOCKED, "candidate_share_unrepresentable")},
+        ),
         (portfolio(single_instrument_portfolio=False), dict.fromkeys(PORTFOLIO_IDS, (BLOCKED, UNMEASURED[0]))),
         (
             portfolio(
                 portfolio_snapshot_digest=None,
                 position_quantity=None,
+                portfolio_mark_record_digest=None,
+                portfolio_mark_price=None,
                 portfolio_nav=None,
                 day_start_ns=None,
                 day_start_nav=None,
+                candidate_position_quantity=None,
+                candidate_nav=None,
             ),
             dict.fromkeys(PORTFOLIO_IDS, (BLOCKED, UNMEASURED[1])),
         ),
@@ -1265,8 +1358,8 @@ def test_the_portfolio_checks_never_read_an_unsupported_snapshot_as_a_pass(
         check = check_of(decision, name)
         assert (check.status, check.reason) == (status, code(f"{name}:{reason}"))
         assert check.evidence_record_digests == (() if reason in UNMEASURED else (SNAPSHOT,))
-        if status is BLOCKED:
-            assert check.observed == ""
+        if status is BLOCKED:  # a blocked reading observes nothing, but the current zero risk of a prospective entry
+            assert check.observed == (d(0) if reason == PROSPECTIVE else "")
     assert decision.entry_permitted is False
 
 
@@ -1282,28 +1375,55 @@ def test_the_portfolio_checks_never_read_an_unsupported_snapshot_as_a_pass(
         (lambda: portfolio(position_quantity="0"), "position_quantity"),
         (lambda: portfolio(portfolio_nav="10000"), "portfolio_nav"),
         (lambda: portfolio(day_start_nav="10000"), "day_start_nav"),
-        (lambda: portfolio(position_mark_price=d(40)), "position_mark"),
-        (lambda: portfolio(position_mark_record_digest=POSITION_MARK), "position_mark"),
-        (lambda: held(position_mark_record_digest="A" * 64), "position_mark"),
-        (lambda: held(mark=0), "position_mark_price"),
-        (lambda: held(quantity=0), "flat_portfolio_inconsistent"),
+        (lambda: portfolio(portfolio_mark_record_digest=None), "portfolio_mark"),
+        (lambda: portfolio(portfolio_mark_price=None), "portfolio_mark"),
+        (lambda: held(portfolio_mark_record_digest="A" * 64), "portfolio_mark"),
+        (lambda: held(mark=0), "portfolio_mark_price"),
         (lambda: portfolio(portfolio_nav_reason=None), "portfolio_nav_reason"),
         (lambda: portfolio(portfolio_nav_reason="stale_mark"), "portfolio_nav_reason"),
         (lambda: portfolio(portfolio_nav_reason="nav_unrepresentable"), "portfolio_nav_reason"),
         (lambda: portfolio(portfolio_nav=None), "portfolio_nav_reason"),
         (lambda: held(portfolio_nav=None), "portfolio_nav_reason"),
+        # a flat portfolio is valued without a mark, an open position exactly when the fresh mark exists
         (
             lambda: portfolio(portfolio_nav=None, portfolio_nav_reason="no_fresh_visible_mark"),
-            "flat_portfolio_inconsistent",
+            "portfolio_nav_inconsistent",
         ),
+        (lambda: held(portfolio_nav=None, portfolio_nav_reason="no_fresh_visible_mark"), "portfolio_nav_inconsistent"),
+        (lambda: held(portfolio_mark_record_digest=None, portfolio_mark_price=None), "portfolio_nav_inconsistent"),
         (
-            lambda: held(portfolio_nav=None, portfolio_nav_reason="no_fresh_visible_mark"),
-            "open_position_nav_inconsistent",
+            lambda: held(
+                portfolio_mark_record_digest=None,
+                portfolio_mark_price=None,
+                portfolio_nav=None,
+                portfolio_nav_reason="nav_unrepresentable",
+            ),
+            "portfolio_nav_inconsistent",
         ),
-        (lambda: portfolio(position_quantity=d(-1)), "open_position_nav_inconsistent"),
+        # the candidate: present, canonical, never reversing, and projected exactly for an entry it can value
+        (lambda: portfolio(candidate_position_quantity=None), "candidate_position_quantity"),
+        (lambda: portfolio(candidate_position_quantity="-1"), "candidate_position_quantity"),
+        (lambda: portfolio(candidate_nav="9999.98"), "candidate_nav"),
+        (lambda: portfolio(candidate_nav_reason=None), "candidate_nav_reason"),
+        (lambda: portfolio(candidate_nav_reason="stale_mark"), "candidate_nav_reason"),
+        (lambda: held(candidate_position_quantity=d(1)), "candidate_reverses_the_position"),
+        (lambda: held(candidate_nav=ENTRY_NAV), "candidate_nav_without_an_entry"),
+        (lambda: held(candidate_nav_reason="no_fresh_visible_mark"), "candidate_nav_without_an_entry"),
+        (lambda: portfolio(candidate_nav=None), "candidate_nav_reason"),
+        (lambda: portfolio(candidate_nav_reason="candidate_nav_unrepresentable"), "candidate_nav_reason"),
         (
-            lambda: portfolio(position_quantity=d(-1), portfolio_nav=None, portfolio_nav_reason="nav_unrepresentable"),
-            "open_position_nav_inconsistent",
+            lambda: portfolio(candidate_nav=None, candidate_nav_reason="no_fresh_visible_mark"),
+            "candidate_nav_inconsistent",
+        ),
+        (lambda: portfolio(candidate_nav=None, candidate_nav_reason="nav_unavailable"), "candidate_nav_inconsistent"),
+        (
+            lambda: portfolio(
+                portfolio_mark_record_digest=None,
+                portfolio_mark_price=None,
+                candidate_nav=None,
+                candidate_nav_reason="candidate_nav_unrepresentable",
+            ),
+            "candidate_nav_inconsistent",
         ),
         (lambda: portfolio(day_start_ns=DAY_START + 1), "day_start_ns"),
         (lambda: portfolio(day_start_ns=DAY_START - DAY_NS), "day_start_ns"),
@@ -1316,6 +1436,8 @@ def test_the_portfolio_checks_never_read_an_unsupported_snapshot_as_a_pass(
         (lambda: protected(order_in_flight=True), "portfolio_facts_without_a_snapshot"),
         (lambda: protected(day_start_reason="partial_first_utc_day"), "portfolio_facts_without_a_snapshot"),
         (lambda: protected(portfolio_nav_reason="nav_unrepresentable"), "portfolio_facts_without_a_snapshot"),
+        (lambda: protected(candidate_position_quantity=d(-1)), "portfolio_facts_without_a_snapshot"),
+        (lambda: protected(candidate_nav_reason="nav_unavailable"), "portfolio_facts_without_a_snapshot"),
         (lambda: observation(portfolio_present=True), "portfolio_without_a_protective_context"),
         (
             lambda: observation(portfolio_present=True, portfolio_snapshot_digest=SNAPSHOT, position_quantity=d(0)),
@@ -1360,6 +1482,7 @@ def test_a_four_day_native_portfolio_lineage_measures_world_g_on_the_production_
             (),
         )
         assert seal.entry_safety_rule_set_digest == RULE_SET_V3_DIGEST
+        assert seal.schedule.schema_version == HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION
         verification = verify_governed_paper_day_seal(seal, item.seal_inputs)
         assert (verification.intact, verification.reason_codes) == (True, ())
     item = days[3]
@@ -1377,13 +1500,20 @@ def test_a_four_day_native_portfolio_lineage_measures_world_g_on_the_production_
         d(10_000),
         d(10_000),
     )
+    # the day-3 SHORT entry candidate: one unit at the fresh mark, its NAV net of its own taker fee there
+    mark = Fraction(snapshot.mark_price)  # type: ignore[arg-type]
+    fee = mark * Fraction(gpe.pret.economics_policy_p().taker_fee_bps) / 10_000
+    assert (snapshot.candidate_position_quantity, snapshot.candidate_nav) == (d(-1), d(10_000 - fee))
+    observed = {"NT-R02": d(0), "NT-R03": d(0), "NT-R04": d(mark / Fraction(snapshot.candidate_nav))}  # type: ignore[arg-type]
+    statuses = {"NT-R02": S.PASS, "NT-R03": BLOCKED, "NT-R04": S.PASS}  # no approved measure of the entry's risk
     for name in PORTFOLIO_IDS:
         check = check_of(entry, name)
         assert (check.status, check.observed, check.evidence_record_digests) == (
-            S.PASS,
-            d(0),
+            statuses[name],
+            observed[name],
             (snapshot.snapshot_digest,),
         )
+    assert check_of(entry, "NT-R03").reason == code(f"NT-R03:{PROSPECTIVE}")
     # the public builder re-derives exactly the sealed evaluation from the replayed economics and the sealed schedule
     authority, run, _ = run_and_evidence(item)
     evidence = build_governed_paper_entry_safety_evidence(
@@ -1439,6 +1569,12 @@ def test_the_portfolio_is_derived_by_the_one_engine_and_a_foreign_or_underivable
         ),
         (protection, GovernedPaperEntrySafetyPortfolio(economics, outside), "portfolio_not_derivable"),
         (protection, GovernedPaperEntrySafetyPortfolio(forged, schedule), "portfolio_not_derivable"),
+        # a v3 schedule re-runs on the booked equity: it has no information-time decision portfolio
+        (
+            protection,
+            GovernedPaperEntrySafetyPortfolio(economics, replace(schedule, schema_version=lifet.V3)),
+            "portfolio_not_derivable",
+        ),
     ):
         with pytest.raises(GovernedPaperEntrySafetyError, match=f"^{code(reason)}$"):
             build_governed_paper_entry_safety_evidence(
@@ -1464,17 +1600,21 @@ def lifecycle_observation(snapshot: object) -> GovernedPaperEntrySafetyObservati
     )
 
 
-def portfolio_refusals(result: object, refused: tuple[int, ...]) -> tuple[int, ...]:
-    """TEST-ONLY READING: the entries NT-R02, NT-R03 or NT-R04 refuse on the portfolio of the schedule refusing ``refused``.
+MEASURED_IDS = ("NT-R02", "NT-R04")
 
-    Every other fact of these observations is synthetic, so only the three native measurements decide here; no rule
-    table is replaced.
+
+def portfolio_refusals(result: object, refused: tuple[int, ...]) -> tuple[int, ...]:
+    """TEST-ONLY READING: the entries NT-R02 or NT-R04 refuse on the portfolio of the schedule refusing ``refused``.
+
+    Every other fact of these observations is synthetic, so only these native measurements decide here; no rule table is
+    replaced. The production NT-R03 is left out of this reading only: without an approved position-risk measure it
+    blocks every prospective entry (asserted below), so under it no entry could ever be admitted.
     """
 
     refusing = []
     for snapshot in lifet.portfolio_of(result, lifet.both_sides(refused=refused)).snapshots:  # type: ignore[arg-type]
         decision = evaluate_governed_paper_entry_safety(lifecycle_observation(snapshot))
-        if any(check_of(decision, name).status is not S.PASS for name in PORTFOLIO_IDS):
+        if any(check_of(decision, name).status is not S.PASS for name in MEASURED_IDS):
             refusing.append(snapshot.decision_sequence)
     return tuple(refusing)
 
@@ -1491,26 +1631,32 @@ def test_a_same_day_loss_beyond_2pct_refuses_the_re_entry_and_admission_is_seque
         return portfolio_refusals(result, refused)
 
     fixed = governed_paper_entry_safety_sequential_refusals(entries, refusals_under)
-    assert fixed == (d1, d3, d4) and portfolio_refusals(result, fixed) == fixed  # the schedule refuses its own refusals
+    assert fixed == (d1,) and portfolio_refusals(result, fixed) == fixed  # the schedule refuses its own refusals
     assert rounds[0] == entries and len(rounds) <= len(entries) + 1
     measured = lifet.portfolio_of(result, lifet.both_sides(refused=fixed))
+    snapshots = {snapshot.decision_sequence: snapshot for snapshot in measured.snapshots}
     evaluated = {
-        snapshot.decision_sequence: evaluate_governed_paper_entry_safety(lifecycle_observation(snapshot))
-        for snapshot in measured.snapshots
+        sequence: evaluate_governed_paper_entry_safety(lifecycle_observation(snapshot))
+        for sequence, snapshot in snapshots.items()
     }
-    assert [check_of(evaluated[d0], name).status for name in PORTFOLIO_IDS] == [S.PASS] * 3
+    assert [check_of(evaluated[d0], name).status for name in MEASURED_IDS] == [S.PASS] * 2
     # D_1: the SHORT of D_0 stopped out ~2.1% of NAV down at 12 h 31 s, the same UTC day: NT-R02 refuses the re-entry
     loss = check_of(evaluated[d1], "NT-R02")
     assert (loss.status, loss.reason) == (S.FAIL, code("NT-R02:intraday_loss_beyond_2pct_of_the_day_start_nav"))
     assert Fraction(loss.observed) < Fraction(-2, 100)
-    # D_2 opens the next UTC day on its midnight valuation: no intraday loss, flat, admitted
-    assert [check_of(evaluated[d2], name).status for name in PORTFOLIO_IDS] == [S.PASS] * 3
+    # D_2 opens the next UTC day flat, on the portfolio its admitted predecessors produced: an entry, and admitted
+    assert (snapshots[d2].position_quantity, snapshots[d2].candidate_position_quantity) == (d(0), d(-1))
+    assert [check_of(evaluated[d2], name).status for name in MEASURED_IDS] == [S.PASS] * 2
     assert check_of(evaluated[d2], "NT-R02").observed == d(0)
-    # D_3 and D_4 hold the D_2 SHORT: an open position never reads as zero open risk; refusing a hold changes nothing
+    # D_3 and D_4 hold the D_2 SHORT: no entry. The production NT-R03 blocks the holds and the entries alike
     for sequence in (d3, d4):
+        assert snapshots[sequence].candidate_position_quantity == snapshots[sequence].position_quantity == d(-1)
         assert check_of(evaluated[sequence], "NT-R03").reason == code(f"NT-R03:{OPEN_RISK[1]}")
-    # an evaluation on the neutral replay would refuse D_2: there the D_1 re-entry is still open at D_2
-    assert portfolio_refusals(result, ()) == (d1, d2, d3, d4)
+    for sequence in (d0, d2):
+        assert check_of(evaluated[sequence], "NT-R03").reason == code(f"NT-R03:{PROSPECTIVE}")
+    # the neutral replay admits D_1, so there D_2 holds the D_1 SHORT: it would be judged as a hold, not as the entry
+    neutral_d2 = lifet.snapshot_at(lifet.portfolio_of(result, lifet.both_sides()), snapshots[d2].decision_time_ns)
+    assert (neutral_d2.position_quantity, neutral_d2.candidate_position_quantity) == (d(-1), d(-1))
     sequential = lifet.governed_under(result, lifet.both_sides(refused=fixed))
     neutral = lifet.governed_under(result, lifet.both_sides())
     assert measured.outcome_digest == sequential.outcome_digest
@@ -1526,6 +1672,72 @@ def test_a_same_day_loss_beyond_2pct_refuses_the_re_entry_and_admission_is_seque
     assert entry_fill(sequential, d2).outcome is HistoricalExecutionFillOutcome.FILLED  # the next day's entry
     assert entry_fill(neutral, d1).outcome is HistoricalExecutionFillOutcome.FILLED
     assert all(item.decision_sequence != d2 for item in neutral.intents)  # there D_2 holds the D_1 SHORT
+
+
+def test_the_sequential_admission_is_the_unique_fixed_point_of_every_causal_evaluation() -> None:
+    """Exhaustive over three entries: every causal evaluation (an entry's refusal reads only the admissions before it)
+    has exactly one schedule that refuses its own refusals, found within four evaluations; a non-causal one is refused."""
+
+    entries = (3, 5, 8)
+    subsets = [tuple(item for index, item in enumerate(entries) if mask >> index & 1) for mask in range(8)]
+
+    def causal(tables: tuple[tuple[bool, ...], ...]) -> Callable[[tuple[int, ...]], tuple[int, ...]]:
+        def evaluate(refused: tuple[int, ...]) -> tuple[int, ...]:
+            refusing, admitted = [], 0
+            for index, entry in enumerate(entries):
+                if tables[index][admitted]:  # entry ``index`` reads the admissions of the entries before it only
+                    refusing.append(entry)
+                if entry not in refused:
+                    admitted |= 1 << index
+            return tuple(refusing)
+
+        return evaluate
+
+    for code_ in range(1 << 7):  # the tables of 1, 2 and 4 outcomes of the three entries
+        bits = [bool(code_ >> shift & 1) for shift in range(7)]
+        evaluate = causal((tuple(bits[:1]), tuple(bits[1:3]), tuple(bits[3:])))
+        calls: list[tuple[int, ...]] = []
+
+        def counted(refused: tuple[int, ...], evaluate=evaluate, calls=calls) -> tuple[int, ...]:  # noqa: ANN001
+            calls.append(refused)
+            return evaluate(refused)
+
+        fixed = governed_paper_entry_safety_sequential_refusals(entries, counted)
+        assert [subset for subset in subsets if evaluate(subset) == subset] == [fixed]
+        assert calls[0] == entries and len(calls) <= len(entries) + 1
+    with pytest.raises(GovernedPaperEntrySafetyError, match=f"^{code('sequential_admission_not_converged')}$"):
+        governed_paper_entry_safety_sequential_refusals(entries, lambda refused: entries if not refused else ())
+
+
+def test_the_audit_flat_entry_of_half_the_nav_fails_at_its_decision_and_is_refused_at_its_fill() -> None:
+    """P2-R04-PREENTRY-ZERO-MISCLASSIFIES-CANDIDATE, the audit's exact world: initial NAV 200, flat, a one-unit SHORT
+    entry at mark 100. On the old head NT-R02, NT-R03 and NT-R04 all passed on the pre-entry zero under the production
+    table and the engine filled the entry at ~50.03% of NAV. NT-R04 now reads the candidate at its decision and FAILs,
+    NT-R03 stays BLOCKED on the prospective entry risk, and the engine refuses the entry at its fill even where nothing
+    refused its decision."""
+
+    assert entry_safety._CHECKS is PRODUCTION_CHECKS  # noqa: SLF001
+    snapshot = lifet.snapshot_at(lifet.portfolio_at(lifet.FLAT_DAY, lifet.ONE_DAY, (), 200), lifet.decision_instant(0))
+    assert (snapshot.position_quantity, snapshot.nav, snapshot.candidate_position_quantity, snapshot.candidate_nav) == (
+        d(0),
+        d(200),
+        d(-1),
+        d("199.95"),
+    )
+    decision = evaluate_governed_paper_entry_safety(lifecycle_observation(snapshot))
+    risk, concentration = check_of(decision, "NT-R03"), check_of(decision, "NT-R04")
+    assert (risk.status, risk.observed, risk.reason) == (BLOCKED, d(0), code(f"NT-R03:{PROSPECTIVE}"))
+    assert (concentration.status, concentration.observed, concentration.reason) == (
+        S.FAIL,
+        d(Fraction(100) / Fraction("199.95")),
+        code("NT-R04:candidate_position_above_25pct_of_nav"),
+    )
+    entry = lifet.decision_fill(lifet.governed_of(lifet.FLAT_DAY, lifet.ONE_DAY, (), 200), lifet.decision_instant(0))
+    assert (entry.outcome, entry.reason) == (HistoricalExecutionFillOutcome.REJECTED, lifet.CONCENTRATION)
+    # a full candidate above 25% FAILs at its decision even where the book would cap its fill to a safe half unit
+    half = lifet.snapshot_at(lifet.portfolio_at(lifet.HALF_DAY, lifet.ONE_DAY, (), 300), lifet.decision_instant(0))
+    concentration = check_of(evaluate_governed_paper_entry_safety(lifecycle_observation(half)), "NT-R04")
+    assert (concentration.status, concentration.observed) == (S.FAIL, d(Fraction(100) / Fraction("299.95")))
 
 
 def test_an_unrepresentable_engine_nav_blocks_the_portfolio_checks_and_never_raises() -> None:

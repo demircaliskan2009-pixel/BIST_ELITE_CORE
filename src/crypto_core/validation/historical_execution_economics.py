@@ -178,24 +178,47 @@ attempt and its fill need a protective window, never a cycle window, a direction
 entry refusals or the absence of an invalidation; outcome v3 carries the protective ledgers and the pending attempt.
 The synthetic stress method does not support position-managed results and refuses them.
 
-Governed decision portfolio (``S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1``).
-``simulate_historical_execution_governed_paper_decision_portfolio`` is the same governed re-run, which also records, at
-every decision of the frozen trace, the portfolio as known at that instant BEFORE the decision is admitted (after the
-funding settlements and protective rules of the same nanosecond, before its fills). Its outcome is byte-identical to
-``simulate_historical_execution_governed_paper`` under the same schedule, and the recording changes no ledger. One
-snapshot holds:
+Information-time admission (``S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1``, schedule v4). The settlement ledger books a
+funding settlement at its liability instant from its final rate, also when the archive publishes that rate later
+(ex-post settlement accounting, unchanged): its cashflow, valuations, trades and terminal state. A liability and the
+knowledge of its amount are different facts, so a governed re-run under schedule v4 (the v3 schedule of a
+position-managed baseline) ADMITS on information time: at every admission instant ``t`` it reads the booked equity
+minus every settlement whose final rate is not visible at ``t`` (the publication-visible equity), the same view the
+decision portfolio records. An exposure-increasing fill is
+
+* ``risk_limit_exceeded`` under the risk rule above, evaluated on that publication-visible candidate equity;
+* refused (``governed_paper_position_concentration_exceeded_at_fill``) when its post-fill |q| × fill mark strictly
+  exceeds 25% of that candidate equity (PRDV4 §1.21 NT-R04 and §8.2; equality admits). The bound reads the quantity
+  actually filled, the execution price, this fill's own taker fee and the mark of the fill instant. It never reaches a
+  reduction, a close or a protective close-only fill.
+
+A final rate therefore reaches no intent, fill, transition, fee, protective record or snapshot before it is visible:
+before its publication, two archives that differ only in that rate produce the same admissions and the same snapshots
+(a booked amount outside the representation domain fails the whole run closed, like every ledger amount). Schedules v2
+and v3 keep the accepted admission on the booked equity, unchanged.
+
+Governed decision portfolio. ``simulate_historical_execution_governed_paper_decision_portfolio`` (schedule v4 only) is the
+same governed re-run, which also records, at every decision of the frozen trace, the portfolio as known at that instant
+BEFORE the decision is admitted (after the funding settlements and protective rules of the same nanosecond, before its
+fills). Its outcome is byte-identical to ``simulate_historical_execution_governed_paper`` under the same schedule, and
+the recording changes no ledger. One snapshot holds:
 
 * the exact position, and whether an order (a decision intent or a protective attempt) is still in flight;
-* the NAV as known then: initial equity + realized gross − fees + funding + unrealized at the latest fresh visible mark
-  (none needed while flat). A settlement whose final rate is not yet visible at the decision instant is excluded
-  (``unpublished_funding``), so ex-post settlement accounting never reaches back into an earlier instant. The NAV is
-  unavailable, with its ``nav_reason``, for an open position without a fresh mark and for an exact NAV outside the
-  numeric policy's representation domain;
+* the latest fresh visible mark of the instant, open position or not (none when none is fresh and positive);
+* the NAV as known then: the publication-visible equity, with an open position valued at that mark (none needed while
+  flat). ``unpublished_settlement_count`` counts the excluded settlements; their amounts are unknown at the instant, so
+  the snapshot records none of them. The NAV is unavailable, with its ``nav_reason``, for an open position without a
+  fresh mark and for an exact NAV outside the numeric policy's representation domain;
 * the NAV at the start of the decision's UTC day, as known at the decision instant: the engine's own valuation at that
   UTC midnight (the initial valuation when the run starts exactly then, a day-boundary valuation otherwise), with the
   same unpublished settlements excluded. It is unavailable, never substituted, on a partial first day (the run started
   after that midnight), for a decision exactly at the boundary (the boundary valuation follows the decision) and when
-  it lies outside the representation domain.
+  it lies outside the representation domain;
+* the candidate: the position the decision's intent targets if admitted and filled in full (the current position when
+  the decision makes no intent; a clamped intent targets flat) and, when it increases the magnitude of the position,
+  its projected NAV: the NAV minus the candidate's own taker fee at that mark. The projection is unavailable, with its
+  reason, without a fresh mark, without a NAV or outside the representation domain. It is the decision-time reading of
+  the candidate; the fill-time bound above is the exact one.
 
 Only admitted economic transitions earlier in the event order reach a snapshot: a rejected or unfilled intent leaves no
 state, and no later mark, fill, rate or admission is read. Each amount is rendered once from exact state.
@@ -1436,8 +1459,10 @@ class _Simulation:
         self.next_mark_check: tuple[int, int] | None = None
         self.protective_fills: dict[int, tuple[_Attempt, _Book]] = {}
         self.fill_index = len(run.decisions)  # protective fill events follow the decision indexes
-        # The governed decision portfolio (S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1): recorded only when a governed
-        # re-run asks for it, and never part of any ledger.
+        # Information-time admission and the governed decision portfolio (S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1): a
+        # governed re-run under schedule v4 only. The snapshots are recorded only when such a re-run asks for them, and
+        # neither is ever part of a ledger.
+        self.information_time = False
         self.decision_snapshots: list[HistoricalExecutionDecisionPortfolioSnapshot] | None = None
         self.day_start: tuple[int, Fraction] | None = None  # (instant, exact equity) of the latest day-start valuation
         self.settlements: list[tuple[int, int, Fraction]] = []  # (liability, rate visibility, exact cashflow)
@@ -1520,7 +1545,7 @@ class _Simulation:
         sealed: HistoricalExecutionFundingCashflow = _sealed(cashflow, "cashflow_digest")  # type: ignore[assignment]
         self.ledgers.funding.append(sealed)
         self.funding_total += amount
-        if self.decision_snapshots is not None:  # booked at the liability; its rate is known only from its visibility
+        if self.information_time:  # booked at the liability, its amount known only from its final rate's visibility
             self.settlements.append((liability_ns, _visibility(record), amount))  # type: ignore[arg-type]
         _amount(self.funding_total, "cumulative_funding")
         if self.trade is not None:
@@ -1665,7 +1690,22 @@ class _Simulation:
 
         return None
 
-    def _decision_snapshot(self, decision: HistoricalDecisionRecord, time_ns: int) -> None:
+    def _exposure_fill_admission(self, notional: Fraction, equity: Fraction) -> str | None:
+        """Admission hook of an exposure-increasing fill past the risk rule, on its exact post-fill notional at the fill
+        mark and its positive candidate equity: a refusal reason, or None (the historical model admits every one)."""
+
+        return None
+
+    def _unpublished_funding(self, time_ns: int) -> Fraction:
+        """The booked cashflow of every settlement whose final rate is not visible at ``time_ns``.
+
+        Every settlement booked so far is liable at or before ``time_ns``. Outside information time none is recorded, so
+        this is exactly zero and an admission reads the booked equity, as accepted.
+        """
+
+        return sum((amount for _, visible, amount in self.settlements if visible > time_ns), Fraction(0))
+
+    def _decision_snapshot(self, decision: HistoricalDecisionRecord, time_ns: int, intent: _Intent | None) -> None:
         """Record the portfolio as known at this decision instant, before its admission (only when asked to)."""
 
         if self.decision_snapshots is None:
@@ -1673,15 +1713,32 @@ class _Simulation:
         # Every settlement so far is liable at or before this instant; one whose final rate is not visible yet is unknown.
         unpublished = [(liability, amount) for liability, visible, amount in self.settlements if visible > time_ns]
         quantity = self.position.quantity
-        mark = None if quantity == 0 else self._fresh_mark(time_ns)
+        mark = self._fresh_mark(time_ns)
+        exact = Fraction(0)
         nav: str | None = None
         nav_reason = "no_fresh_visible_mark"
         if quantity == 0 or mark is not None:
             unrealized = self.position.unrealized(None if mark is None else mark.price)
-            nav = historical_execution_render_amount(
-                self._equity(unrealized) - sum((amount for _, amount in unpublished), Fraction(0))
-            )
+            exact = self._equity(unrealized) - self._unpublished_funding(time_ns)
+            nav = historical_execution_render_amount(exact)
             nav_reason = "" if nav is not None else "nav_unrepresentable"
+        # The candidate the decision's intent targets, and its entry projected at the fresh mark with its own taker fee.
+        signed = Fraction(0)
+        if intent is not None:
+            signed = intent.requested if intent.record.side is HistoricalExecutionSide.BUY else -intent.requested
+        candidate = quantity + signed
+        candidate_nav: str | None = None
+        candidate_reason = ""
+        if abs(candidate) > abs(quantity):
+            if mark is None:
+                candidate_reason = "no_fresh_visible_mark"
+            elif nav is None:
+                candidate_reason = "nav_unavailable"
+            else:
+                candidate_nav = historical_execution_render_amount(
+                    exact - abs(signed) * mark.price * self.fee_bps / _BPS
+                )
+                candidate_reason = "" if candidate_nav is not None else "candidate_nav_unrepresentable"
         day = time_ns // _UTC_DAY_NS * _UTC_DAY_NS
         day_nav: str | None = None
         if self.day_start is None or self.day_start[0] > day:
@@ -1706,10 +1763,10 @@ class _Simulation:
             day_start_ns=day,
             day_start_nav=day_nav,
             day_start_reason=reason,
-            unpublished_funding=historical_execution_render_amount(
-                sum((amount for _, amount in unpublished), Fraction(0))
-            ),
             unpublished_settlement_count=len(unpublished),
+            candidate_position_quantity=_amount(candidate, "candidate_position_quantity"),
+            candidate_nav=candidate_nav,
+            candidate_nav_reason=candidate_reason,
             snapshot_digest="",
         )
         self.decision_snapshots.append(_sealed(record, "snapshot_digest"))  # type: ignore[arg-type]
@@ -2166,16 +2223,18 @@ class _Simulation:
         fee_amount = price * filled * self.fee_bps / _BPS
         if abs(transition.post.quantity) > abs(self.position.quantity):
             mark = self.marks.at(book.visibility, "fill")
+            # information time excludes every settlement whose final rate is not visible at the fill (otherwise none)
             candidate_equity = self._equity(
                 transition.post.unrealized(mark.price),
                 realized=self.realized + transition.realized_gross,
                 fees=self.fees + fee_amount,
-            )
-            if (
-                candidate_equity <= 0
-                or abs(transition.post.quantity) * mark.price > self.max_leverage * candidate_equity
-            ):
+            ) - self._unpublished_funding(book.visibility)
+            notional = abs(transition.post.quantity) * mark.price
+            if candidate_equity <= 0 or notional > self.max_leverage * candidate_equity:
                 return reject("risk_limit_exceeded", **quoted)
+            refused = self._exposure_fill_admission(notional, candidate_equity)
+            if refused is not None:
+                return reject(refused, **quoted)
         outcome = (
             HistoricalExecutionFillOutcome.FILLED
             if filled == requested
@@ -2390,8 +2449,8 @@ class _Simulation:
             elif priority == _PRIORITY_PROTECTIVE:
                 self._protective_event(time_ns, index)
             elif priority == _PRIORITY_DECISION:
-                self._decision_snapshot(decisions[index], time_ns)
-                intent = self._intent(decisions[index])
+                intent = self._intent(decisions[index])  # derived only: no state changes before its admission
+                self._decision_snapshot(decisions[index], time_ns, intent)
                 if intent is None:
                     continue
                 refused = self._position_management_admission(intent)
@@ -2873,6 +2932,11 @@ HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION = "historical-executi
 _GOVERNED_SCHEMA_VERSION = HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION
 HISTORICAL_EXECUTION_PROTECTIVE_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION = "historical-execution-governed-paper-outcome.v3"
 _PROTECTIVE_GOVERNED_SCHEMA_VERSION = HISTORICAL_EXECUTION_PROTECTIVE_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION
+# Schedule v4: the v3 schedule re-run on information time (S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1, module docstring).
+HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v4"
+_INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION
+# PRDV4 §1.21 NT-R04 and §8.2: no single position strictly above 25% of NAV; schedule v4 enforces it at every fill.
+HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP = Fraction(25, 100)
 _GOVERNED_DIGEST_FIELD = "outcome_digest"
 _PORTFOLIO_DIGEST_FIELD = "portfolio_digest"
 _GOVERNED_REASON_PREFIX = "governed_paper_"
@@ -2916,7 +2980,8 @@ class HistoricalExecutionAdmissionSchedule:
     ``entry_refused_decision_sequences`` (strictly increasing) names the decisions whose entry is refused: an intent of
     such a decision that would increase the magnitude of the position is refused at its decision instant, while an
     exit or a reduction of an open position stays subject only to the other rules. ``protective_windows`` (schema v3
-    only) are the ordered, disjoint DEC-1 protective windows of a position-managed baseline.
+    and v4 only) are the ordered, disjoint DEC-1 protective windows of a position-managed baseline. Schema v4 carries
+    exactly the v3 fields; its re-run admits on information time (see the module docstring).
     """
 
     schema_version: str
@@ -3015,12 +3080,16 @@ HISTORICAL_EXECUTION_GOVERNED_PAPER_DECISION_PORTFOLIO_SCHEMA_VERSION = (
 class HistoricalExecutionDecisionPortfolioSnapshot:
     """The governed portfolio as known at one decision instant, before that decision is admitted.
 
-    Every amount is rendered once from exact engine state. ``nav`` and ``day_start_nav`` exclude the settlements whose
-    final rate is not yet visible at the decision instant (``unpublished_funding``, ``unpublished_settlement_count``).
-    ``nav`` is None with its ``nav_reason`` when an open position has no fresh visible mark or the exact NAV is outside
-    the representation domain. ``day_start_nav`` is the NAV at ``day_start_ns``, the UTC midnight that starts the
-    decision's day, and is None with its ``day_start_reason`` when the engine has not valued that instant before the
-    decision or the amount is outside the representation domain.
+    Every amount is rendered once from exact engine state. ``mark_*`` is the latest fresh visible mark of the instant
+    (None when none is fresh and positive). ``nav`` and ``day_start_nav`` exclude the settlements whose final rate is not
+    yet visible at the decision instant (``unpublished_settlement_count``; their amounts are unknown then and recorded
+    nowhere here). ``nav`` is None with its ``nav_reason`` when an open position has no fresh visible mark or the exact
+    NAV is outside the representation domain. ``day_start_nav`` is the NAV at ``day_start_ns``, the UTC midnight that
+    starts the decision's day, and is None with its ``day_start_reason`` when the engine has not valued that instant
+    before the decision or the amount is outside the representation domain. ``candidate_position_quantity`` is the
+    position the decision's intent targets if admitted and filled in full; when it increases the magnitude of the
+    position, ``candidate_nav`` is the NAV minus the candidate's own taker fee at the mark, or None with its
+    ``candidate_nav_reason``. Without such a candidate both are absent (None, "").
     """
 
     decision_sequence: int
@@ -3035,14 +3104,16 @@ class HistoricalExecutionDecisionPortfolioSnapshot:
     day_start_ns: int
     day_start_nav: str | None
     day_start_reason: str
-    unpublished_funding: str | None
     unpublished_settlement_count: int
+    candidate_position_quantity: str
+    candidate_nav: str | None
+    candidate_nav_reason: str
     snapshot_digest: str
 
 
 @dataclass(frozen=True)
 class HistoricalExecutionGovernedPaperDecisionPortfolio:
-    """One snapshot per decision of the frozen trace, in order, from ONE governed re-run under one schedule.
+    """One snapshot per decision of the frozen trace, in order, from ONE governed re-run under one schedule v4.
 
     ``outcome_digest`` is that re-run's governed outcome, byte-identical to ``simulate_historical_execution_governed_paper``
     under the same schedule. ``simulated`` is False exactly when that re-run could not be computed, and then there is no
@@ -3132,6 +3203,7 @@ class _GovernedPaperSimulation(_Simulation):
         )
         self.protective_starts = [start for start, _ in self.protective_windows]
         super().__init__(**arguments)  # type: ignore[arg-type]
+        self.information_time = schedule.schema_version == _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION
         if record_decision_portfolio:
             self.decision_snapshots = []
 
@@ -3196,6 +3268,13 @@ class _GovernedPaperSimulation(_Simulation):
             return "governed_paper_price_ceiling_exceeded"
         return None
 
+    def _exposure_fill_admission(self, notional: Fraction, equity: Fraction) -> str | None:
+        """Schedule v4: the NT-R04 concentration bound on the exact post-fill position (strictly above 25% refuses)."""
+
+        if self.information_time and notional > HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP * equity:
+            return "governed_paper_position_concentration_exceeded_at_fill"
+        return None
+
 
 def canonical_historical_execution_admission_schedule(value: object) -> HistoricalExecutionAdmissionSchedule:
     """Validate one declared admission schedule exactly: types, canonical decimals and ordered disjoint windows."""
@@ -3205,6 +3284,7 @@ def canonical_historical_execution_admission_schedule(value: object) -> Historic
     if type(value.schema_version) is not str or value.schema_version not in (
         _SCHEDULE_SCHEMA_VERSION,
         _PROTECTIVE_SCHEDULE_SCHEMA_VERSION,
+        _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION,
     ):
         raise _fail("admission_schedule_malformed:schema_version")
     _canonical_protective_windows(value)
@@ -3447,10 +3527,16 @@ def _governed_run(
     """The one governed re-run: its outcome, and its decision snapshots when asked to record them."""
 
     schedule = canonical_historical_execution_admission_schedule(schedule)
+    if record_decision_portfolio and schedule.schema_version != _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION:
+        raise _fail("decision_portfolio_needs_the_information_time_schedule")
     baseline = _governed_baseline(result, expected_result_digest)
     protective = baseline.position_management is not None
-    expected_schedule = _PROTECTIVE_SCHEDULE_SCHEMA_VERSION if protective else _SCHEDULE_SCHEMA_VERSION
-    if schedule.schema_version != expected_schedule:
+    expected_schedules = (
+        (_PROTECTIVE_SCHEDULE_SCHEMA_VERSION, _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION)
+        if protective
+        else (_SCHEDULE_SCHEMA_VERSION,)
+    )
+    if schedule.schema_version not in expected_schedules:
         raise _fail("admission_schedule_version_mismatch")
     if any(
         item.window_start_ns < result.evaluation_start_ns or item.window_end_ns > result.evaluation_end_ns
@@ -3503,8 +3589,10 @@ def simulate_historical_execution_governed_paper_decision_portfolio(
 ) -> HistoricalExecutionGovernedPaperDecisionPortfolio:
     """The governed re-run under ``schedule`` with its decision portfolio (see the module docstring).
 
-    The authorities, refusals and failure modes are exactly those of ``simulate_historical_execution_governed_paper``,
-    whose outcome under the same inputs is the one ``outcome_digest`` binds. Pure.
+    ``schedule`` must be the information-time schedule v4 (``decision_portfolio_needs_the_information_time_schedule``
+    otherwise): a snapshot is information-time only where the admissions it conditions on are too. The authorities,
+    refusals and failure modes are exactly those of ``simulate_historical_execution_governed_paper``, whose outcome under
+    the same inputs is the one ``outcome_digest`` binds. Pure.
     """
 
     outcome, snapshots = _governed_run(result, expected_result_digest, schedule, record_decision_portfolio=True)
@@ -4610,7 +4698,9 @@ __all__ = [
     "HISTORICAL_EXECUTION_GOVERNED_PAPER_DECISION_PORTFOLIO_SCHEMA_VERSION",
     "HISTORICAL_EXECUTION_GOVERNED_PAPER_NON_CLAIM_FLAGS",
     "HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION",
+    "HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION",
     "HISTORICAL_EXECUTION_NON_CLAIM_FLAGS",
+    "HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP",
     "HISTORICAL_EXECUTION_PROTECTIVE_ADMISSION_SCHEDULE_SCHEMA_VERSION",
     "HISTORICAL_EXECUTION_PROTECTIVE_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION",
     "HistoricalExecutionExcursionProtection",
