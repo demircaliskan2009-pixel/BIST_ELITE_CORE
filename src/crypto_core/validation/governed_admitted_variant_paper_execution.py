@@ -56,6 +56,17 @@ from day 0 on, carries ``GovernedPaperDayProtectionInputs``; a lineage never swi
   counted.
 
 Without protection inputs, every seal and evidence is exactly the accepted v2 artifact.
+
+Native portfolio NO-TRADE lineage (``S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1``, seal v4 and evidence v4). A protective
+lineage whose protection inputs set ``portfolio_no_trade`` does so on every day from day 0, and never switches. Its
+schedule is the engine's information-time schedule v4: every admission of its replay, at a decision and at a fill, reads
+the publication-visible equity, and an entry fill above 25% of NAV is refused at the fill. Its entry gate evaluates rule
+set v3: NT-R02, NT-R03 and NT-R04 on the governed decision portfolio the one engine derives under the schedule. The
+admissions are sequential (``governed_paper_entry_safety_sequential_refusals``): the replay starts from every entry
+refused and re-evaluates under the previous round's refusals until the schedule refuses exactly the entries its own
+evaluation refuses, the unique causal fixed point, so each entry is judged on the portfolio its admitted predecessors
+produced. The engine then re-runs under that schedule. Every other rule is the v3 lineage's, and without
+``portfolio_no_trade`` every protective seal and evidence is exactly the accepted v3 artifact.
 """
 
 from __future__ import annotations
@@ -85,8 +96,11 @@ from crypto_core.validation.edge_kill_quarantine_decision import (
 from crypto_core.validation.governed_paper_entry_safety import (
     GovernedPaperEntrySafetyDecision,
     GovernedPaperEntrySafetyEvidence,
+    GovernedPaperEntrySafetyPortfolio,
     GovernedPaperEntrySafetyProtection,
     build_governed_paper_entry_safety_evidence,
+    governed_paper_entry_safety_entry_sequences,
+    governed_paper_entry_safety_sequential_refusals,
 )
 from crypto_core.validation.governed_paper_execution_authority import (
     GovernedPaperApprovalKind,
@@ -123,6 +137,7 @@ from crypto_core.validation.historical_decision_run import build_historical_deci
 from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION,
+    HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_PROTECTIVE_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HistoricalExecutionAdmissionSchedule,
     HistoricalExecutionAdmissionWindow,
@@ -195,8 +210,11 @@ from crypto_core.validation.strategy_signal_to_paper_intent import (
 _PREFIX = "governed_admitted_variant_paper_execution"
 _SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v2"
 _PROTECTIVE_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v3"
+_PORTFOLIO_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v4"
 _EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v2"
 _PROTECTIVE_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v3"
+_PORTFOLIO_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v4"
+_PROTECTIVE_SEALS = (_PROTECTIVE_SEAL_SCHEMA_VERSION, _PORTFOLIO_SEAL_SCHEMA_VERSION)
 _SEAL_DIGEST_FIELD = "seal_digest"
 _EVIDENCE_DIGEST_FIELD = "evidence_digest"
 _UTC_DAY_NS = 86_400_000_000_000
@@ -349,7 +367,8 @@ class GovernedPaperDayProtectionInputs:
 
     ``revocations`` are the human revocations effective inside this day. ``ohlc_archive`` holds the adopted source's bars
     known at ``E_{k+1}``. The excursion cycle is the cycle that decided the opening intent of an excursion the previous
-    seal left open; it is None exactly when no excursion was open then.
+    seal left open; it is None exactly when no excursion was open then. ``portfolio_no_trade`` selects the native
+    portfolio NO-TRADE lineage (seal v4, entry rule set v3) for the whole lineage.
     """
 
     authority_inputs: GovernedPaperProtectiveAuthorityInputs
@@ -358,6 +377,7 @@ class GovernedPaperDayProtectionInputs:
     ohlc_archive: HistoricalOhlcBarArchive
     excursion_cycle_inputs: GovernedPaperCycleInputs | None
     excursion_cycle: GovernedPaperCycleAuthority | None
+    portfolio_no_trade: bool = False
 
 
 @dataclass(frozen=True)
@@ -854,6 +874,7 @@ class _SealProof:
     facts: dict[str, object]
     blocked: tuple[str, ...]
     protective: bool = False
+    portfolio: bool = False
 
 
 def _closing(inputs: GovernedPaperDaySealInputs, cycle: GovernedPaperCycleAuthority, sleeve_id: str, end: int):  # noqa: ANN202
@@ -907,6 +928,7 @@ class _DayProtection:
     archive: HistoricalOhlcBarArchive
     archive_digest: str
     excursion: GovernedPaperCycleReservation | None
+    portfolio_no_trade: bool
 
 
 def _day_protection(  # noqa: C901 - one linear proof of the protective inputs
@@ -922,10 +944,17 @@ def _day_protection(  # noqa: C901 - one linear proof of the protective inputs
     protection = inputs.protection
     if protection is not None and type(protection) is not GovernedPaperDayProtectionInputs:
         raise _fail("protection_inputs_malformed")
-    if prior is not None and (prior.schema_version == _PROTECTIVE_SEAL_SCHEMA_VERSION) is not (protection is not None):
+    if prior is not None and (prior.schema_version in _PROTECTIVE_SEALS) is not (protection is not None):
         raise _fail("protective_lineage_switched")
     if protection is None:
         return None
+    if type(protection.portfolio_no_trade) is not bool:
+        raise _fail("protection_inputs_malformed:portfolio_no_trade")
+    if (
+        prior is not None
+        and (prior.schema_version == _PORTFOLIO_SEAL_SCHEMA_VERSION) is not protection.portfolio_no_trade
+    ):
+        raise _fail("portfolio_no_trade_lineage_switched")
     authority, authority_inputs = protection.authority, protection.authority_inputs
     if type(authority) is not GovernedPaperProtectiveAuthority:
         raise _fail("protective_authority_malformed")
@@ -1002,6 +1031,7 @@ def _day_protection(  # noqa: C901 - one linear proof of the protective inputs
         archive=archive,
         archive_digest=archive_verification.recomputed_digest,
         excursion=excursion,
+        portfolio_no_trade=protection.portfolio_no_trade,
     )
 
 
@@ -1099,6 +1129,8 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
     schedule = HistoricalExecutionAdmissionSchedule(
         schema_version=HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION
         if protection is None
+        else HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION
+        if protection.portfolio_no_trade
         else HISTORICAL_EXECUTION_PROTECTIVE_ADMISSION_SCHEDULE_SCHEMA_VERSION,
         schedule_id=f"{genesis.genesis_id}-schedule",
         windows=windows,
@@ -1169,6 +1201,7 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
             outstanding_protective_obligation_count=0,
         )
     protective = protection is not None
+    portfolio = protection is not None and protection.portfolio_no_trade
     try:
         if not attested:
             raise _Blocked("closing_head_not_attested")
@@ -1183,10 +1216,10 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
         # The engine ran under the schedule the entry-safety refusals completed; a blocked day keeps the opening one.
         facts["schedule"] = replay.schedule
         facts["schedule_digest"] = historical_execution_admission_schedule_digest(replay.schedule)
-        return _SealProof(facts, (), protective)
+        return _SealProof(facts, (), protective, portfolio)
     except _Blocked as blocked:
         facts.update(empty)
-        return _SealProof(facts, (_reason(blocked.code),), protective)
+        return _SealProof(facts, (_reason(blocked.code),), protective, portfolio)
 
 
 @dataclass(frozen=True)
@@ -1211,7 +1244,8 @@ def _replay(
     Every artifact is built here. The economics validates the archive's economic series first, so an archive it cannot
     compute keeps its BLOCKED day; only then do the entry-safety refusals complete the schedule the engine re-runs under.
     A protective lineage builds the economics under the authority's position-management policy and the day's OHLC
-    archive, and the entry gate evaluates rule set v2 on the same protective context.
+    archive, and the entry gate evaluates rule set v2 on the same protective context; a native portfolio lineage
+    evaluates rule set v3 on the decision portfolio of its information-time schedule v4.
     """
 
     genesis = authority.genesis
@@ -1264,13 +1298,42 @@ def _replay(
         or economics.simulated_economics_computed is not True
     ):
         raise _Blocked(f"economics_not_computed:{economics.gate_verdict.value}")
-    entry_safety = build_governed_paper_entry_safety_evidence(
-        authority=authority,
-        run=run,
-        dataset=inputs.dataset,
-        invalidated_from_ns=schedule.invalidated_from_ns,
-        protection=gate_protection,
-    )
+
+    evaluations: dict[tuple[int, ...], GovernedPaperEntrySafetyEvidence] = {}
+
+    def evaluated(refused: tuple[int, ...]) -> GovernedPaperEntrySafetyEvidence:
+        """The gate under the schedule refusing ``refused``; with a governed portfolio (rule set v3) only.
+
+        Pure in ``refused`` within this replay, so each schedule is evaluated once: the fixed point's own evaluation is
+        the one sealed.
+        """
+
+        if refused not in evaluations:
+            trial = replace(schedule, entry_refused_decision_sequences=refused)
+            evaluations[refused] = build_governed_paper_entry_safety_evidence(
+                authority=authority,
+                run=run,
+                dataset=inputs.dataset,
+                invalidated_from_ns=schedule.invalidated_from_ns,
+                protection=gate_protection,
+                portfolio=GovernedPaperEntrySafetyPortfolio(economics, trial),
+            )
+        return evaluations[refused]
+
+    if protection is not None and protection.portfolio_no_trade:
+        refused = governed_paper_entry_safety_sequential_refusals(
+            governed_paper_entry_safety_entry_sequences(run),
+            lambda current: evaluated(current).refused_decision_sequences,
+        )
+        entry_safety = evaluated(refused)
+    else:
+        entry_safety = build_governed_paper_entry_safety_evidence(
+            authority=authority,
+            run=run,
+            dataset=inputs.dataset,
+            invalidated_from_ns=schedule.invalidated_from_ns,
+            protection=gate_protection,
+        )
     schedule = replace(schedule, entry_refused_decision_sequences=entry_safety.refused_decision_sequences)
     outcome = simulate_historical_execution_governed_paper(
         economics, expected_result_digest=economics.result_digest, schedule=schedule
@@ -1551,7 +1614,11 @@ def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the 
 def _assemble_seal(proof: _SealProof) -> GovernedPaperDaySeal:
     status = GovernedPaperDaySealStatus.BLOCKED if proof.blocked else GovernedPaperDaySealStatus.SEALED
     seed = GovernedPaperDaySeal(
-        schema_version=_PROTECTIVE_SEAL_SCHEMA_VERSION if proof.protective else _SEAL_SCHEMA_VERSION,
+        schema_version=_PORTFOLIO_SEAL_SCHEMA_VERSION
+        if proof.portfolio
+        else _PROTECTIVE_SEAL_SCHEMA_VERSION
+        if proof.protective
+        else _SEAL_SCHEMA_VERSION,
         status=status,
         sealed=status is GovernedPaperDaySealStatus.SEALED,
         **proof.facts,  # type: ignore[arg-type]
@@ -1713,7 +1780,7 @@ def build_governed_paper_execution_evidence(inputs: GovernedPaperExecutionInputs
     )
     phases = [item.phase.value for item in cycles]
     ordinary = [index for index, value in enumerate(phases) if value == "ORDINARY"]
-    protective = terminal.schema_version == _PROTECTIVE_SEAL_SCHEMA_VERSION
+    protective = terminal.schema_version in _PROTECTIVE_SEALS
     extension: dict[str, object] = {}
     if protective:
         extension = {
@@ -1722,7 +1789,11 @@ def build_governed_paper_execution_evidence(inputs: GovernedPaperExecutionInputs
             "terminal_outstanding_protective_obligation_count": terminal.outstanding_protective_obligation_count,
         }
     seed = GovernedPaperExecutionEvidence(
-        schema_version=_PROTECTIVE_EVIDENCE_SCHEMA_VERSION if protective else _EVIDENCE_SCHEMA_VERSION,
+        schema_version=_PORTFOLIO_EVIDENCE_SCHEMA_VERSION
+        if terminal.schema_version == _PORTFOLIO_SEAL_SCHEMA_VERSION
+        else _PROTECTIVE_EVIDENCE_SCHEMA_VERSION
+        if protective
+        else _EVIDENCE_SCHEMA_VERSION,
         status=status,
         ready=status is GovernedPaperExecutionStatus.READY,
         evidence_id=evidence_id,
