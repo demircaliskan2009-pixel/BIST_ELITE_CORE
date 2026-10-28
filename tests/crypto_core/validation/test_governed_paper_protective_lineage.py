@@ -113,6 +113,7 @@ def protection_for(
     revocations: tuple = (),
     archive: object | None = None,
     portfolio_no_trade: bool = False,
+    market_data_integrity: bool = False,
 ) -> GovernedPaperDayProtectionInputs:
     """The protective inputs of ``day``: the world's authority, the day's OHLC archive and the open excursion's cycle."""
 
@@ -130,6 +131,7 @@ def protection_for(
         excursion_cycle_inputs=None if excursion is None else excursion[0],
         excursion_cycle=None if excursion is None else excursion[1],
         portfolio_no_trade=portfolio_no_trade,
+        market_data_integrity=market_data_integrity,
     )
 
 
@@ -769,3 +771,88 @@ def test_a_native_portfolio_lineage_is_one_from_day_0_or_never(native_portfolio_
         build_governed_paper_day_seal(switched(native[1], 1))
     with gpe.refused("protective_lineage_switched"):
         build_governed_paper_day_seal(replace(native[1].seal_inputs, protection=None))
+
+
+# --- G. rule set v4: the native market-data integrity lineage (seal v5, evidence v5) -------------------------------------
+
+V5 = "governed-paper-day-seal.v5"
+# The accepted-main identity (main cde35d4f) of the protective authority and the day-3 OHLC archive of world G: the
+# declared bar origin of archive schema v2 leaves every source and archive of undeclared origin exactly as it was.
+ACCEPTED_MAIN_AUTHORITY_G = "a584f0501d0226838ca4753aa95584f13284714f8b6a3ad175c75b88a01e9e72"
+ACCEPTED_MAIN_OHLC_G_DAY3 = "a14730907df0a33ef41a3fcc811e1726a252d9d6c4e9db98bfaa63196c34428b"
+
+
+@functools.cache
+def market_data_lineage(count: int) -> tuple:
+    """World G's first ``count`` protective days of the market-data integrity lineage (seal v5), under that table only."""
+
+    assert gpe.entry_safety._CHECKS is PERMISSIVE_WITH_NATIVE_PORTFOLIO  # noqa: SLF001
+    if count == 0:
+        return ()
+    days = market_data_lineage(count - 1)
+    return (*days, protective_day(days, portfolio_no_trade=True, market_data_integrity=True))
+
+
+def test_the_protective_authority_and_its_ohlc_archive_keep_their_accepted_main_identity() -> None:
+    assert prot.world_authority()[1].authority_digest == ACCEPTED_MAIN_AUTHORITY_G
+    archive = prot.world_ohlc(3)
+    assert (archive.archive_digest, archive.schema_version, archive.source.bar_origin) == (
+        ACCEPTED_MAIN_OHLC_G_DAY3,
+        "historical-ohlc-bar-archive.v1",
+        None,
+    )
+
+
+def test_the_market_data_lineage_changes_only_its_version_and_rule_set_and_reverifies(
+    native_portfolio_gate: None,
+) -> None:
+    days, native = market_data_lineage(4), portfolio_lineage(4)
+    digest = gpe.entry_safety.governed_paper_entry_safety_rule_set_digest(
+        protective=True, portfolio=True, market_data=True
+    )
+    for item, old in zip(days, native, strict=True):
+        seal = item.seal
+        assert (seal.schema_version, seal.status, seal.reason_codes) == (V5, SEALED, ())
+        assert seal.entry_safety_rule_set_digest == digest != old.seal.entry_safety_rule_set_digest
+        # the same admissions, schedule, outcome and history as the v4 lineage under this table
+        for name in ("schedule", "governed_outcome_digest", "episodes", "funding_events", "sealed_history_digest"):
+            assert getattr(seal, name) == getattr(old.seal, name), name
+        assert [decision.entry_permitted for decision in seal.entry_safety_decisions] == [
+            decision.entry_permitted for decision in old.seal.entry_safety_decisions
+        ]
+        verification = verify_governed_paper_day_seal(seal, item.seal_inputs)
+        assert (verification.intact, verification.reason_codes) == (True, ())
+    evidence = evidence_of(days)
+    assert (evidence.schema_version, evidence.status) == (
+        "governed-paper-execution-evidence.v5",
+        GovernedPaperExecutionStatus.READY,
+    )
+    verification = verify_governed_paper_execution_evidence(evidence, gpe.evidence_inputs(days, gpe.scenario("G")))
+    assert (verification.intact, verification.reason_codes) == (True, ())
+    payload = governed_paper_day_seal_to_dict(days[3].seal)
+    assert payload["schema_version"] == V5 and "protective_authority_digest" in payload
+
+
+def test_a_market_data_lineage_is_one_from_day_0_or_never_and_only_on_a_portfolio_lineage(
+    native_portfolio_gate: None,
+) -> None:
+    market, native = market_data_lineage(2), portfolio_lineage(2)
+
+    def switched(item: object, **changes: object):  # noqa: ANN202
+        inputs = item.seal_inputs  # type: ignore[attr-defined]
+        return replace(inputs, protection=replace(inputs.protection, **changes))
+
+    with gpe.refused("market_data_integrity_lineage_switched"):
+        build_governed_paper_day_seal(switched(market[1], market_data_integrity=False))
+    with gpe.refused("market_data_integrity_lineage_switched"):
+        build_governed_paper_day_seal(switched(native[1], market_data_integrity=True))
+    with gpe.refused("market_data_integrity_needs_the_portfolio_lineage"):
+        build_governed_paper_day_seal(switched(market[0], portfolio_no_trade=False))
+    with gpe.refused("protection_inputs_malformed:market_data_integrity"):
+        build_governed_paper_day_seal(switched(market[1], market_data_integrity=1))
+    with gpe.refused("portfolio_no_trade_lineage_switched"):
+        build_governed_paper_day_seal(switched(market[1], portfolio_no_trade=False, market_data_integrity=False))
+    # a v5 seal re-labelled v4 (or a v4 seal re-labelled v5) never verifies, even resealed
+    for item, label in ((market[1], "governed-paper-day-seal.v4"), (native[1], V5)):
+        for forged in (replace(item.seal, schema_version=label), reseal(item.seal, schema_version=label)):
+            assert not verify_governed_paper_day_seal(forged, item.seal_inputs).intact

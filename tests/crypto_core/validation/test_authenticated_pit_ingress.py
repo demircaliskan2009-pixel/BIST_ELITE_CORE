@@ -20,9 +20,12 @@ from crypto_core.data.requirements import (
     DataRequirementKey,
     DataRequirementRegistry,
     data_requirement_registry_digest,
+    data_requirement_registry_from_dict,
+    data_requirement_registry_to_dict,
     default_perp_data_requirement_registry,
 )
 from crypto_core.strategy.source_packet import build_source_packet
+from crypto_core.strategy.spec import strategy_spec_digest, validate_strategy_spec
 from crypto_core.validation.authenticated_pit_ingress import (
     AUTHENTICATED_PIT_INGRESS_NON_CLAIM_FLAGS,
     AuthenticatedPitIngressError,
@@ -33,10 +36,14 @@ from crypto_core.validation.authenticated_pit_ingress import (
     CapturedBookSnapshot,
     CaptureDeclaration,
     CapturedFundingSettlement,
+    CapturedIndexPrice,
     CapturedLevel,
     CapturedMarkPrice,
+    CapturedTrade,
     CaptureStreamDeclaration,
     NativeBookContinuityProfile,
+    NativeIndexPublicationProfile,
+    NativeTradeContinuityProfile,
     authenticated_pit_ingress_evidence_digest,
     authenticated_pit_ingress_evidence_from_payload,
     authenticated_pit_ingress_evidence_to_dict,
@@ -53,6 +60,7 @@ from crypto_core.validation.edge_source_packet_evidence import (
     build_edge_source_packet_evidence,
     edge_source_packet_evidence_digest,
 )
+from crypto_core.validation.edge_strategy_spec_admission import build_edge_strategy_spec_admission
 from crypto_core.validation.historical_pit_dataset import (
     HistoricalPitDataset,
     HistoricalPitRecord,
@@ -351,7 +359,19 @@ def world_chain():
 
 
 @functools.cache
-def _intake():
+def _kill_policy():
+    return build_edge_kill_criteria_policy(
+        policy_id="kp-1",
+        correlation_id="corr-1",
+        kill_criteria=pit.CRITERIA,
+        thresholds_approved=True,
+        approval_reference="gov-1",
+        approval_digest="d" * 64,
+    )
+
+
+@functools.cache
+def _intake(keys: tuple[str, ...] = econ.KEYS):
     packet = build_source_packet(
         packet_id="pkt-1",
         source_type="academic_paper",
@@ -362,14 +382,7 @@ def _intake():
         content_digest="c" * 64,
         market_scope_tags=("crypto_perpetuals",),
     )
-    kill_policy = build_edge_kill_criteria_policy(
-        policy_id="kp-1",
-        correlation_id="corr-1",
-        kill_criteria=pit.CRITERIA,
-        thresholds_approved=True,
-        approval_reference="gov-1",
-        approval_digest="d" * 64,
-    )
+    kill_policy = _kill_policy()
     return build_edge_idea_intake_evidence(
         packet,
         expected_source_packet_digest=packet.packet_digest,
@@ -378,7 +391,7 @@ def _intake():
         candidate_strategy_id="passive-funding-carry",
         edge_family="funding_basis_carry",
         economic_rationale="Funding pays carry.",
-        data_requirement_keys=econ.KEYS,
+        data_requirement_keys=keys,
         declared_regime_dependence="positive_funding_regime",
         kill_criteria_draft=pit.CRITERIA,
         kill_criteria_policy=kill_policy,
@@ -1553,3 +1566,370 @@ def test_malformed_inputs_and_authority_objects_raise() -> None:
         ingest(moving_book(range(2)), expected_source_manifest_digest="x")
     with pytest.raises(AuthenticatedPitIngressError, match="ingress_id_invalid"):
         ingest(moving_book(range(2)), ingress_id=" ingress")
+
+
+# --- G. trades and index prices (S1_MARKET_DATA_INTEGRITY_NATIVE_MEASUREMENT_CLOSURE_V1, evidence v2) ----------------------
+
+# The accepted-main identities (main cde35d4f) of the clean three-stream capture: a capture without a trade or an index
+# stream keeps its v1 evidence and its dataset byte-identical.
+ACCEPTED_MAIN_WORLD_INGRESS_DIGEST = "571085ab9c979154eeae99bfef290015e39d093d92481841a435d670e9a9ea4c"
+ACCEPTED_MAIN_WORLD_DATASET_DIGEST = "54b47c062db60ba8ec7e97412e90b480fba3eca02f886f806c75be12f5a69d7a"
+MARKET_KEYS = (*econ.KEYS, "last_trade", "index_price")
+MARKET_SERIES_IDS = {**econ.SERIES_IDS, "last_trade": "trades", "index_price": "index"}
+TRADE_PROFILE = NativeTradeContinuityProfile.CONTIGUOUS_TRADE_ID_V1.value
+INDEX_PROFILE = NativeIndexPublicationProfile.ONE_PER_UTC_SECOND_V1.value
+SECOND = 1_000_000_000
+
+
+def build_market_chain(registry: DataRequirementRegistry | None = None, *, instruments: tuple[str, ...] = (INS,)):
+    """SYNTHETIC EF-2 → EF-3 → EF-4 over the econ series plus LAST_TRADE and INDEX_PRICE: ``(manifest, admission, registry)``."""
+
+    registry = default_perp_data_requirement_registry() if registry is None else registry
+    intake = _intake(MARKET_KEYS)
+    manifest = build_edge_source_packet_evidence(
+        intake,
+        expected_root_intake_digest=intake.intake_digest,
+        data_requirement_registry=registry,
+        expected_data_requirement_registry_digest=data_requirement_registry_digest(registry),
+        manifest_id="manifest-1",
+        correlation_id="corr-1",
+        input_series=tuple(
+            EdgeInputSeries(
+                MARKET_SERIES_IDS[key],
+                key,
+                f"archive:{MARKET_SERIES_IDS[key]}",
+                "own_research",
+                "note-1",
+                "finalized_only",
+                "immutable_after_finalization",
+                instruments,
+            )
+            for key in MARKET_KEYS
+        ),
+    )
+    spec = validate_strategy_spec({**pit.SPEC, "market_type": "usdt_perp", "instrument_universe": [INS]}).spec
+    kill_policy = _kill_policy()
+    admission = build_edge_strategy_spec_admission(
+        manifest,
+        expected_predecessor_digest=manifest.source_packet_evidence_digest,
+        expected_root_intake_digest=intake.intake_digest,
+        strategy_spec=spec,
+        expected_strategy_spec_digest=strategy_spec_digest(spec),
+        admission_id="admission-1",
+        correlation_id="corr-1",
+        admitted_kill_criteria=pit.CRITERIA,
+        kill_criteria_policy=kill_policy,
+        expected_kill_criteria_policy_digest=kill_policy.policy_digest,
+    )
+    return manifest, admission, registry
+
+
+@functools.cache
+def market_chain():
+    return build_market_chain()
+
+
+def trade(
+    trade_id: int,
+    event: int,
+    *,
+    receipt: int | None = None,
+    price: object = 100,
+    quantity: object = 1,
+    stream: str = "trade-btc",
+) -> CapturedTrade:
+    """SYNTHETIC native trade ``trade_id`` at ``event`` (received 1 ns later by default)."""
+
+    return CapturedTrade(
+        stream, trade_id, event, event + 1 if receipt is None else receipt, d(Fraction(price)), d(Fraction(quantity))
+    )
+
+
+def index_price(
+    event: int, value: object = 100, *, receipt: int | None = None, stream: str = "index-btc"
+) -> CapturedIndexPrice:
+    """SYNTHETIC native index value at ``event`` (received 1 ns later by default)."""
+
+    return CapturedIndexPrice(stream, event, event + 1 if receipt is None else receipt, d(Fraction(value)))
+
+
+def trade_stream(stream_id: str = "trade-btc", profile: object = TRADE_PROFILE, **changes: object):  # noqa: ANN201
+    return stream(stream_id, "last_trade", series="trades", profile=profile, **changes)  # type: ignore[arg-type]
+
+
+def index_stream(stream_id: str = "index-btc", profile: object = INDEX_PROFILE, **changes: object):  # noqa: ANN201
+    return stream(stream_id, "index_price", series="index", profile=profile, **changes)  # type: ignore[arg-type]
+
+
+MARKET_STREAMS = (*DEFAULT_STREAMS, trade_stream(), index_stream())
+
+
+def market_inputs(
+    observations: object, *, streams: tuple = MARKET_STREAMS, chain: tuple | None = None, **changes: object
+) -> AuthenticatedPitIngressInputs:
+    manifest, _, registry = market_chain() if chain is None else chain
+    return inputs(
+        observations, manifest=manifest, registry=registry, declaration=declaration(streams=streams), **changes
+    )
+
+
+def market_ingest(observations: object, **changes: object) -> AuthenticatedPitIngressResult:
+    return build_authenticated_pit_ingress(market_inputs(observations, **changes))
+
+
+def market_trades() -> list[CapturedTrade]:
+    """SYNTHETIC trades 1001-1005 and, after the native gap at 1006, 1007-1010 (one per microsecond)."""
+
+    return [
+        trade(trade_id, BASE + 1_000 * (trade_id - 1001) + 200, price=econ.price(trade_id), quantity=trade_id - 1000)
+        for trade_id in (*range(1001, 1006), *range(1007, 1011))
+    ]
+
+
+def market_indexes() -> list[CapturedIndexPrice]:
+    """SYNTHETIC index values, one inside each of five consecutive UTC seconds."""
+
+    return [index_price(BASE + k * SECOND + 300, econ.price(k)) for k in range(5)]
+
+
+def market_capture() -> tuple:
+    return merged(world_capture(), market_trades(), market_indexes())
+
+
+@functools.cache
+def market_result() -> AuthenticatedPitIngressResult:
+    return market_ingest(market_capture())
+
+
+def series_records(result: AuthenticatedPitIngressResult, series: str) -> list[HistoricalPitRecord]:
+    assert result.dataset is not None
+    return [record for record in result.dataset.records if record.series_id == series]
+
+
+def test_a_capture_without_a_trade_or_index_stream_keeps_its_accepted_v1_evidence_and_dataset() -> None:
+    result = world_result()
+    assert result.evidence.schema_version == "authenticated-pit-ingress.v1"
+    assert (result.evidence.ingress_digest, result.dataset.dataset_digest) == (  # type: ignore[union-attr]
+        ACCEPTED_MAIN_WORLD_INGRESS_DIGEST,
+        ACCEPTED_MAIN_WORLD_DATASET_DIGEST,
+    )
+
+
+def test_trades_and_index_prices_are_v2_evidence_of_exact_pit_records_beside_the_unchanged_streams() -> None:
+    result = market_result()
+    dataset = assert_ready(result)
+    evidence = result.evidence
+    assert evidence.schema_version == "authenticated-pit-ingress.v2"
+    assert evidence.verdict_reason_codes == world_result().evidence.verdict_reason_codes  # the M1 gate stays open
+    assert dataset.series_ids == ("book", "funding-final", "index", "mark", "trades")
+    trades = {item.trade_id: item for item in market_trades()}
+    assert [
+        (r.sequence_id, r.event_time_ns, r.available_at_ns, r.finalized_at_ns, values_of(r))
+        for r in series_records(result, "trades")
+    ] == [
+        (
+            trade_id,
+            item.event_time_ns,
+            item.receipt_ns,
+            item.event_time_ns,
+            {"trade_price": item.price, "trade_quantity": item.quantity, "trade_run_first_id": d(first)},
+        )
+        for trade_id, item in sorted(trades.items())
+        for first in (1001 if trade_id < 1006 else 1007,)
+    ]
+    assert [
+        (r.sequence_id, r.event_time_ns, r.available_at_ns, r.finalized_at_ns, values_of(r))
+        for r in series_records(result, "index")
+    ] == [
+        (
+            item.event_time_ns,
+            item.event_time_ns,
+            item.receipt_ns,
+            item.event_time_ns,
+            {"index_price": item.index_price, "index_utc_second_slot": d(item.event_time_ns // SECOND)},
+        )
+        for item in market_indexes()
+    ]
+    assert [(s.stream_id, s.continuity_profile, s.native_chain_count, s.record_count) for s in evidence.streams] == [
+        ("book-btc", PROFILE, 1, 101),
+        ("funding-btc", None, 0, 10),
+        ("index-btc", INDEX_PROFILE, 0, 5),
+        ("mark-btc", None, 0, 101),
+        ("trade-btc", TRADE_PROFILE, 2, 9),
+    ]
+    # the book, mark and funding records are exactly those of the three-stream capture
+    legacy = world_result().dataset.records  # type: ignore[union-attr]
+    assert tuple(r for r in dataset.records if r.series_id not in ("trades", "index")) == legacy
+    assert verify_authenticated_pit_ingress(evidence, market_inputs(market_capture())).intact is True
+
+
+def market_run(dataset: HistoricalPitDataset, admission: object):  # noqa: ANN201
+    return econ.runt.decision_run(
+        dataset,
+        econ.bind.executable_binding(admission),
+        instrument=INS,
+        evaluation_start_ns=econ.START,
+        evaluation_end_ns=econ.END,
+        parameter_assignment=econ.prof.params(),
+    )
+
+
+def test_trade_and_index_series_never_reach_the_accepted_decision_and_economics_consumers() -> None:
+    _, admission, registry = market_chain()
+    dataset = market_result().dataset
+    run, legacy_run = market_run(dataset, admission), market_run(world_result().dataset, world_chain()[1])  # type: ignore[arg-type]
+    result, legacy = econ.economics(econ.World(run, dataset, registry)), world_economics()  # type: ignore[arg-type]
+    assert (result.status, result.gate_verdict) == (EdgeEvidenceStatus.READY, EdgeGateVerdict.PASS)
+    assert result.result_digest != legacy.result_digest  # a new dataset is a new identity, never the old digest
+    decisions = [(item.decision_time_ns, item.resulting_direction) for item in run.decisions]
+    assert decisions == [(item.decision_time_ns, item.resulting_direction) for item in legacy_run.decisions]
+    fills = [
+        (f.outcome, f.fill_price, f.filled_quantity, f.execution_time_ns, f.book_record_digest) for f in result.fills
+    ]
+    assert fills == [
+        (f.outcome, f.fill_price, f.filled_quantity, f.execution_time_ns, f.book_record_digest) for f in legacy.fills
+    ]
+
+
+def test_a_trade_is_its_native_id_a_replay_is_idempotent_and_any_other_content_rejects() -> None:
+    first = trade(1, BASE + 100)
+    later = first.receipt_ns + 5
+    replayed = market_ingest([first, replace(first, receipt_ns=later)], streams=(trade_stream(),))
+    assert len(series_records(replayed, "trades")) == 1
+    assert summary(replayed, "trade-btc").replay_count == 1
+    for changes in ({"price": d(101)}, {"quantity": d(2)}, {"event_time_ns": BASE + 50}):
+        conflicting = replace(first, receipt_ns=later, **changes)  # type: ignore[arg-type]
+        assert_rejected(
+            market_ingest([first, conflicting], streams=(trade_stream(),)), "trade_identity_conflict:trade-btc:1"
+        )
+
+
+def test_the_contiguous_profile_names_each_run_a_gap_opens_a_new_one_and_a_regression_rejects() -> None:
+    trades = [trade(trade_id, BASE + 10 * trade_id) for trade_id in (5, 6, 7, 9, 10)]
+    result = market_ingest(trades, streams=(trade_stream(),))
+    assert [(r.sequence_id, values_of(r)["trade_run_first_id"]) for r in series_records(result, "trades")] == [
+        (5, d(5)),
+        (6, d(5)),
+        (7, d(5)),
+        (9, d(9)),
+        (10, d(9)),
+    ]
+    assert summary(result, "trade-btc").native_chain_count == 2
+    late = BASE + 1_000
+    assert_rejected(
+        market_ingest([*trades, trade(8, BASE + 85, receipt=late)], streams=(trade_stream(),)),
+        "trade_native_id_regression:trade-btc:8",
+    )
+    assert_rejected(
+        market_ingest([*trades[:3], trade(8, BASE + 60, receipt=late)], streams=(trade_stream(),)),
+        "trade_event_time_regression:trade-btc:8",
+    )
+
+
+def test_without_a_declared_profile_no_run_is_named_and_no_native_order_is_claimed() -> None:
+    plain = (trade_stream(profile=None),)
+    result = market_ingest([trade(trade_id, BASE + 10 * trade_id) for trade_id in (5, 6, 9)], streams=plain)
+    assert [set(values_of(r)) for r in series_records(result, "trades")] == [{"trade_price", "trade_quantity"}] * 3
+    assert (summary(result, "trade-btc").continuity_profile, summary(result, "trade-btc").native_chain_count) == (
+        None,
+        0,
+    )
+    # a later lower id is one more fact while ids keep their event-time order; the dataset refuses ids that do not
+    late = market_ingest([trade(6, BASE + 60), trade(5, BASE + 50, receipt=BASE + 70)], streams=plain)
+    assert [r.sequence_id for r in series_records(late, "trades")] == [5, 6]
+    backwards = market_ingest([trade(6, BASE + 50), trade(5, BASE + 60)], streams=plain)
+    assert_rejected(backwards)
+    assert any("sequence_non_monotonic:trades" in item for item in backwards.evidence.integrity_reason_codes)
+
+
+@pytest.mark.parametrize(
+    ("observation", "reason"),
+    [
+        pytest.param(trade(1, BASE + 100, receipt=BASE + 99), "trade_receipt_before_event:trade-btc:1", id="receipt"),
+        pytest.param(trade(1, BASE + 100, price=0), "trade_value_invalid:trade-btc:1", id="zero-price"),
+        pytest.param(trade(1, BASE + 100, price=-1), "trade_value_invalid:trade-btc:1", id="negative-price"),
+        pytest.param(trade(1, BASE + 100, quantity=0), "trade_value_invalid:trade-btc:1", id="zero-quantity"),
+        pytest.param(
+            index_price(BASE + 100, receipt=BASE + 99), f"index_receipt_before_event:index-btc:{BASE + 100}", id="index"
+        ),
+        pytest.param(index_price(BASE + 100, 0), f"index_price_invalid:index-btc:{BASE + 100}", id="zero-index"),
+        pytest.param(index_price(BASE + 100, -1), f"index_price_invalid:index-btc:{BASE + 100}", id="negative-index"),
+    ],
+)
+def test_an_invalid_trade_or_index_observation_rejects_the_whole_capture(observation: object, reason: str) -> None:
+    assert_rejected(market_ingest([observation], streams=(trade_stream(), index_stream())), reason)
+
+
+def test_the_one_per_second_profile_names_each_second_and_refuses_a_second_value_inside_one() -> None:
+    first = index_price(BASE + 3 * SECOND + 10)  # BASE lies 50 µs before a UTC second: +10 and +20 share one second
+    result = market_ingest([first, replace(first, receipt_ns=first.receipt_ns + 1)], streams=(index_stream(),))
+    (record,) = series_records(result, "index")
+    assert values_of(record) == {"index_price": d(100), "index_utc_second_slot": d(first.event_time_ns // SECOND)}
+    assert summary(result, "index-btc").replay_count == 1
+    same_second = index_price(BASE + 3 * SECOND + 20)
+    assert_rejected(
+        market_ingest([first, same_second], streams=(index_stream(),)),
+        f"index_publication_slot_conflict:index-btc:{BASE + 3 * SECOND + 20}",
+    )
+    other = replace(first, index_price=d(101), receipt_ns=first.receipt_ns + 1)
+    assert_rejected(
+        market_ingest([first, other], streams=(index_stream(),)),
+        f"index_identity_conflict:index-btc:{BASE + 3 * SECOND + 10}",
+    )
+    # without the profile two values inside one second are two facts, and no second is named
+    plain = market_ingest([first, same_second], streams=(index_stream(profile=None),))
+    assert [set(values_of(r)) for r in series_records(plain, "index")] == [{"index_price"}] * 2
+
+
+def test_a_trade_or_an_index_value_is_never_visible_before_its_receipt() -> None:
+    late = market_ingest(
+        [trade(1, BASE + 100, receipt=BASE + 5_000), index_price(BASE + 200, receipt=BASE + 6_000)],
+        streams=(trade_stream(), index_stream()),
+    )
+    for series, receipt in (("trades", BASE + 5_000), ("index", BASE + 6_000)):
+        view = select_visible_pit_records(late.dataset, series_id=series, instrument=INS, decision_time_ns=receipt - 1)  # type: ignore[arg-type]
+        assert view.records == ()
+        view = select_visible_pit_records(late.dataset, series_id=series, instrument=INS, decision_time_ns=receipt)  # type: ignore[arg-type]
+        assert len(view.records) == 1
+
+
+def test_trade_and_index_streams_bind_exactly_their_registered_series_and_semantics() -> None:
+    one = [trade(1, BASE + 100, stream="trade-eth")]
+    assert_rejected(
+        market_ingest(one, streams=(trade_stream("trade-eth", instrument=ETH),)), "series_instrument_foreign:trade-eth"
+    )
+    assert_rejected(
+        market_ingest([trade(1, BASE + 100)], streams=(trade_stream(reference="archive:other"),)),
+        "series_lineage_mismatch:trade-btc:source_reference",
+    )
+    with pytest.raises(AuthenticatedPitIngressError, match="stream_continuity_profile_invalid"):
+        market_ingest([trade(1, BASE + 100)], streams=(trade_stream(profile=PROFILE),))
+    with pytest.raises(AuthenticatedPitIngressError, match="stream_continuity_profile_invalid"):
+        market_ingest([index_price(BASE + 100)], streams=(index_stream(profile=TRADE_PROFILE),))
+    with pytest.raises(AuthenticatedPitIngressError, match="stream_continuity_profile_unexpected"):
+        market_ingest(marks(2), streams=(stream("mark-btc", "mark_price", profile=TRADE_PROFILE),))
+    # registry 1.0 semantics only: an index series registered with mark semantics is never an index
+    payload = data_requirement_registry_to_dict(default_perp_data_requirement_registry())
+    payload["requirements"]["index_price"]["price_semantics"] = "mark_price"  # type: ignore[index]
+    registry = data_requirement_registry_from_dict(payload).registry
+    assert registry is not None
+    chain = build_market_chain(registry)
+    assert_rejected(
+        market_ingest([index_price(BASE + 100)], streams=(index_stream(),), chain=chain),
+        "series_semantics_unsupported:index-btc:price_semantics",
+    )
+
+
+def test_the_v2_evidence_reverifies_and_a_forged_trade_profile_or_schema_never_verifies() -> None:
+    evidence = market_result().evidence
+    clean = market_inputs(market_capture())
+    plain = replace(summary(market_result(), "trade-btc"), continuity_profile=None, native_chain_count=0)
+    for changes in (
+        {"streams": tuple(plain if item.stream_id == "trade-btc" else item for item in evidence.streams)},
+        {"schema_version": "authenticated-pit-ingress.v1"},
+    ):
+        forged = replace(evidence, **changes)  # type: ignore[arg-type]
+        forged = replace(forged, ingress_digest=authenticated_pit_ingress_evidence_digest(forged))
+        assert verify_authenticated_pit_ingress(forged, clean).intact is False
+    payload = json.loads(json.dumps(authenticated_pit_ingress_evidence_to_dict(evidence)))
+    assert authenticated_pit_ingress_evidence_from_payload(payload) == evidence

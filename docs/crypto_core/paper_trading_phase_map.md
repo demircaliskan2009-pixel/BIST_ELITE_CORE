@@ -385,3 +385,32 @@ Native NO-TRADE portfolio measurement (`S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V
 - every S1 entry is still refused first by NT-D01. The NT-R02 reading (current UTC day, day-start NAV) and the NT-R04
   readings are engineering adjudications, not governance values, and the engine's initial equity implies no C1-C9
   decision (C5 included). REAL_PAPER_EXECUTION stays BLOCKED. Every value and approval in the tests is synthetic.
+
+Native market-data integrity measurement (`S1_MARKET_DATA_INTEGRITY_NATIVE_MEASUREMENT_CLOSURE_V1`, recorded
+2026-10-28):
+
+- the authenticated ingress (evidence v2) also takes source-neutral trades and index prices into the registered
+  LAST_TRADE and INDEX_PRICE series with their unchanged registry 1.0 semantics (no sequence policy, so no continuity
+  is ever inferred). A trade is identified by its native trade id; a capture may DECLARE the `contiguous_trade_id.v1`
+  profile, under which ids and event times never regress, a native gap opens a new contiguous run and every record
+  names its run. An index price is identified by its native event time; a capture may DECLARE the
+  `index_one_per_utc_second.v1` profile (at most one value per UTC second). Conflicts reject, identical redeliveries are
+  idempotent, and nothing is visible before its receipt. A capture without those streams keeps its v1 evidence and
+  dataset byte-identical;
+- an OHLC source may DECLARE its bar origin (archive schema v2): `exchange_kline` (the exchange's own kline feed) or
+  `trade_derived`. A source of undeclared origin keeps its v1 payload and digest, and is never an exchange kline feed;
+- entry gate rule set v4 measures, on the archive's own series at the decision instant: NT-D01 (the largest observed
+  trade gap strictly above 60 s, or 1-minute exchange-kline gap strictly above 5 minutes, over the span from the open of
+  the latest completed UTC 5-minute window; a PASS needs both feeds observed back to that open and one contiguous run of
+  the declared trade profile), NT-D03 (|latest trade event time - latest L2 event time| strictly above 5 s), NT-D04
+  (|latest trade price - index| / index strictly above 2%, only while the trade is within the 60 s trade bound and the
+  index inside its declared UTC second; no index freshness bound is invented) and NT-D05 (the latest completed UTC
+  5-minute base-asset volume strictly below 5% of the mean of the 8640 completed windows before it, only when one
+  contiguous declared run proves every window covered and the mean is positive). Every unproven reading is BLOCKED with
+  its reason, never a PASS and never a substitute series; day seal v5 and lineage evidence v5 bind it for a portfolio
+  lineage that opts in from day 0, and every v1-v4 artifact, schedule and rule set is byte-identical;
+- the accepted synthetic governed worlds declare no trade or index series in their genesis data contract, so each
+  reading there is BLOCKED with exactly that reason and every S1 entry is still refused first by NT-D01; a measured
+  PASS of the whole Data family is proven on authentic synthetic captures and still stops at NT-R01. M1 source
+  qualification, D1 venue facts, source rights and C1-C9 stay open, a declared capture profile is documented, never
+  qualified, and REAL_PAPER_EXECUTION stays BLOCKED. Every value in the tests is synthetic.

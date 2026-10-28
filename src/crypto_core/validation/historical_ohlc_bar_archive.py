@@ -9,6 +9,14 @@ declared price semantics of the bars (``last_trade``, ``mark_price`` or ``index_
 declared bar intervals, each a whole divisor of the UTC day. Its digest is the identity a position-management approval
 adopts; an archive of another source never substitutes for it.
 
+Bar origin (archive schema v2, ``S1_MARKET_DATA_INTEGRITY_NATIVE_MEASUREMENT_CLOSURE_V1``). A source may also declare
+where its bars come from (``HistoricalOhlcBarOrigin``): ``trade_derived`` bars are built from raw trades (the PRDV4
+§4.3 OHLCV construction), ``exchange_kline`` bars are the exchange's own separately sourced kline feed (PRDV4 §4.1
+``@kline_<interval>``). The origin is never inferred from matching price semantics, and a source that declares none is
+of undeclared origin: it is no exchange kline feed. A source without an origin keeps the accepted v1 payload, digest and
+archive schema exactly; a declared origin makes the archive ``historical-ohlc-bar-archive.v2``. A declaration proves
+neither the origin nor the publication times of a real source.
+
 Bars. ``open_time_ns`` is a whole multiple of the interval (UTC-aligned: the epoch is a UTC midnight) and the close is
 ``open + interval``. Prices are canonical scale-18 decimals with ``0 < low <= min(open, close) <= max(open, close) <=
 high``. A bar is published once: its availability (the original publication receipt) and its finality are at or after
@@ -69,6 +77,7 @@ from crypto_core.validation.historical_execution_economics_policy import (
 )
 
 _SCHEMA_VERSION = "historical-ohlc-bar-archive.v1"
+_ORIGIN_SCHEMA_VERSION = "historical-ohlc-bar-archive.v2"
 _PREFIX = "historical_ohlc_bar_archive"
 _ARCHIVE_DIGEST_FIELD = "archive_digest"
 _BAR_DIGEST_FIELD = "bar_digest"
@@ -105,9 +114,19 @@ class HistoricalOhlcPriceSemantics(str, Enum):
     INDEX_PRICE = "index_price"
 
 
+class HistoricalOhlcBarOrigin(str, Enum):
+    """The declared origin of a source's bars (archive schema v2). Unknown origins are refused, never guessed."""
+
+    TRADE_DERIVED = "trade_derived"
+    EXCHANGE_KLINE = "exchange_kline"
+
+
 @dataclass(frozen=True)
 class HistoricalOhlcSourceDeclaration:
-    """One declared offline OHLC source: identity, rights, instrument, price semantics and bar intervals."""
+    """One declared offline OHLC source: identity, rights, instrument, price semantics, bar intervals and bar origin.
+
+    ``bar_origin`` is None for a source of undeclared origin, whose payload is exactly the accepted v1 payload.
+    """
 
     source_id: str
     source_reference: str
@@ -116,6 +135,7 @@ class HistoricalOhlcSourceDeclaration:
     instrument: str
     price_semantics: HistoricalOhlcPriceSemantics
     bar_intervals_ns: tuple[int, ...]
+    bar_origin: HistoricalOhlcBarOrigin | None = None
 
 
 @dataclass(frozen=True)
@@ -233,7 +253,10 @@ def _serialize(value: object) -> object:
 
 
 def _to_payload(artifact: object) -> dict[str, object]:
-    return {item.name: _serialize(getattr(artifact, item.name)) for item in fields(artifact)}  # type: ignore[arg-type]
+    payload = {item.name: _serialize(getattr(artifact, item.name)) for item in fields(artifact)}  # type: ignore[arg-type]
+    if type(artifact) is HistoricalOhlcSourceDeclaration and artifact.bar_origin is None:
+        del payload["bar_origin"]  # undeclared origin: exactly the accepted v1 payload, so every v1 digest is unchanged
+    return payload
 
 
 def _visibility(bar: HistoricalOhlcBar) -> int:
@@ -252,6 +275,8 @@ def canonical_historical_ohlc_source_declaration(value: object) -> HistoricalOhl
         raise _fail("rights_status_invalid")
     if type(value.price_semantics) is not HistoricalOhlcPriceSemantics:
         raise _fail("price_semantics_invalid")
+    if value.bar_origin is not None and type(value.bar_origin) is not HistoricalOhlcBarOrigin:
+        raise _fail("bar_origin_invalid")
     intervals = value.bar_intervals_ns
     if type(intervals) is not tuple or not intervals:
         raise _fail("bar_intervals_invalid")
@@ -268,11 +293,12 @@ def canonical_historical_ohlc_source_declaration(value: object) -> HistoricalOhl
         instrument=_require_instrument(value.instrument),
         price_semantics=value.price_semantics,
         bar_intervals_ns=intervals,
+        bar_origin=value.bar_origin,
     )
 
 
 def historical_ohlc_source_declaration_digest(source: HistoricalOhlcSourceDeclaration) -> str:
-    """The identity digest of one validated source declaration."""
+    """The identity digest of one validated source declaration (a source of undeclared origin keeps its v1 digest)."""
 
     return edge_sha256_text(edge_canonical_json(_to_payload(canonical_historical_ohlc_source_declaration(source))))
 
@@ -368,7 +394,7 @@ def _assemble_archive(*, archive_id: object, source: object, bars: object) -> Hi
     if any(later <= earlier for earlier, later in zip(keys, keys[1:], strict=False)):
         raise _fail("bars_not_strictly_ordered_by_interval_and_open_time")
     seed = HistoricalOhlcBarArchive(
-        schema_version=_SCHEMA_VERSION,
+        schema_version=_SCHEMA_VERSION if source.bar_origin is None else _ORIGIN_SCHEMA_VERSION,
         archive_id=archive_id,
         source=source,
         source_digest=historical_ohlc_source_declaration_digest(source),
@@ -451,7 +477,19 @@ _SOURCE_CONVERTERS: dict[str, Callable[[object], object]] = {
     "rights_status": _as_enum(SourcePacketRightsStatus),
     "price_semantics": _as_enum(HistoricalOhlcPriceSemantics),
     "bar_intervals_ns": _as_int_tuple,
+    "bar_origin": _as_enum(HistoricalOhlcBarOrigin),
 }
+
+
+def _as_source(value: object) -> HistoricalOhlcSourceDeclaration:
+    """A v1 source payload (no ``bar_origin`` key: undeclared origin) or a v2 one (a declared origin, never null)."""
+
+    if type(value) is dict and "bar_origin" not in value:
+        converters = {**_SOURCE_CONVERTERS, "bar_origin": lambda _: None}
+        return _parse_exact(HistoricalOhlcSourceDeclaration, {**value, "bar_origin": None}, converters)  # type: ignore[return-value]
+    return _parse_exact(HistoricalOhlcSourceDeclaration, value, _SOURCE_CONVERTERS)  # type: ignore[return-value]
+
+
 _BAR_CONVERTERS: dict[str, Callable[[object], object]] = {
     "interval_ns": _as_int,
     "open_time_ns": _as_int,
@@ -468,7 +506,7 @@ def _as_bars(value: object) -> tuple[HistoricalOhlcBar, ...]:
 
 
 _ARCHIVE_CONVERTERS: dict[str, Callable[[object], object]] = {
-    "source": lambda value: _parse_exact(HistoricalOhlcSourceDeclaration, value, _SOURCE_CONVERTERS),
+    "source": _as_source,
     "bars": _as_bars,
     "bar_count": _as_int,
     **{name: _as_bool for name, _ in HISTORICAL_OHLC_NON_CLAIM_FLAGS},
@@ -598,6 +636,7 @@ __all__ = [
     "HistoricalOhlcBar",
     "HistoricalOhlcBarArchive",
     "HistoricalOhlcBarArchiveError",
+    "HistoricalOhlcBarOrigin",
     "HistoricalOhlcPriceSemantics",
     "HistoricalOhlcSourceDeclaration",
     "build_historical_ohlc_bar",

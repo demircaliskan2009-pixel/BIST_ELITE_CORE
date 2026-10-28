@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import ast
 import decimal
+import json
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
@@ -24,6 +25,7 @@ from crypto_core.validation.historical_ohlc_bar_archive import (
     HistoricalOhlcBar,
     HistoricalOhlcBarArchive,
     HistoricalOhlcBarArchiveError,
+    HistoricalOhlcBarOrigin,
     HistoricalOhlcPriceSemantics,
     HistoricalOhlcSourceDeclaration,
     build_historical_ohlc_bar,
@@ -527,6 +529,65 @@ def test_the_verifier_is_total_and_the_parser_is_strict() -> None:
     payload = historical_ohlc_bar_archive_to_dict(archive_of(flat_bar(0, 1)))
     for broken in ({**payload, "extra": 1}, {key: value for key, value in payload.items() if key != "bars"}):
         assert not historical_ohlc_bar_archive_payload_is_well_formed(broken)
+
+
+# --- the declared bar origin (archive schema v2, S1_MARKET_DATA_INTEGRITY_NATIVE_MEASUREMENT_CLOSURE_V1) ---------------
+
+# The accepted-main identities (main cde35d4f) of a source and archive of undeclared origin: schema v2 leaves them exact.
+ACCEPTED_MAIN_SOURCE_DIGEST = "b4547100177a0d7ef6ce8e600c70f83e06b183ab01244340926d3ec029657e8a"
+ACCEPTED_MAIN_ARCHIVE_DIGEST = "aba74420fc9079ba4ee5372b9b1ba302462d51313bfba337093677a15dc0f94e"
+V1, V2 = "historical-ohlc-bar-archive.v1", "historical-ohlc-bar-archive.v2"
+
+
+def test_a_source_of_undeclared_origin_keeps_its_accepted_v1_payload_digest_and_schema() -> None:
+    archive = archive_of(*run_of(tuple(range(1, 15))))
+    assert (archive.schema_version, archive.source.bar_origin) == (V1, None)
+    assert (archive.source_digest, archive.archive_digest) == (
+        ACCEPTED_MAIN_SOURCE_DIGEST,
+        ACCEPTED_MAIN_ARCHIVE_DIGEST,
+    )
+    payload = historical_ohlc_bar_archive_to_dict(archive)
+    assert "bar_origin" not in payload["source"]  # type: ignore[operator]
+    assert historical_ohlc_bar_archive_from_payload(json.loads(json.dumps(payload))) == archive
+
+
+@pytest.mark.parametrize("origin", list(HistoricalOhlcBarOrigin))
+def test_a_declared_origin_is_archive_schema_v2_with_a_new_identity_and_the_same_bars(
+    origin: HistoricalOhlcBarOrigin,
+) -> None:
+    bars = run_of(tuple(range(1, 15)))
+    legacy = archive_of(*bars)
+    declared = build_historical_ohlc_bar_archive(archive_id="ohlc-1", source=source(bar_origin=origin), bars=bars)
+    assert (declared.schema_version, declared.source.bar_origin) == (V2, origin)
+    payload = historical_ohlc_bar_archive_to_dict(declared)
+    assert payload["source"]["bar_origin"] == origin.value  # type: ignore[index]
+    assert declared.source_digest == historical_ohlc_source_declaration_digest(source(bar_origin=origin))
+    assert declared.source_digest != legacy.source_digest and declared.archive_digest != legacy.archive_digest
+    verification = verify_historical_ohlc_bar_archive(declared)
+    assert verification.intact and verification.recomputed_digest == declared.archive_digest
+    assert historical_ohlc_bar_archive_from_payload(json.loads(json.dumps(payload))) == declared
+    assert atr(declared, after(bars[-1])) == atr(legacy, after(bars[-1]))  # the ATR reads bars, never the origin
+
+
+def test_an_origin_is_never_guessed_null_or_moved_between_schemas() -> None:
+    with pytest.raises(HistoricalOhlcBarArchiveError, match=f"^{code('bar_origin_invalid')}$"):
+        canonical_historical_ohlc_source_declaration(source(bar_origin="exchange_kline"))
+    kline = source(bar_origin=HistoricalOhlcBarOrigin.EXCHANGE_KLINE)
+    declared = build_historical_ohlc_bar_archive(archive_id="ohlc-1", source=kline, bars=(flat_bar(0, 1),))
+    legacy = archive_of(flat_bar(0, 1))
+    payload = historical_ohlc_bar_archive_to_dict(declared)
+    for broken in (None, "derived", "EXCHANGE_KLINE"):
+        bad = {**payload, "source": {**payload["source"], "bar_origin": broken}}  # type: ignore[dict-item]
+        assert not historical_ohlc_bar_archive_payload_is_well_formed(bad)
+    for forged in (
+        replace(declared, schema_version=V1),  # a declared origin under the v1 schema
+        replace(legacy, schema_version=V2),  # an undeclared origin under the v2 schema
+        replace(declared, source=replace(kline, bar_origin=None)),  # an origin dropped from a sealed v2 archive
+        replace(legacy, source=kline),  # an origin added to a sealed v1 archive
+        replace(declared, source=replace(kline, bar_origin=HistoricalOhlcBarOrigin.TRADE_DERIVED)),  # a swapped origin
+    ):
+        forged = replace(forged, archive_digest=historical_ohlc_bar_archive_digest(forged))
+        assert not verify_historical_ohlc_bar_archive(forged).intact
 
 
 def test_the_module_is_pure_exact_and_offline() -> None:
