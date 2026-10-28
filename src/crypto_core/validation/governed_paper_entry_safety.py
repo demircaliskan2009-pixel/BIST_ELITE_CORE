@@ -102,11 +102,18 @@ unchanged, and a refusal never reaches an exit.
 Native market-data integrity (``S1_MARKET_DATA_INTEGRITY_NATIVE_MEASUREMENT_CLOSURE_V1``, rule set v4). Rule sets v1-v3
 hold for every evaluation without market data. When the day seal opts in, on top of the governed portfolio of rule set
 v3, NT-D01, NT-D03, NT-D04 and NT-D05 are measured on the archive at ``t``
-(``governed_paper_entry_safety_market_data_index``). The series are the registered LAST_TRADE and INDEX_PRICE series of
+(``governed_paper_entry_safety_market_data``). The series are the registered LAST_TRADE and INDEX_PRICE series of
 the genesis data contract, each the one final, immutable series of its key covering the instrument, read under PIT
-visibility (available and final at or before ``t``, by native event time then native id). The kline feed is the
-protective context's OHLC archive only when its source DECLARES the ``exchange_kline`` origin, last-trade bars and the
-1-minute interval: trade-derived bars, an undeclared origin or any other source is never an exchange kline feed. A
+visibility (available and final at or before ``t``, by native event time then native id). A public dataset can bypass
+their only producer (``authenticated_pit_ingress``). So each series is selected (key and instrument coverage) and
+judged on the dataset's own EF-3 manifest, reconstructed from its source-manifest binding and re-verified by the public
+EF-3 verifier with its digest recomputed. Every registry 1.0 field that producer implements (source, event,
+availability and finality times, price semantics, no sequence policy, finality policy, final-only, immutable) must hold
+with its exact type, or the series is BLOCKED as unsupported. A dataset label never stands in for those semantics.
+
+The kline feed is the protective context's OHLC archive only when its source DECLARES the ``exchange_kline`` origin,
+last-trade bars and the 1-minute interval: trade-derived bars, an undeclared origin or any other source is never an
+exchange kline feed. A
 series the data contract does not declare is BLOCKED with that reason and never substituted (no mark, mid or book stands
 in for a trade or an index). The thresholds are PRDV4 §1.21's, and equality passes:
 
@@ -125,7 +132,10 @@ in for a trade or an index). The thresholds are PRDV4 §1.21's, and equality pas
   mark or the mid) and ``|price - index| / index`` against the latest visible index FAILs strictly above 2%. Both must be
   current: the trade within NT-D01's 60 s trade-stream bound, the index inside the UTC second of its DECLARED
   ``index_one_per_utc_second.v1`` profile, where no later value can exist yet. No index freshness bound is invented: an
-  index without that profile, or whose second has elapsed, is BLOCKED;
+  index without that profile, or whose second has elapsed, is BLOCKED. The profile is re-proven on the index records
+  visible at ``t``, as its producer enforces it. A stream that mixes declared and undeclared records is BLOCKED, and so
+  are two distinct publications (native event time and value) in one declared second, whatever their values or order:
+  no preferred value is ever chosen. An identical replay is one publication;
 * NT-D05 (volume anomaly): the base-asset traded quantity of the latest completed UTC 5-minute window against the mean
   of the 8640 completed windows before it (30 days), the target excluded. Every window must be proven covered: one
   contiguous run of the declared trade profile from a visible trade strictly before the first window to one at or
@@ -162,10 +172,17 @@ from crypto_core.validation.edge_artifact_core import (
     EdgeArtifactError,
     EdgeEvidenceStatus,
     EdgeGateVerdict,
+    edge_authority_binding_snapshot,
     edge_canonical_json,
     edge_is_hex64,
     edge_payload_digest,
     edge_sha256_text,
+)
+from crypto_core.validation.edge_source_packet_evidence import (
+    EdgeSourceSeriesRecord,
+    edge_source_packet_evidence_from_payload,
+    edge_source_packet_evidence_payload_is_well_formed,
+    verify_edge_source_packet_evidence,
 )
 from crypto_core.validation.governed_paper_execution_authority import GovernedPaperGenesisAuthority
 from crypto_core.validation.historical_decision_run import HistoricalDecisionRun
@@ -240,6 +257,35 @@ _BASELINE_WINDOWS = 30 * 24 * 12  # NT-D05: the 8640 completed windows of the 30
 _VOLUME_FLOOR = Fraction(5, 100)  # NT-D05: target volume strictly below 5% of the 30-day mean
 _INDEX_SLOT_NS = _NS_PER_SECOND  # index_one_per_utc_second.v1: at most one index value per UTC second
 _IMMUTABLE = "immutable_after_finalization"
+# The registry 1.0 semantics of the two market series, exactly as their only producer (authenticated_pit_ingress)
+# implements and enforces them on the bound EF-3 series record, field by field and by exact type. A public dataset can
+# bypass that producer, so the gate re-proves the same set on the dataset's own authenticated manifest.
+_MARKET_SERIES_SEMANTICS: dict[DataRequirementKey, tuple[tuple[str, object], ...]] = {
+    DataRequirementKey.LAST_TRADE: (
+        ("registry_requirement_bound", True),
+        ("finality", "finalized_only"),
+        ("revision_policy", _IMMUTABLE),
+        ("historical_source", "trade_history_v1"),
+        ("event_time_policy", "trade_event_ns"),
+        ("available_at_policy", "trade_available_ns"),
+        ("finalized_at_policy", "trade_finalized_ns"),
+        ("price_semantics", "last_trade"),
+        ("sequence_policy", None),  # no native continuity is ever inferred: it is only a declared capture profile
+        ("finality_policy", "trade_tick_final"),
+    ),
+    DataRequirementKey.INDEX_PRICE: (
+        ("registry_requirement_bound", True),
+        ("finality", "finalized_only"),
+        ("revision_policy", _IMMUTABLE),
+        ("historical_source", "index_price_history_v1"),
+        ("event_time_policy", "index_event_ns"),
+        ("available_at_policy", "index_available_ns"),
+        ("finalized_at_policy", "index_finalized_ns"),
+        ("price_semantics", "index_price"),
+        ("sequence_policy", None),
+        ("finality_policy", "index_snapshot_final"),
+    ),
+}
 
 GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID = "governed-paper-entry-safety.v1"
 GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_ID = "governed-paper-entry-safety.v2"
@@ -293,6 +339,7 @@ _TRADE_SERIES_REASONS = (
     "last_trade_series_not_in_the_selected_data_contract",
     "last_trade_series_ambiguous",
     "last_trade_series_not_final_and_immutable",
+    "last_trade_series_semantics_unsupported",
     "last_trade_record_malformed",
 )
 _TRADE_REASONS = (*_TRADE_SERIES_REASONS, "no_trade_visible_at_the_decision_instant")
@@ -317,7 +364,10 @@ _INDEX_REASONS = (
     "index_price_series_not_in_the_selected_data_contract",
     "index_price_series_ambiguous",
     "index_price_series_not_final_and_immutable",
+    "index_price_series_semantics_unsupported",
     "index_price_record_malformed",
+    "index_publication_declaration_inconsistent",
+    "index_publication_slot_conflict",
     "no_index_price_visible_at_the_decision_instant",
     "index_price_not_positive",
 )
@@ -1695,24 +1745,54 @@ def _whole_number(text: str) -> int | None:
     return value.numerator if value.denominator == 1 and value >= 0 else None
 
 
+def _authenticated_series(dataset: HistoricalPitDataset) -> tuple[EdgeSourceSeriesRecord, ...]:
+    """The dataset's own EF-3 series records, reconstructed from its source-manifest binding and re-proven by the public
+    EF-3 verifier with the digest recomputed. A series is selected and judged on them, never on a dataset label."""
+
+    snapshot = edge_authority_binding_snapshot(dataset.source_manifest_binding)
+    if not edge_source_packet_evidence_payload_is_well_formed(snapshot):
+        raise _fail("market_data_archive_not_authentic")
+    manifest = edge_source_packet_evidence_from_payload(snapshot)
+    verification = verify_edge_source_packet_evidence(manifest)
+    if (
+        not verification.intact
+        or verification.recomputed_digest != dataset.source_manifest_digest
+        or manifest.status is not EdgeEvidenceStatus.READY
+    ):
+        raise _fail("market_data_archive_not_authentic")
+    return manifest.series
+
+
+def _registry_semantics_hold(record: EdgeSourceSeriesRecord, key: DataRequirementKey) -> bool:
+    """Whether an authenticated EF-3 series record carries exactly the producer's registry 1.0 semantics of ``key``."""
+
+    return all(
+        type(getattr(record, name)) is type(value) and getattr(record, name) == value
+        for name, value in _MARKET_SERIES_SEMANTICS[key]
+    )
+
+
 def _market_series(
-    dataset: HistoricalPitDataset, key: DataRequirementKey, label: str, instrument: str
+    authenticated: Sequence[EdgeSourceSeriesRecord], key: DataRequirementKey, label: str, instrument: str
 ) -> tuple[str, str]:
-    """``(reason, series id)``: the one final, immutable series of ``key`` covering the instrument, or why there is none."""
+    """``(reason, series id)``: among the ``authenticated`` EF-3 series, the one final, immutable series of ``key``
+    covering the instrument, carrying the producer's registry 1.0 semantics, or why there is none."""
 
     candidates = [
-        item
-        for item in dataset.series_semantics
-        if item.data_requirement_key == key.value and instrument in item.instrument_coverage
+        record
+        for record in authenticated
+        if record.data_requirement_key == key.value and instrument in record.instrument_coverage
     ]
     if not candidates:
         return f"{label}_series_not_in_the_selected_data_contract", ""
     if len(candidates) > 1:
         return f"{label}_series_ambiguous", ""
-    series = candidates[0]
-    if series.final_required is not True or series.revision_policy != _IMMUTABLE:
+    record = candidates[0]
+    if record.finalized_only is not True or record.revision_policy != _IMMUTABLE:
         return f"{label}_series_not_final_and_immutable", ""
-    return "", series.series_id
+    if not _registry_semantics_hold(record, key):
+        return f"{label}_series_semantics_unsupported", ""
+    return "", record.series_id
 
 
 _TRADE_NAMES = (
@@ -1817,6 +1897,25 @@ def _span_digest(digests: Sequence[str]) -> str:
     return edge_sha256_text(edge_canonical_json(list(digests)))
 
 
+def _publication_profile(indexes: Sequence[_Index]) -> tuple[int | None, int | None]:
+    """When the index records first break ``index_one_per_utc_second.v1`` as its producer enforces it: ``(the first
+    instant declared and undeclared records are both visible, the first instant two distinct publications of one
+    declared UTC second are)``. A publication is a native event time and its value, so an identical replay is the same
+    publication, known from its earliest visibility. Order-free, and nothing visible after ``t`` breaks it at ``t``."""
+
+    declared = [item.visible_ns for item in indexes if item.slot is not None]
+    undeclared = [item.visible_ns for item in indexes if item.slot is None]
+    mixed = max(min(declared), min(undeclared)) if declared and undeclared else None
+    seconds: dict[int, dict[tuple[int, Fraction], int]] = {}
+    for item in indexes:
+        if item.slot is not None:
+            known = seconds.setdefault(item.slot, {})
+            publication = (item.event_ns, Fraction(item.price))
+            known[publication] = min(known.get(publication, item.visible_ns), item.visible_ns)
+    conflicts = [sorted(known.values())[1] for known in seconds.values() if len(known) > 1]
+    return mixed, min(conflicts, default=None)
+
+
 def _contiguous(trades: Sequence[_Trade]) -> bool:
     """One contiguous run of the declared profile: one run, consecutive native ids, every one visible."""
 
@@ -1898,13 +1997,19 @@ class _MarketData:
     def __init__(
         self, dataset: HistoricalPitDataset, *, instrument: str, kline: HistoricalOhlcBarArchive | None
     ) -> None:
-        self._trade_reason, series = _market_series(dataset, DataRequirementKey.LAST_TRADE, "last_trade", instrument)
+        authenticated = _authenticated_series(dataset)
+        self._trade_reason, series = _market_series(
+            authenticated, DataRequirementKey.LAST_TRADE, "last_trade", instrument
+        )
         self._trade_malformed, trades = _series_entries(dataset, series, instrument, _trade_of)
         # The archive's own integrity: native ids never run backwards in event time, so id order is event-time order.
         self._trades: tuple[_Trade, ...] = tuple(sorted(trades, key=lambda item: item.trade_id))  # type: ignore[attr-defined]
-        self._index_reason, series = _market_series(dataset, DataRequirementKey.INDEX_PRICE, "index_price", instrument)
+        self._index_reason, series = _market_series(
+            authenticated, DataRequirementKey.INDEX_PRICE, "index_price", instrument
+        )
         self._index_malformed, indexes = _series_entries(dataset, series, instrument, _index_of)
         self._indexes: tuple[_Index, ...] = tuple(sorted(indexes, key=lambda item: (item.event_ns, item.sequence_id)))  # type: ignore[attr-defined]
+        self._index_mixed, self._index_conflict = _publication_profile(self._indexes)
         self._kline_reason, self._bars = _kline_index(kline, instrument)
 
     def facts_at(self, instant: int) -> GovernedPaperEntrySafetyMarketData:  # noqa: C901
@@ -1921,8 +2026,13 @@ class _MarketData:
         trade_gap = _trade_feed(trades, trade_reason, continuity, instant, start)
         kline_gap = _kline_feed(self._bars, self._kline_reason, instant, start)
         index_reason, index = self._index_reason, None
-        if not index_reason and self._index_malformed is not None and self._index_malformed <= instant:
-            index_reason = "index_price_record_malformed"
+        for since, broken in (
+            (self._index_malformed, "index_price_record_malformed"),
+            (self._index_mixed, "index_publication_declaration_inconsistent"),
+            (self._index_conflict, "index_publication_slot_conflict"),
+        ):
+            if not index_reason and since is not None and since <= instant:
+                index_reason = broken
         if not index_reason:
             index = next((item for item in reversed(self._indexes) if item.visible_ns <= instant), None)
             if index is None:

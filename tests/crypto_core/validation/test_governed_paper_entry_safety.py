@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import decimal
 import functools
+import itertools
 import json
 from collections.abc import Callable
 from dataclasses import replace
@@ -46,10 +47,22 @@ from fractions import Fraction
 
 import pytest
 
+import crypto_core.validation.authenticated_pit_ingress as ingress
 import crypto_core.validation.governed_paper_entry_safety as entry_safety
-from crypto_core.data.requirements import data_requirement_registry_digest
+from crypto_core.data.requirements import (
+    DataRequirementKey,
+    data_requirement_registry_digest,
+    data_requirement_registry_from_dict,
+    data_requirement_registry_to_dict,
+    default_perp_data_requirement_registry,
+)
 from crypto_core.strategy.source_packet import SourcePacketRightsStatus
 from crypto_core.validation.edge_artifact_core import EdgeEvidenceStatus, edge_canonical_json, edge_sha256_text
+from crypto_core.validation.edge_source_packet_evidence import (
+    EdgeInputSeries,
+    build_edge_source_packet_evidence,
+    verify_edge_source_packet_evidence,
+)
 from crypto_core.validation.governed_admitted_variant_paper_execution import (
     GovernedPaperDaySealStatus,
     GovernedPaperExecutionStatus,
@@ -113,6 +126,7 @@ from crypto_core.validation.historical_pit_dataset import (
     HistoricalPitValue,
     build_historical_pit_dataset,
     build_historical_pit_record,
+    verify_historical_pit_dataset,
 )
 from crypto_core.validation.historical_position_management_policy import (
     MAX_HOLD_NS,
@@ -2480,10 +2494,11 @@ def test_nt_d03_and_nt_d04_on_authentic_captures_never_substitute_another_series
     assert facts_of(earlier, at=INDEXED + 1).index_event_time_ns == INDEXED
 
 
-def market_archive(records: tuple) -> object:
-    """A HAND-BUILT archive over the market manifest: records the ingress would refuse are a consumer's input too."""
+def market_archive(records: tuple, *, chain: tuple | None = None) -> object:
+    """A HAND-BUILT archive over the market manifest (or ``chain``'s): records the ingress would refuse are a consumer's
+    input too."""
 
-    manifest, _, registry = ingt.market_chain()
+    manifest, _, registry = ingt.market_chain() if chain is None else chain
     return build_historical_pit_dataset(
         manifest,
         expected_source_manifest_digest=manifest.source_packet_evidence_digest,
@@ -2497,14 +2512,23 @@ def market_archive(records: tuple) -> object:
     )
 
 
-def hand_record(series: str, key: str, sequence: int, event: int, values: dict[str, object]):  # noqa: ANN201
+def hand_record(  # noqa: ANN201
+    series: str,
+    key: str,
+    sequence: int,
+    event: int,
+    values: dict[str, object],
+    *,
+    instrument: str = ingt.INS,
+    received: int | None = None,
+):
     return build_historical_pit_record(
         series_id=series,
         data_requirement_key=key,
-        instrument=ingt.INS,
+        instrument=instrument,
         sequence_id=sequence,
         event_time_ns=event,
-        available_at_ns=event + 1,
+        available_at_ns=event + 1 if received is None else received,
         finalized_at_ns=event,
         revision_vintage_id=None,
         values=tuple(HistoricalPitValue(name, d(value)) for name, value in sorted(values.items())),
@@ -2531,6 +2555,272 @@ def test_a_hand_built_archive_is_read_only_through_its_own_well_formed_visible_r
     )
     assert facts_of(mixed, at=at, kline=None).volume_reason == "trade_continuity_declaration_inconsistent"
     assert facts_of(mixed, at=W + 5 * SECOND, kline=None).volume_reason == "no_visible_trade_before_the_30d_baseline"
+
+
+# --- G.2b producer/consumer trust parity: a public READY archive can bypass the ingress, so the index publication
+# profile and the series semantics the ingress enforces are re-proven on what the archive carries, never trusted -------
+
+PUBLISHED = (W // SECOND + 10) * SECOND  # SYNTHETIC: the first nanosecond of a UTC second
+READ = PUBLISHED + 500_000_000  # inside that second, after every record below is received (1 ns after its event)
+PARITY_TRADE = hand_record(
+    "trades", "last_trade", 1, PUBLISHED - 2 * SECOND, {"trade_price": 40, "trade_quantity": 1, "trade_run_first_id": 1}
+)
+SLOT_CONFLICT = "index_publication_slot_conflict"
+MIXED_PROFILE = "index_publication_declaration_inconsistent"
+WITHIN_2PCT = "PASS:last_trade_within_2pct_of_the_index"
+
+
+def index_record(event: int, price: object, *, slot: bool = True, sequence: int | None = None, **changes: object):  # noqa: ANN201
+    """One HAND-BUILT index record of native event ``event`` (its identity unless ``sequence``), naming its UTC second
+    when ``slot``."""
+
+    values = {"index_price": price} | ({"index_utc_second_slot": event // SECOND} if slot else {})
+    return hand_record("index", "index_price", event if sequence is None else sequence, event, values, **changes)  # type: ignore[arg-type]
+
+
+PARITY_RECORDS = (PARITY_TRADE, index_record(PUBLISHED + 1, 40))
+
+
+def index_reading(*records: object, at: int = READ, chain: tuple | None = None) -> tuple[str, str | None, str]:
+    """``(index reason, index price, "NT-D04 status:reason")`` at ``at`` of a hand-built archive of ``records``."""
+
+    facts = facts_of(market_archive(records, chain=chain), at=at, kline=None)
+    check = check_of(decided(facts, at=at), "NT-D04")
+    return facts.index_reason, facts.index_price, f"{check.status.value}:{check.reason.removeprefix(code('NT-D04:'))}"
+
+
+@functools.cache
+def two_instrument_chain() -> tuple:
+    return ingt.build_market_chain(instruments=(ingt.INS, ingt.ETH))
+
+
+@functools.cache
+def substituted_chain(key: str, field: str, value: str) -> tuple:
+    """The SYNTHETIC market chain over a registry whose ``key`` row differs from registry 1.0 in ``field`` alone."""
+
+    payload = data_requirement_registry_to_dict(default_perp_data_requirement_registry())
+    payload["requirements"][key][field] = value  # type: ignore[index]
+    registry = data_requirement_registry_from_dict(payload).registry
+    assert registry is not None
+    return ingt.build_market_chain(registry)
+
+
+@functools.cache
+def two_trade_series_chain() -> tuple:
+    """The SYNTHETIC market manifest with a second LAST_TRADE series covering the instrument: ``(manifest, -, registry)``."""
+
+    registry = default_perp_data_requirement_registry()
+    intake = ingt._intake(ingt.MARKET_KEYS)  # noqa: SLF001
+    declared = (*((ingt.MARKET_SERIES_IDS[key], key) for key in ingt.MARKET_KEYS), ("trades-2", "last_trade"))
+    manifest = build_edge_source_packet_evidence(
+        intake,
+        expected_root_intake_digest=intake.intake_digest,
+        data_requirement_registry=registry,
+        expected_data_requirement_registry_digest=data_requirement_registry_digest(registry),
+        manifest_id="manifest-1",
+        correlation_id="corr-1",
+        input_series=tuple(
+            EdgeInputSeries(
+                series,
+                key,
+                f"archive:{series}",
+                "own_research",
+                "note-1",
+                "finalized_only",
+                "immutable_after_finalization",
+                (ingt.INS,),
+            )
+            for series, key in declared
+        ),
+    )
+    return manifest, None, registry
+
+
+def test_distinct_index_publications_in_one_declared_second_are_blocked_whatever_their_values_or_order() -> None:
+    blocked = (SLOT_CONFLICT, None, f"{BLOCKED.value}:{SLOT_CONFLICT}")
+    # the historical false PASS (100 then 40, against a trade at 40) and its order twin (a FAIL) now read alike
+    assert index_reading(PARITY_TRADE, index_record(PUBLISHED, 100), index_record(PUBLISHED + 1, 40)) == blocked
+    assert index_reading(PARITY_TRADE, index_record(PUBLISHED, 40), index_record(PUBLISHED + 1, 100)) == blocked
+    # the same value at two native events is still two publications of one second
+    assert index_reading(PARITY_TRADE, index_record(PUBLISHED, 40), index_record(PUBLISHED + 1, 40)) == blocked
+    # one native event carrying two values (the ingress's identity conflict), under another sequence id
+    other_value = index_record(PUBLISHED + 1, 100, sequence=PUBLISHED + 2)
+    assert index_reading(*PARITY_RECORDS, other_value) == blocked
+    # the valid control, and an identical replay of its native event (another record, same event and value): one
+    # publication, read as one
+    control = ("", d(40), WITHIN_2PCT)
+    assert index_reading(*PARITY_RECORDS) == control
+    assert index_reading(*PARITY_RECORDS, index_record(PUBLISHED + 1, 40, sequence=PUBLISHED + 2)) == control
+
+
+def test_mixed_index_publication_declarations_never_give_a_trusted_index_in_either_order() -> None:
+    blocked = (MIXED_PROFILE, None, f"{BLOCKED.value}:{MIXED_PROFILE}")
+    declared = index_record(PUBLISHED + 1, 40)
+    assert index_reading(PARITY_TRADE, index_record(PUBLISHED, 100, slot=False), declared) == blocked
+    assert (
+        index_reading(PARITY_TRADE, index_record(PUBLISHED, 100), index_record(PUBLISHED + 1, 40, slot=False))
+        == blocked
+    )
+    # in another second too: a stream that names its second only sometimes declares no profile
+    assert index_reading(PARITY_TRADE, index_record(PUBLISHED - SECOND, 40, slot=False), declared) == blocked
+    # no record declaring claims no profile, so none is broken: the currency stays unprovable
+    plain = (index_record(PUBLISHED, 100, slot=False), index_record(PUBLISHED + 1, 40, slot=False))
+    reason = "index_currency_unprovable_without_a_declared_publication_profile"
+    assert index_reading(PARITY_TRADE, *plain)[2] == f"{BLOCKED.value}:{reason}"
+
+
+def test_a_malformed_slot_marker_blocks_from_its_visibility_and_another_instruments_slots_never_count() -> None:
+    second = PUBLISHED // SECOND
+    for marker in (second + 1, Fraction(2 * second + 1, 2)):  # another second, or no whole second
+        values = {"index_price": 40, "index_utc_second_slot": marker}
+        wrong = hand_record("index", "index_price", PUBLISHED + 1, PUBLISHED + 1, values)
+        assert index_reading(PARITY_TRADE, wrong)[0] == "index_price_record_malformed"
+    eth = (index_record(PUBLISHED, 100, instrument=ingt.ETH), index_record(PUBLISHED + 1, 40, instrument=ingt.ETH))
+    records = (*PARITY_RECORDS, *eth)
+    assert index_reading(*records, chain=two_instrument_chain()) == ("", d(40), WITHIN_2PCT)
+    archive = market_archive(records, chain=two_instrument_chain())
+    assert facts_of(archive, at=READ, kline=None, instrument=ingt.ETH).index_reason == SLOT_CONFLICT
+
+
+def test_a_broken_publication_profile_counts_only_from_the_instant_both_records_are_visible() -> None:
+    for late, broken in (
+        (index_record(PUBLISHED, 100, received=READ + 1), SLOT_CONFLICT),
+        (index_record(PUBLISHED, 100, slot=False, received=READ + 1), MIXED_PROFILE),
+    ):
+        assert index_reading(*PARITY_RECORDS, late) == ("", d(40), WITHIN_2PCT)  # received 1 ns after READ
+        assert index_reading(*PARITY_RECORDS, late, at=READ + 1)[0] == broken
+
+
+def test_adjacent_utc_seconds_are_distinct_publication_slots_up_to_the_exact_currency_boundary() -> None:
+    records = (PARITY_TRADE, index_record(PUBLISHED - 1, 100), index_record(PUBLISHED, 40))
+    assert index_reading(*records) == ("", d(40), WITHIN_2PCT)  # the last ns of one second and the first of the next
+    assert index_reading(*records, at=PUBLISHED + SECOND - 1)[2] == WITHIN_2PCT
+    elapsed = f"{BLOCKED.value}:index_publication_second_elapsed_at_the_decision_instant"
+    assert index_reading(*records, at=PUBLISHED + SECOND)[2] == elapsed
+
+
+def test_the_publication_judgement_is_order_free() -> None:
+    records = (PARITY_TRADE, index_record(PUBLISHED - SECOND, 40), index_record(PUBLISHED, 100), *PARITY_RECORDS[1:])
+    forward, backward = market_archive(records), market_archive(tuple(reversed(records)))
+    assert forward.dataset_digest == backward.dataset_digest
+    assert (
+        index_reading(*records)
+        == index_reading(*reversed(records))
+        == (SLOT_CONFLICT, None, f"{BLOCKED.value}:{SLOT_CONFLICT}")
+    )
+    # the judgement itself over every order of its publications, an identical replay among them
+    second, index = PUBLISHED // SECOND, entry_safety._Index  # noqa: SLF001
+    parsed = [
+        index(PUBLISHED - SECOND, PUBLISHED - SECOND, PUBLISHED - SECOND + 1, d(40), second - 1, "0" * 64),
+        index(PUBLISHED, PUBLISHED, PUBLISHED + 1, d(100), second, "1" * 64),
+        index(PUBLISHED + 1, PUBLISHED + 1, PUBLISHED + 2, d(40), second, "2" * 64),
+        index(PUBLISHED + 1, PUBLISHED + 3, PUBLISHED + 3, d(40), second, "3" * 64),  # an identical replay
+    ]
+    judged = {entry_safety._publication_profile(order) for order in itertools.permutations(parsed)}  # noqa: SLF001
+    assert judged == {(None, PUBLISHED + 2)}
+
+
+SUBSTITUTIONS = (
+    ("last_trade", "price_semantics", "mark_price"),
+    ("index_price", "price_semantics", "mark_price"),
+    ("last_trade", "historical_source", "mark_price_history_v1"),
+    ("index_price", "historical_source", "mark_price_history_v1"),
+    ("last_trade", "event_time_policy", "mark_event_ns"),
+    ("index_price", "available_at_policy", "mark_available_ns"),
+    ("last_trade", "finalized_at_policy", "mark_finalized_ns"),
+    ("index_price", "finality_policy", "mark_snapshot_final"),
+)
+
+
+@pytest.mark.parametrize(("key", "field", "value"), SUBSTITUTIONS)
+def test_a_ready_authentic_archive_with_substituted_series_semantics_is_blocked_never_measured(
+    key: str, field: str, value: str
+) -> None:
+    chain = substituted_chain(key, field, value)
+    archive = market_archive(PARITY_RECORDS, chain=chain)
+    # an internally valid self-digest over an authentic manifest: the public verifiers alone cannot see a substitution
+    assert archive.status is EdgeEvidenceStatus.READY
+    assert verify_historical_pit_dataset(archive).intact and verify_edge_source_packet_evidence(chain[0]).intact
+    facts = facts_of(archive, at=READ, kline=None)
+    decision = decided(facts, at=READ)
+    if key == "last_trade":
+        reason = "last_trade_series_semantics_unsupported"
+        assert (facts.trade_reason, facts.trade_gap_reason, facts.volume_reason, facts.trade_price) == (
+            reason,
+            reason,
+            reason,
+            None,
+        )
+        assert facts.index_reason == ""  # the registry 1.0 index series is still read
+        assert check_of(decision, "NT-D01").status is BLOCKED
+        for name in ("NT-D03", "NT-D04", "NT-D05"):
+            assert (check_of(decision, name).status, check_of(decision, name).reason) == (
+                BLOCKED,
+                code(f"{name}:{reason}"),
+            )
+    else:
+        reason = "index_price_series_semantics_unsupported"
+        assert (facts.trade_reason, facts.index_reason, facts.index_price) == ("", reason, None)
+        assert (check_of(decision, "NT-D04").status, check_of(decision, "NT-D04").reason) == (
+            BLOCKED,
+            code(f"NT-D04:{reason}"),
+        )
+
+
+class _StrAlias(str):
+    """Equal to an accepted text, but not a str: equality alone would accept it."""
+
+
+def test_the_gate_re_proves_exactly_the_producer_series_semantics_by_value_and_exact_type() -> None:
+    producer = {
+        key: (
+            ("registry_requirement_bound", True),
+            ("finality", ingress._FINALIZED_ONLY),  # noqa: SLF001
+            ("revision_policy", ingress._IMMUTABLE_AFTER_FINALIZATION),  # noqa: SLF001
+            *ingress._REGISTRY_SEMANTICS[key],  # noqa: SLF001
+        )
+        for key in (DataRequirementKey.LAST_TRADE, DataRequirementKey.INDEX_PRICE)
+    }
+    records = {record.data_requirement_key: record for record in ingt.market_chain()[0].series}
+    for key, fields_ in producer.items():
+        consumer = entry_safety._MARKET_SERIES_SEMANTICS[key]  # noqa: SLF001
+        assert [(name, type(value), value) for name, value in consumer] == [
+            (name, type(value), value) for name, value in fields_
+        ]
+        record = records[key.value]
+        assert entry_safety._registry_semantics_hold(record, key)  # noqa: SLF001 - the registry 1.0 control
+        for name, value in fields_:
+            # another value of the same type, and an equal value of another type (1 for True, "" for None, a str alias)
+            wrongs = {True: (False, 1), None: ("strict_monotonic", "")}.get(value, (f"{value}_other", _StrAlias(value)))  # type: ignore[call-overload]
+            for wrong in wrongs:
+                assert not entry_safety._registry_semantics_hold(replace(record, **{name: wrong}), key)  # noqa: SLF001
+
+
+def test_series_selection_precedes_the_semantics_proof_and_the_consumer_re_proves_the_manifest_itself() -> None:
+    # two LAST_TRADE series covering the instrument are ambiguous (never one picked); another instrument has none
+    facts = facts_of(market_archive(PARITY_RECORDS, chain=two_trade_series_chain()), at=READ, kline=None)
+    assert facts.trade_reason == "last_trade_series_ambiguous"
+    foreign = facts_of(market_archive(PARITY_RECORDS), at=READ, kline=None, instrument=ingt.ETH)
+    assert (foreign.trade_reason, foreign.index_reason) == (
+        NO_TRADE_SERIES,
+        "index_price_series_not_in_the_selected_data_contract",
+    )
+    # the consumer recomputes the bound manifest itself: a mismatching anchor, or a snapshot claiming registry 1.0
+    # semantics over a substituted registry, is never authentic (and the public reader refuses both up front)
+    substituted = market_archive(PARITY_RECORDS, chain=substituted_chain("last_trade", "price_semantics", "mark_price"))
+    snapshot = json.loads(substituted.source_manifest_binding.snapshot_json)
+    for series in snapshot["series"]:
+        if series["series_id"] == "trades":
+            series["price_semantics"] = "last_trade"
+    binding = replace(substituted.source_manifest_binding, snapshot_json=edge_canonical_json(snapshot))
+    for bad in (
+        replace(market_archive(PARITY_RECORDS), source_manifest_digest="0" * 64),
+        replace(substituted, source_manifest_binding=binding),
+    ):
+        with pytest.raises(GovernedPaperEntrySafetyError, match=f"^{code('market_data_archive_not_authentic')}$"):
+            entry_safety._MarketData(bad, instrument=ingt.INS, kline=None)  # type: ignore[arg-type]  # noqa: SLF001
+        with pytest.raises(GovernedPaperEntrySafetyError, match=f"^{code('market_data_archive_not_authentic')}$"):
+            facts_of(bad, kline=None)
 
 
 def test_the_public_reading_refuses_unauthentic_inputs() -> None:
