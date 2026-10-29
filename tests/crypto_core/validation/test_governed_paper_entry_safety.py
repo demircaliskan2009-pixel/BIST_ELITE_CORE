@@ -25,13 +25,21 @@ this module never installs the test-only permissive rule table. It proves:
   without an approved position-risk measure. Rule sets v1 and v2 keep their accepted identities; a four-day seal v4
   lineage of world G stays READY with every entry still refused by NT-D01; and in the protective lifecycle world, under
   a TEST-ONLY reading of NT-R02 and NT-R04 alone (no rule table is replaced), a same-day loss beyond 2% refuses the
-  re-entry through the sequential admission, while the neutral replay would judge the next day's entry as a hold.
+  re-entry through the sequential admission, while the neutral replay would judge the next day's entry as a hold;
+* rule set v4 (``S1_MARKET_DATA_INTEGRITY_NATIVE_MEASUREMENT_CLOSURE_V1``): NT-D01, NT-D03, NT-D04 and NT-D05 are
+  measured at their exact published boundaries on facts derived from authentic SYNTHETIC captures (trade and index
+  streams through the public ingress, exchange-kline archives of a DECLARED origin), and BLOCKED wherever the series,
+  the declared continuity, the coverage, the kline origin or the currency of a reading is not proven. Rule sets v1-v3
+  and world G's v4 lineage keep their accepted identities; world G's genesis data contract declares no trade or index
+  series, so its v5 lineage refuses every entry at NT-D01 with exactly that reason, and a D-family PASS never admits an
+  entry past NT-R01.
 """
 
 from __future__ import annotations
 
 import decimal
 import functools
+import itertools
 import json
 from collections.abc import Callable
 from dataclasses import replace
@@ -39,8 +47,22 @@ from fractions import Fraction
 
 import pytest
 
+import crypto_core.validation.authenticated_pit_ingress as ingress
 import crypto_core.validation.governed_paper_entry_safety as entry_safety
+from crypto_core.data.requirements import (
+    DataRequirementKey,
+    data_requirement_registry_digest,
+    data_requirement_registry_from_dict,
+    data_requirement_registry_to_dict,
+    default_perp_data_requirement_registry,
+)
+from crypto_core.strategy.source_packet import SourcePacketRightsStatus
 from crypto_core.validation.edge_artifact_core import EdgeEvidenceStatus, edge_canonical_json, edge_sha256_text
+from crypto_core.validation.edge_source_packet_evidence import (
+    EdgeInputSeries,
+    build_edge_source_packet_evidence,
+    verify_edge_source_packet_evidence,
+)
 from crypto_core.validation.governed_admitted_variant_paper_execution import (
     GovernedPaperDaySealStatus,
     GovernedPaperExecutionStatus,
@@ -50,6 +72,9 @@ from crypto_core.validation.governed_admitted_variant_paper_execution import (
     verify_governed_paper_execution_evidence,
 )
 from crypto_core.validation.governed_paper_entry_safety import (
+    GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET,
+    GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_DIGEST,
+    GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_ID,
     GOVERNED_PAPER_ENTRY_SAFETY_NON_CLAIM_FLAGS,
     GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET,
     GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET_DIGEST,
@@ -61,6 +86,7 @@ from crypto_core.validation.governed_paper_entry_safety import (
     GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_DIGEST,
     GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID,
     GovernedPaperEntrySafetyError,
+    GovernedPaperEntrySafetyMarketData,
     GovernedPaperEntrySafetyObservation,
     GovernedPaperEntrySafetyPortfolio,
     GovernedPaperEntrySafetyProtection,
@@ -70,6 +96,7 @@ from crypto_core.validation.governed_paper_entry_safety import (
     governed_paper_entry_safety_entry_sequences,
     governed_paper_entry_safety_evidence_digest,
     governed_paper_entry_safety_evidence_to_dict,
+    governed_paper_entry_safety_market_data,
     governed_paper_entry_safety_portfolio_facts,
     governed_paper_entry_safety_rule_set_digest,
     governed_paper_entry_safety_sequential_refusals,
@@ -88,10 +115,18 @@ from crypto_core.validation.historical_execution_economics import (
 from crypto_core.validation.historical_execution_economics_policy import LATENCY_TIER_PRDV4_T1
 from crypto_core.validation.historical_ohlc_bar_archive import (
     HistoricalOhlcBarArchive,
+    HistoricalOhlcBarOrigin,
     HistoricalOhlcPriceSemantics,
+    HistoricalOhlcSourceDeclaration,
     build_historical_ohlc_bar,
     build_historical_ohlc_bar_archive,
     historical_ohlc_wilder_atr,
+)
+from crypto_core.validation.historical_pit_dataset import (
+    HistoricalPitValue,
+    build_historical_pit_dataset,
+    build_historical_pit_record,
+    verify_historical_pit_dataset,
 )
 from crypto_core.validation.historical_position_management_policy import (
     MAX_HOLD_NS,
@@ -100,12 +135,14 @@ from crypto_core.validation.historical_position_management_policy import (
 )
 
 try:  # the module objects pytest collects (basename import): the shared synthetic worlds and their exact memos
+    import test_authenticated_pit_ingress as ingt
     import test_governed_admitted_variant_paper_execution as gpe
     import test_governed_paper_protective_authority as prot
     import test_governed_paper_protective_lineage as lineage
     import test_historical_execution_protective_lifecycle as lifet
     import test_historical_ohlc_bar_archive as ohlct
 except ImportError:  # imported outside a pytest session
+    from tests.crypto_core.validation import test_authenticated_pit_ingress as ingt
     from tests.crypto_core.validation import test_governed_admitted_variant_paper_execution as gpe
     from tests.crypto_core.validation import test_governed_paper_protective_authority as prot
     from tests.crypto_core.validation import test_governed_paper_protective_lineage as lineage
@@ -1764,3 +1801,1150 @@ def test_a_stale_engine_mark_blocks_the_portfolio_checks_of_an_open_position() -
         (BLOCKED, code(f"NT-R03:{OPEN_RISK[1]}")),
         (BLOCKED, code("NT-R04:nav_unavailable:no_fresh_visible_mark")),
     ]
+
+
+# --- G. rule set v4: native market-data integrity (S1_MARKET_DATA_INTEGRITY_NATIVE_MEASUREMENT_CLOSURE_V1) ------------------
+
+RULE_SET_V4_DIGEST = "a18b88f2dd910b830369af0c2be341347d0171cfd63543933c4eac9f4e3e0563"
+# The accepted-main identities (main cde35d4f) of world G's native portfolio lineage (seal v4) on the PRODUCTION table:
+# the market-data contract leaves every v4 seal, entry evaluation and the v4 evidence byte-identical.
+ACCEPTED_MAIN_V4_SEALS = (
+    "eba56e75f7c3914da75ef0c015bf002b92e4379c6adabac07e6bd7f001ddfc96",
+    "1a8b310aaa33b70535e62d5c385f37c2865e4880d8a4ae9198130c7d1ecc0f76",
+    "fe7ef5ddb39922134222ef00d208860bac783103417cc4dd017696dc3e11922e",
+    "6c772e204b72ccfc7075aa552786dacf565b127425916eed69567f0c8cd5e453",
+)
+ACCEPTED_MAIN_V4_ENTRY_EVIDENCE = (
+    "5eb2ddd51233ab1e60f5eb4b508a1ec080ad26b37ff2746ff3ffaab1585bd98d",
+    "690c4638f178158a400301034fab6f71e682a1687a8e097c961e48c61d72502b",
+    "bf2f440fe53301ab81781353cd18a8993d697160382f0fa16dbe82c31f83c80b",
+    "9b39e9f0950e075aebaefb4efe31a9f10a05eb1dbc74645bd758f34c71cdb4bd",
+)
+ACCEPTED_MAIN_V4_EVIDENCE = "555a5e601f578a05cd059266fbcb4b8353baf5659a8a86a4d2c85e4b89a0d9c8"
+D_IDS = ("NT-D01", "NT-D03", "NT-D04", "NT-D05")
+MINUTE = 60 * SECOND
+WINDOW = 5 * MINUTE
+UNIT = Fraction(1, 10**18)  # one scale-18 unit
+NO_TRADE_SERIES = "last_trade_series_not_in_the_selected_data_contract"
+TRADE_DIGEST, INDEX_DIGEST = "6" * 64, "5" * 64
+FEED, KLINE_FEED, VOLUME = ("4" * 64,), ("3" * 64,), ("2" * 64, "1" * 64, "0" * 64)
+
+
+def market_facts(**changes: object) -> GovernedPaperEntrySafetyMarketData:
+    """SYNTHETIC rule set v4 facts at T on which every D reading passes: fresh feeds, divergence 0, price == index."""
+
+    values: dict[str, object] = {
+        "trade_reason": "",
+        "trade_record_digest": TRADE_DIGEST,
+        "trade_event_time_ns": T - SECOND,
+        "trade_price": d(40),
+        "trade_gap_ns": 30 * SECOND,
+        "trade_gap_reason": "",
+        "trade_gap_evidence": FEED,
+        "kline_gap_ns": 2 * MINUTE,
+        "kline_gap_reason": "",
+        "kline_gap_evidence": KLINE_FEED,
+        "index_reason": "",
+        "index_record_digest": INDEX_DIGEST,
+        "index_event_time_ns": T,
+        "index_price": d(40),
+        "index_slot_ns": SECOND,
+        "volume_target": d(1),
+        "volume_baseline": d(8640),
+        "volume_reason": "",
+        "volume_evidence": VOLUME,
+    }
+    values.update(changes)
+    return GovernedPaperEntrySafetyMarketData(**values)  # type: ignore[arg-type]
+
+
+def measured(market_data: GovernedPaperEntrySafetyMarketData | None = None, **changes: object):  # noqa: ANN201
+    """A rule set v4 observation: ``portfolio`` with native market-data facts (book update at T - 1 s)."""
+
+    return portfolio(market_data=market_facts() if market_data is None else market_data, **changes)
+
+
+def d_checks(decision: object) -> dict[str, tuple[GovernedPaperEntrySafetyStatus, str, str]]:
+    return {
+        name: (check_of(decision, name).status, check_of(decision, name).observed, check_of(decision, name).reason)
+        for name in D_IDS
+    }
+
+
+def test_rule_sets_v1_to_v3_keep_their_accepted_identities_and_v4_adds_only_its_market_data_rule() -> None:
+    assert GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_DIGEST == ACCEPTED_MAIN_RULE_SET_V1_DIGEST
+    assert GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_DIGEST == ACCEPTED_MAIN_RULE_SET_V2_DIGEST
+    assert GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET_DIGEST == RULE_SET_V3_DIGEST
+    v3, v4 = GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET, GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET
+    assert (v4["rule_set_id"], v4["contract_id"], GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_ID) == (
+        "governed-paper-entry-safety.v4",
+        "S1_MARKET_DATA_INTEGRITY_NATIVE_MEASUREMENT_CLOSURE_V1",
+        "governed-paper-entry-safety.v4",
+    )
+    assert {key: value for key, value in v4.items() if key not in ("rule_set_id", "contract_id")} == {
+        **{key: value for key, value in v3.items() if key not in ("rule_set_id", "contract_id")},
+        "market_data_rule": v4["market_data_rule"],
+    }
+    rule = v4["market_data_rule"]
+    assert {key: rule[key] for key in ("trade_gap_ns", "kline_gap_ns", "kline_interval_ns", "divergence_ns")} == {  # type: ignore[index]
+        "trade_gap_ns": 60 * SECOND,
+        "kline_gap_ns": 5 * MINUTE,
+        "kline_interval_ns": MINUTE,
+        "divergence_ns": 5 * SECOND,
+    }
+    assert (rule["index_deviation"], rule["volume_floor"], rule["baseline_windows"], rule["volume_window_ns"]) == (  # type: ignore[index]
+        d("0.02"),
+        d("0.05"),
+        8640,
+        WINDOW,
+    )
+    assert (rule["trade_continuity_profile"], rule["index_publication_profile"]) == (
+        ingt.TRADE_PROFILE,
+        ingt.INDEX_PROFILE,
+    )  # type: ignore[index]
+    assert (
+        GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_DIGEST
+        == edge_sha256_text(edge_canonical_json(v4))
+        == governed_paper_entry_safety_rule_set_digest(protective=True, portfolio=True, market_data=True)
+        == RULE_SET_V4_DIGEST
+    )
+    with pytest.raises(
+        GovernedPaperEntrySafetyError, match=f"^{code('market_data_rule_set_needs_the_portfolio_rule_set')}$"
+    ):
+        entry_safety.governed_paper_entry_safety_rule_set(protective=True, market_data=True)
+
+
+def test_measured_d_checks_pass_and_the_entry_is_still_refused_at_nt_r01() -> None:
+    decision = evaluate_governed_paper_entry_safety(measured())
+    assert d_checks(decision) == {
+        "NT-D01": (
+            S.PASS,
+            f"trade_gap_ns={30 * SECOND};kline_gap_ns={2 * MINUTE}",
+            code("NT-D01:trade_and_kline_feeds_continuous_within_their_gap_bounds"),
+        ),
+        "NT-D03": (S.PASS, "0", code("NT-D03:trade_book_event_time_divergence_within_5s")),
+        "NT-D04": (S.PASS, d(0), code("NT-D04:last_trade_within_2pct_of_the_index")),
+        "NT-D05": (S.PASS, d(1), code("NT-D05:volume_5min_at_or_above_5pct_of_the_30d_mean")),
+    }
+    assert check_of(decision, "NT-D01").evidence_record_digests == (*FEED, *KLINE_FEED)
+    assert check_of(decision, "NT-D03").evidence_record_digests == (TRADE_DIGEST, "b" * 64)
+    assert check_of(decision, "NT-D04").evidence_record_digests == (TRADE_DIGEST, INDEX_DIGEST)
+    assert check_of(decision, "NT-D05").evidence_record_digests == VOLUME
+    # a whole Data family that passes never reaches past the next published gate: no D PASS is an override
+    assert (decision.entry_permitted, decision.first_failure_check_id) == (False, "NT-R01")
+    for name, status in (("NT-R03", BLOCKED), ("NT-R05", BLOCKED), ("NT-R06", BLOCKED), ("FB-TREND", BLOCKED)):
+        assert check_of(decision, name).status is status
+    legacy = evaluate_governed_paper_entry_safety(portfolio())
+    assert [item for item in decision.checks if item.check_id not in D_IDS] == [
+        item for item in legacy.checks if item.check_id not in D_IDS
+    ]
+
+
+@pytest.mark.parametrize(
+    ("changes", "status", "reason"),
+    [
+        ({"trade_gap_ns": 60 * SECOND}, S.PASS, "trade_and_kline_feeds_continuous_within_their_gap_bounds"),
+        ({"trade_gap_ns": 60 * SECOND + 1}, S.FAIL, "trade_stream_gap_above_60s"),
+        ({"kline_gap_ns": 5 * MINUTE}, S.PASS, "trade_and_kline_feeds_continuous_within_their_gap_bounds"),
+        ({"kline_gap_ns": 5 * MINUTE + 1}, S.FAIL, "kline_feed_gap_above_5min"),
+        # a proven-continuous span is a PASS precondition, never an override of a measured gap
+        (
+            {"trade_gap_ns": 61 * SECOND, "trade_gap_reason": "trade_stream_continuity_broken_in_the_span"},
+            S.FAIL,
+            "trade_stream_gap_above_60s",
+        ),
+        (
+            {"trade_gap_reason": "trade_continuity_profile_not_declared"},
+            BLOCKED,
+            "trade_continuity_profile_not_declared",
+        ),
+        (
+            {"trade_gap_reason": "trade_stream_not_observed_back_to_the_span_start"},
+            BLOCKED,
+            "trade_stream_not_observed_back_to_the_span_start",
+        ),
+        (
+            {"kline_gap_ns": None, "kline_gap_evidence": (), "kline_gap_reason": "kline_origin_undeclared"},
+            BLOCKED,
+            "kline_origin_undeclared",
+        ),
+        (
+            {"kline_gap_ns": 6 * MINUTE, "kline_gap_reason": "exchange_kline_feed_not_observed_back_to_the_span_start"},
+            S.FAIL,
+            "kline_feed_gap_above_5min",
+        ),
+    ],
+)
+def test_nt_d01_fails_strictly_above_60s_of_trade_gap_or_5min_of_kline_gap_and_passes_only_proven(
+    changes: dict[str, object], status: GovernedPaperEntrySafetyStatus, reason: str
+) -> None:
+    facts = market_facts(**changes)
+    check = check_of(evaluate_governed_paper_entry_safety(measured(facts)), "NT-D01")
+    kline = "unobserved" if facts.kline_gap_ns is None else str(facts.kline_gap_ns)
+    assert (check.status, check.observed, check.reason) == (
+        status,
+        f"trade_gap_ns={facts.trade_gap_ns};kline_gap_ns={kline}",
+        code(f"NT-D01:{reason}"),
+    )
+
+
+@pytest.mark.parametrize(
+    ("offset", "status"),
+    [
+        (0, S.PASS),
+        (5 * SECOND, S.PASS),
+        (-5 * SECOND, S.PASS),
+        (5 * SECOND + 1, S.FAIL),
+        (-5 * SECOND - 1, S.FAIL),
+    ],
+)
+def test_nt_d03_fails_strictly_above_5s_of_absolute_trade_book_event_time_divergence(
+    offset: int, status: GovernedPaperEntrySafetyStatus
+) -> None:
+    trade_event = T - 10 * SECOND  # the book update ``offset`` after the trade, on either side
+    facts = market_facts(trade_event_time_ns=trade_event)
+    decision = evaluate_governed_paper_entry_safety(measured(facts, book_update_event_time_ns=trade_event + offset))
+    check = check_of(decision, "NT-D03")
+    assert (check.status, check.observed, check.evidence_record_digests) == (
+        status,
+        str(abs(offset)),
+        (TRADE_DIGEST, "b" * 64),
+    )
+
+
+def test_nt_d03_compares_event_times_only_and_is_blocked_without_both_events() -> None:
+    late_trade = market_facts(trade_event_time_ns=T - 3 * SECOND)  # its receipt is no input: only event times compare
+    check = check_of(evaluate_governed_paper_entry_safety(measured(late_trade, book_update_event_time_ns=T)), "NT-D03")
+    assert (check.status, check.observed) == (S.PASS, str(3 * SECOND))
+    absent = measured(book_update_event_time_ns=None, book_update_record_digest=None)
+    assert check_of(evaluate_governed_paper_entry_safety(absent), "NT-D03").reason == code(
+        "NT-D03:no_order_book_update_visible_at_the_decision_instant"
+    )
+    no_trade = market_facts(
+        trade_reason="no_trade_visible_at_the_decision_instant",
+        trade_record_digest=None,
+        trade_event_time_ns=None,
+        trade_price=None,
+        trade_gap_ns=None,
+        trade_gap_reason="no_trade_visible_at_the_decision_instant",
+        trade_gap_evidence=(),
+    )
+    for name in ("NT-D01", "NT-D03", "NT-D04"):
+        check = check_of(evaluate_governed_paper_entry_safety(measured(no_trade)), name)
+        assert (check.status, check.reason) == (BLOCKED, code(f"{name}:no_trade_visible_at_the_decision_instant"))
+
+
+@pytest.mark.parametrize(
+    ("price", "status"),
+    [
+        (Fraction("40.8"), S.PASS),  # exactly +2%
+        (Fraction("40.8") + UNIT, S.FAIL),
+        (Fraction("40.8") - UNIT, S.PASS),
+        (Fraction("39.2"), S.PASS),  # exactly -2%
+        (Fraction("39.2") - UNIT, S.FAIL),
+        (Fraction("39.2") + UNIT, S.PASS),
+    ],
+)
+def test_nt_d04_fails_strictly_above_2pct_of_the_last_trade_against_the_index(
+    price: Fraction, status: GovernedPaperEntrySafetyStatus
+) -> None:
+    check = check_of(evaluate_governed_paper_entry_safety(measured(market_facts(trade_price=d(price)))), "NT-D04")
+    deviation = abs(price - 40) / 40
+    assert (check.status, check.observed, check.evidence_record_digests) == (
+        status,
+        d(deviation),
+        (TRADE_DIGEST, INDEX_DIGEST),
+    )
+    assert (deviation > Fraction(2, 100)) is (status is S.FAIL)
+
+
+def test_nt_d04_never_compares_a_price_or_an_index_it_cannot_prove_current() -> None:
+    cases = (
+        ({"trade_event_time_ns": T - 60 * SECOND}, S.PASS, "last_trade_within_2pct_of_the_index"),
+        (
+            {"trade_event_time_ns": T - 60 * SECOND - 1, "trade_price": d(100)},
+            BLOCKED,
+            "last_trade_not_current_beyond_the_nt_d01_60s_trade_bound",
+        ),
+        ({"index_slot_ns": None}, BLOCKED, "index_currency_unprovable_without_a_declared_publication_profile"),
+        ({"index_event_time_ns": T - 1}, BLOCKED, "index_publication_second_elapsed_at_the_decision_instant"),
+        ({"index_event_time_ns": T - SECOND}, BLOCKED, "index_publication_second_elapsed_at_the_decision_instant"),
+        (
+            {
+                "index_reason": "index_price_series_not_in_the_selected_data_contract",
+                "index_record_digest": None,
+                "index_event_time_ns": None,
+                "index_price": None,
+                "index_slot_ns": None,
+            },
+            BLOCKED,
+            "index_price_series_not_in_the_selected_data_contract",
+        ),
+    )
+    for changes, status, reason in cases:
+        check = check_of(evaluate_governed_paper_entry_safety(measured(market_facts(**changes))), "NT-D04")
+        assert (check.status, check.reason) == (status, code(f"NT-D04:{reason}")), changes
+
+
+@pytest.mark.parametrize(
+    ("target", "status"),
+    [
+        (Fraction(5, 100), S.PASS),  # exactly 5% of a mean of 1
+        (Fraction(5, 100) - UNIT, S.FAIL),
+        (Fraction(5, 100) + UNIT, S.PASS),
+        (Fraction(0), S.FAIL),  # a proven-covered empty window is a measured zero volume
+        (Fraction(3), S.PASS),
+    ],
+)
+def test_nt_d05_fails_strictly_below_5pct_of_the_30_day_mean_5min_volume(
+    target: Fraction, status: GovernedPaperEntrySafetyStatus
+) -> None:
+    check = check_of(evaluate_governed_paper_entry_safety(measured(market_facts(volume_target=d(target)))), "NT-D05")
+    assert (check.status, check.observed, check.evidence_record_digests) == (status, d(target), VOLUME)
+
+
+def test_nt_d05_needs_a_positive_mean_over_proven_coverage() -> None:
+    zero = check_of(evaluate_governed_paper_entry_safety(measured(market_facts(volume_baseline=d(0)))), "NT-D05")
+    assert (zero.status, zero.reason) == (BLOCKED, code("NT-D05:thirty_day_mean_5min_volume_not_positive"))
+    uncovered = market_facts(
+        volume_target=None,
+        volume_baseline=None,
+        volume_reason="trade_continuity_broken_inside_the_30d_baseline_and_target_windows",
+        volume_evidence=(),
+    )
+    check = check_of(evaluate_governed_paper_entry_safety(measured(uncovered)), "NT-D05")
+    assert (check.status, check.observed) == (BLOCKED, "")
+    assert check.reason == code("NT-D05:trade_continuity_broken_inside_the_30d_baseline_and_target_windows")
+
+
+@pytest.mark.parametrize(
+    ("changes", "name"),
+    [
+        ({"trade_reason": "free text"}, "trade_reason"),
+        ({"trade_price": d(0)}, "trade_price"),
+        ({"trade_event_time_ns": T + 1}, "trade_record"),
+        ({"trade_record_digest": None}, "trade_record"),
+        ({"trade_reason": NO_TRADE_SERIES}, "trade_without_a_visible_record"),
+        ({"trade_gap_ns": -1}, "trade_gap_ns"),
+        ({"trade_gap_ns": None}, "trade_gap_inconsistent"),
+        (
+            {"trade_gap_ns": None, "trade_gap_evidence": (), "trade_gap_reason": NO_TRADE_SERIES},
+            "trade_gap_of_a_visible_trade",
+        ),
+        ({"kline_gap_reason": "kline_origin_undeclared"}, "kline_gap_inconsistent"),
+        ({"trade_gap_evidence": ()}, "trade_gap_inconsistent"),
+        ({"trade_gap_evidence": ("x",)}, "trade_gap_evidence"),
+        ({"kline_gap_reason": "kline_origin_guessed"}, "kline_gap_reason"),
+        ({"index_slot_ns": 3 * SECOND}, "index_slot_ns"),
+        ({"index_price": "40"}, "index_price"),
+        ({"volume_reason": "no_visible_trade_before_the_30d_baseline"}, "volume_without_its_coverage"),
+        ({"volume_target": d(-1)}, "volume"),
+        ({"volume_evidence": VOLUME[:2]}, "volume"),
+    ],
+)
+def test_malformed_market_data_facts_are_refused(changes: dict[str, object], name: str) -> None:
+    with pytest.raises(GovernedPaperEntrySafetyError, match=f"^{code(f'observation_malformed:{name}')}$"):
+        evaluate_governed_paper_entry_safety(measured(market_facts(**changes)))
+    with pytest.raises(GovernedPaperEntrySafetyError, match=f"^{code('observation_malformed:market_data')}$"):
+        evaluate_governed_paper_entry_safety(measured(object()))  # type: ignore[arg-type]
+    without = code("observation_malformed:market_data_without_a_governed_portfolio")
+    with pytest.raises(GovernedPaperEntrySafetyError, match=f"^{without}$"):
+        evaluate_governed_paper_entry_safety(protected(market_data=market_facts()))
+
+
+# --- G.2 the readings derived from authentic SYNTHETIC captures ------------------------------------------------------------
+
+M0 = 20_000 * DAY_NS  # SYNTHETIC: a UTC midnight
+W = M0 + 30 * DAY_NS + 3_600 * SECOND  # the open of the target window [W, W + 5 min)
+BASELINE = W - 30 * DAY_NS  # the open of the first of the 8640 baseline windows
+DECIDED = W + WINDOW + 20 * SECOND + 400_000_000  # the target window is the latest completed one at the decision
+INDEXED = DECIDED - 300_000_000  # an index value inside the decision's UTC second
+
+
+def thirty_day_events(target: object = 1) -> list[tuple[int, Fraction]]:
+    """SYNTHETIC ``(event, base quantity)`` of every trade in native id order (ids 1, 2, ...): one contiguous run.
+
+    A trade strictly before the first baseline window; 119 six-hourly baseline trades and the NT-D01 span witness at
+    W - 30 s, 72 units each (8640 units, so the 30-day mean 5-minute volume is exactly 1); five target-window trades
+    60 s apart totalling ``target``; and one trade after the target window's end.
+    """
+
+    events = [(BASELINE - MINUTE, Fraction(5))]
+    events += [(BASELINE + 30 * MINUTE + k * 6 * 3_600 * SECOND, Fraction(72)) for k in range(119)]
+    events += [(W - 30 * SECOND, Fraction(72))]
+    events += [(W + (30 + 60 * k) * SECOND, Fraction(target) / 5) for k in range(5)]  # type: ignore[arg-type]
+    events += [(W + WINDOW + 10 * SECOND, Fraction(1))]
+    return events
+
+
+def capture_dataset(
+    events: list[tuple[int, Fraction]],
+    *,
+    profile: object = "default",
+    receipts: dict[int, int] | None = None,
+    skip: tuple[int, ...] = (),
+    replayed: tuple[int, ...] = (),
+    indexes: tuple[tuple[int, object], ...] = ((INDEXED, 40),),
+    index_profile: object = "default",
+):  # noqa: ANN201
+    """The archive of an authentic SYNTHETIC capture of the trades (ids 1, 2, ...) and index values, via the ingress."""
+
+    trades = [
+        ingt.trade(trade_id, event, price=40, quantity=quantity, receipt=(receipts or {}).get(trade_id))
+        for trade_id, (event, quantity) in enumerate(events, start=1)
+        if trade_id not in skip
+    ]
+    trades += [replace(item, receipt_ns=item.receipt_ns + MINUTE) for item in trades if item.trade_id in replayed]
+    observations = [*trades, *(ingt.index_price(event, value) for event, value in indexes)]
+    streams = (
+        ingt.trade_stream(**({} if profile == "default" else {"profile": profile})),  # type: ignore[arg-type]
+        ingt.index_stream(**({} if index_profile == "default" else {"profile": index_profile})),  # type: ignore[arg-type]
+    )
+    result = ingt.market_ingest(ingt.merged(observations), streams=streams)
+    assert result.dataset is not None, result.evidence.integrity_reason_codes
+    return result.dataset
+
+
+@functools.cache
+def thirty_day_dataset(target: object = 1):  # noqa: ANN201
+    return capture_dataset(thirty_day_events(target))
+
+
+def kline_archive(
+    opens: object = range(-2, 5),
+    *,
+    origin: object = HistoricalOhlcBarOrigin.EXCHANGE_KLINE,
+    semantics: HistoricalOhlcPriceSemantics = HistoricalOhlcPriceSemantics.LAST_TRADE,
+    interval: int = MINUTE,
+    instrument: str = ingt.INS,
+) -> HistoricalOhlcBarArchive:
+    """SYNTHETIC kline archive: one bar per given open ``W + k * interval``, each published 1 s after its close."""
+
+    bars = tuple(
+        build_historical_ohlc_bar(
+            interval_ns=interval,
+            open_time_ns=W + k * interval,
+            open_price=d(40),
+            high_price=d(40),
+            low_price=d(40),
+            close_price=d(40),
+            available_at_ns=W + (k + 1) * interval + SECOND,
+            finalized_at_ns=W + (k + 1) * interval + SECOND,
+        )
+        for k in opens  # type: ignore[attr-defined]
+    )
+    source = HistoricalOhlcSourceDeclaration(
+        source_id="synthetic-kline",
+        source_reference="archive:synthetic-kline",
+        rights_status=SourcePacketRightsStatus.OWN_RESEARCH,
+        rights_reference="license-1",
+        instrument=instrument,
+        price_semantics=semantics,
+        bar_intervals_ns=(interval,),
+        bar_origin=origin,  # type: ignore[arg-type]
+    )
+    return build_historical_ohlc_bar_archive(archive_id="kline-1", source=source, bars=bars)
+
+
+@functools.cache
+def default_klines() -> HistoricalOhlcBarArchive:
+    return kline_archive()
+
+
+def facts_of(dataset: object, *, at: int = DECIDED, kline: object = "default", instrument: str = ingt.INS):  # noqa: ANN201
+    return governed_paper_entry_safety_market_data(
+        dataset,  # type: ignore[arg-type]
+        instrument=instrument,
+        decision_time_ns=at,
+        kline_archive=default_klines() if kline == "default" else kline,  # type: ignore[arg-type]
+    )
+
+
+def decided(facts: GovernedPaperEntrySafetyMarketData, *, at: int = DECIDED, book: int | None = None):  # noqa: ANN201
+    """Every check of a rule set v4 observation at ``at`` carrying the derived ``facts`` (SYNTHETIC book update: 1 s
+    before ``at`` unless given)."""
+
+    return evaluate_governed_paper_entry_safety(
+        portfolio(
+            decision_time_ns=at,
+            day_start_ns=at // DAY_NS * DAY_NS,
+            genesis_start_ns=at - DAY_NS,
+            book_update_event_time_ns=at - SECOND if book is None else book,
+            market_data=facts,
+        )
+    )
+
+
+def test_an_authentic_thirty_day_capture_passes_every_d_check_and_the_readings_are_exact() -> None:
+    dataset = thirty_day_dataset()
+    facts = facts_of(dataset)
+    events = thirty_day_events()
+    trades = [record for record in dataset.records if record.series_id == "trades"]
+    latest = trades[-1]
+    assert (facts.trade_reason, facts.trade_record_digest, facts.trade_event_time_ns, facts.trade_price) == (
+        "",
+        latest.record_digest,
+        W + WINDOW + 10 * SECOND,
+        d(40),
+    )
+    # NT-D01: from the span witness at W - 30 s, the largest gap is exactly 60 s (equality passes); klines 20.4 s old
+    assert (facts.trade_gap_ns, facts.trade_gap_reason) == (60 * SECOND, "")
+    span = [record.record_digest for record in trades if record.event_time_ns >= W - 30 * SECOND]
+    assert facts.trade_gap_evidence == (edge_sha256_text(edge_canonical_json(span)),)
+    assert (facts.kline_gap_ns, facts.kline_gap_reason) == (DECIDED - (W + WINDOW), "")
+    # NT-D04: the index value of the decision's own UTC second
+    (index,) = [record for record in dataset.records if record.series_id == "index"]
+    assert (facts.index_record_digest, facts.index_event_time_ns, facts.index_slot_ns) == (
+        index.record_digest,
+        INDEXED,
+        SECOND,
+    )
+    # NT-D05: an independent recomputation of both volumes from the SYNTHETIC events
+    baseline = sum(quantity for event, quantity in events if BASELINE <= event < W)
+    target = sum(quantity for event, quantity in events if W <= event < W + WINDOW)
+    assert (facts.volume_baseline, facts.volume_target, facts.volume_reason) == (d(baseline), d(target), "")
+    assert (baseline, target) == (8640, 1)
+    assert facts.volume_evidence == (
+        trades[0].record_digest,
+        trades[-1].record_digest,
+        edge_sha256_text(edge_canonical_json([record.record_digest for record in trades])),
+    )
+    decision = decided(facts, book=W + 312 * SECOND)  # SYNTHETIC: 2 s after the newest trade, 8.4 s before the decision
+    assert {name: value[0] for name, value in d_checks(decision).items()} == dict.fromkeys(D_IDS, S.PASS)
+    assert (decision.first_failure_check_id, check_of(decision, "NT-D05").observed) == ("NT-R01", d(1))
+
+
+@pytest.mark.parametrize(
+    ("target", "status"),
+    [(Fraction(5, 100), S.PASS), (Fraction(5, 100) - 5 * UNIT, S.FAIL), (Fraction(5, 100) + 5 * UNIT, S.PASS)],
+)
+def test_nt_d05_on_an_authentic_capture_at_the_5pct_boundary(
+    target: Fraction, status: GovernedPaperEntrySafetyStatus
+) -> None:
+    facts = facts_of(thirty_day_dataset(target))
+    assert facts.volume_target == d(target)
+    assert check_of(decided(facts), "NT-D05").status is status
+
+
+def test_nt_d05_counts_exact_utc_boundaries_ties_and_redeliveries_once() -> None:
+    events = thirty_day_events()
+    events[1] = (BASELINE, Fraction(72))  # exactly the first baseline window's open: baseline
+    events[-7] = (W - 30 * SECOND, Fraction(36))  # the witness splits into two trades tied at one event time
+    events.insert(-6, (W - 30 * SECOND, Fraction(36)))
+    events[-2] = (W + WINDOW - 1, events[-2][1])  # the last nanosecond of the target window: target
+    events[-1] = (W + WINDOW, Fraction(1))  # exactly the target window's end: the next window, the closing witness
+    dataset = capture_dataset(events, replayed=(2, 125))  # two content-identical redeliveries
+    facts = facts_of(dataset)
+    assert (facts.volume_baseline, facts.volume_target, facts.volume_reason) == (d(8640), d(1), "")
+    assert check_of(decided(facts), "NT-D05").status is S.PASS
+
+
+@pytest.mark.parametrize(
+    ("variant", "reason"),
+    [
+        ({"skip": (60,)}, "trade_continuity_broken_inside_the_30d_baseline_and_target_windows"),
+        ({"skip": (1,)}, "no_visible_trade_before_the_30d_baseline"),
+        ({"receipts": {127: DECIDED + 1}}, "no_visible_trade_at_or_after_the_target_window_end"),
+        # a target-window trade received after the decision (every later id with it): the window is not proven complete
+        (
+            {"receipts": {trade_id: DECIDED + trade_id for trade_id in range(123, 128)}},
+            "no_visible_trade_at_or_after_the_target_window_end",
+        ),
+        ({"profile": None}, "trade_continuity_profile_not_declared"),
+    ],
+)
+def test_nt_d05_is_blocked_unless_every_window_is_proven_covered(variant: dict[str, object], reason: str) -> None:
+    facts = facts_of(capture_dataset(thirty_day_events(), **variant))  # type: ignore[arg-type]
+    assert (facts.volume_target, facts.volume_baseline, facts.volume_reason) == (None, None, reason)
+    check = check_of(decided(facts), "NT-D05")
+    assert (check.status, check.reason) == (BLOCKED, code(f"NT-D05:{reason}"))
+
+
+def test_a_covered_empty_baseline_is_a_zero_mean_never_a_pass() -> None:
+    events = [(BASELINE - MINUTE, Fraction(5)), *[(W + (30 + 60 * k) * SECOND, Fraction(1)) for k in range(5)]]
+    facts = facts_of(capture_dataset([*events, (W + WINDOW + 10 * SECOND, Fraction(1))]))
+    assert (facts.volume_baseline, facts.volume_target) == (d(0), d(5))
+    check = check_of(decided(facts), "NT-D05")
+    assert (check.status, check.reason) == (BLOCKED, code("NT-D05:thirty_day_mean_5min_volume_not_positive"))
+
+
+def test_nt_d01_on_authentic_captures_gaps_coverage_and_continuity() -> None:
+    events = thirty_day_events()
+    # a gap of 60 s + 1 ns between the witness and the first target-window trade
+    late = [*events]
+    late[-6] = (late[-6][0] + 1, late[-6][1])
+    facts = facts_of(capture_dataset(late))
+    assert facts.trade_gap_ns == 60 * SECOND + 1
+    assert check_of(decided(facts), "NT-D01").status is S.FAIL
+    # a long silence ending just inside the span: the recent trades never repair it
+    silent = [item for index, item in enumerate(events) if index != len(events) - 7]
+    facts = facts_of(capture_dataset(silent))
+    assert facts.trade_gap_ns == W + 30 * SECOND - events[-8][0]
+    assert check_of(decided(facts), "NT-D01").reason == code("NT-D01:trade_stream_gap_above_60s")
+    # a native gap inside the span (an extra id at W + 60 s never captured), and an undeclared profile: the observed
+    # gaps stay within 60 s, but the span is never proven continuous
+    gapped = [*events[:-6], (W + 60 * SECOND, Fraction(1)), *events[-6:]]
+    for dataset, reason in (
+        (capture_dataset(gapped, skip=(len(events) - 5,)), "trade_stream_continuity_broken_in_the_span"),
+        (capture_dataset(events, profile=None), "trade_continuity_profile_not_declared"),
+    ):
+        facts = facts_of(dataset)
+        assert (facts.trade_gap_ns, facts.trade_gap_reason) == (60 * SECOND, reason)
+        check = check_of(decided(facts), "NT-D01")
+        assert (check.status, check.reason) == (BLOCKED, code(f"NT-D01:{reason}"))
+    # dense trades that start after the span start: the span start is unobserved, so it is never a pass
+    dense = [(W + (10 + 50 * k) * SECOND, Fraction(1)) for k in range(7)]
+    facts = facts_of(capture_dataset(dense))
+    assert (facts.trade_gap_ns, facts.trade_gap_reason) == (
+        50 * SECOND,
+        "trade_stream_not_observed_back_to_the_span_start",
+    )
+    assert check_of(decided(facts), "NT-D01").status is BLOCKED
+
+
+@pytest.mark.parametrize(
+    ("kline", "gap", "status", "reason"),
+    [
+        ("default", DECIDED - (W + WINDOW), S.PASS, "trade_and_kline_feeds_continuous_within_their_gap_bounds"),
+        # exactly 5 minutes between two visible bars passes (the ns boundary is the observation test's), 6 fail
+        (
+            lambda: kline_archive((-5, 1)),
+            5 * MINUTE,
+            S.PASS,
+            "trade_and_kline_feeds_continuous_within_their_gap_bounds",
+        ),
+        (lambda: kline_archive((-6, 1)), 6 * MINUTE, S.FAIL, "kline_feed_gap_above_5min"),
+        # the newest visible bar closed at W: 5 min 20.4 s of silence at the decision
+        (lambda: kline_archive(range(-2, 0)), DECIDED - W, S.FAIL, "kline_feed_gap_above_5min"),
+        (
+            lambda: kline_archive(range(1, 5)),
+            DECIDED - (W + WINDOW),
+            BLOCKED,
+            "exchange_kline_feed_not_observed_back_to_the_span_start",
+        ),
+        (lambda: None, None, BLOCKED, "exchange_kline_feed_not_in_the_selected_data_contract"),
+        (lambda: kline_archive(origin=None), None, BLOCKED, "kline_origin_undeclared"),
+        (
+            lambda: kline_archive(origin=HistoricalOhlcBarOrigin.TRADE_DERIVED),
+            None,
+            BLOCKED,
+            "kline_bars_trade_derived_not_an_exchange_kline_feed",
+        ),
+        (
+            lambda: kline_archive(semantics=HistoricalOhlcPriceSemantics.MARK_PRICE),
+            None,
+            BLOCKED,
+            "exchange_kline_bars_not_last_trade",
+        ),
+        (lambda: kline_archive((-1, 0), interval=WINDOW), None, BLOCKED, "exchange_kline_1m_interval_not_declared"),
+        (lambda: kline_archive(instrument=ingt.ETH), None, BLOCKED, "exchange_kline_feed_of_another_instrument"),
+    ],
+)
+def test_nt_d01_reads_only_a_declared_1m_exchange_kline_feed(
+    kline: object, gap: int | None, status: GovernedPaperEntrySafetyStatus, reason: str
+) -> None:
+    facts = facts_of(thirty_day_dataset(), kline=kline if kline == "default" else kline())  # type: ignore[operator]
+    assert facts.kline_gap_ns == gap
+    check = check_of(decided(facts), "NT-D01")
+    assert (check.status, check.reason) == (status, code(f"NT-D01:{reason}"))
+
+
+def test_the_readings_never_read_a_record_unknown_at_the_decision_instant() -> None:
+    dataset = thirty_day_dataset()
+    before = facts_of(dataset, at=W + WINDOW + 10 * SECOND)  # the newest trade is received 1 ns after this instant
+    assert before.trade_event_time_ns == W + 270 * SECOND
+    assert before.volume_reason == "no_visible_trade_at_or_after_the_target_window_end"
+    assert before.index_reason == "no_index_price_visible_at_the_decision_instant"
+    after = facts_of(dataset, at=W + WINDOW + 10 * SECOND + 1)
+    assert (after.trade_event_time_ns, after.volume_reason) == (W + WINDOW + 10 * SECOND, "")
+
+
+def test_nt_d03_and_nt_d04_on_authentic_captures_never_substitute_another_series() -> None:
+    facts = facts_of(thirty_day_dataset())
+    # NT-D03: event time of the latest visible trade against the L2 update, ±5 s
+    assert check_of(decided(facts, book=facts.trade_event_time_ns - 5 * SECOND), "NT-D03").status is S.PASS  # type: ignore[operator]
+    assert check_of(decided(facts, book=facts.trade_event_time_ns - 5 * SECOND - 1), "NT-D03").status is S.FAIL  # type: ignore[operator]
+    # a dataset without trade or index series (marks and books only): BLOCKED, never the mark or the book instead
+    legacy = facts_of(ingt.world_result().dataset, at=ingt.BASE + 50_000, kline=None)
+    assert (legacy.trade_reason, legacy.index_reason, legacy.volume_reason) == (
+        NO_TRADE_SERIES,
+        "index_price_series_not_in_the_selected_data_contract",
+        NO_TRADE_SERIES,
+    )
+    decision = decided(legacy, at=ingt.BASE + 50_000)
+    assert {name: (check_of(decision, name).status, check_of(decision, name).reason) for name in D_IDS} == {
+        name: (BLOCKED, code(f"{name}:{NO_TRADE_SERIES}")) for name in D_IDS
+    }
+    # the instrument the series does not cover, an index without its declared second, a stale and a late index
+    assert facts_of(thirty_day_dataset(), instrument=ingt.ETH, kline=None).trade_reason == NO_TRADE_SERIES
+    plain = facts_of(capture_dataset(thirty_day_events(), index_profile=None))
+    assert check_of(decided(plain), "NT-D04").reason == code(
+        "NT-D04:index_currency_unprovable_without_a_declared_publication_profile"
+    )
+    stale = facts_of(capture_dataset(thirty_day_events(), indexes=((DECIDED - SECOND, 40),)))
+    assert check_of(decided(stale), "NT-D04").reason == code(
+        "NT-D04:index_publication_second_elapsed_at_the_decision_instant"
+    )
+    # an index value not yet received is invisible: the older one is read, and its second has elapsed
+    earlier = capture_dataset(thirty_day_events(), indexes=((DECIDED - 2 * SECOND, 40), (INDEXED, 40)))
+    assert facts_of(earlier, at=INDEXED).index_event_time_ns == DECIDED - 2 * SECOND  # INDEXED is received 1 ns later
+    assert check_of(decided(facts_of(earlier, at=INDEXED), at=INDEXED), "NT-D04").reason == code(
+        "NT-D04:index_publication_second_elapsed_at_the_decision_instant"
+    )
+    assert facts_of(earlier, at=INDEXED + 1).index_event_time_ns == INDEXED
+
+
+def market_archive(records: tuple, *, chain: tuple | None = None) -> object:
+    """A HAND-BUILT archive over the market manifest (or ``chain``'s): records the ingress would refuse are a consumer's
+    input too."""
+
+    manifest, _, registry = ingt.market_chain() if chain is None else chain
+    return build_historical_pit_dataset(
+        manifest,
+        expected_source_manifest_digest=manifest.source_packet_evidence_digest,
+        expected_data_requirement_registry_digest=data_requirement_registry_digest(registry),
+        dataset_id="hand-built-1",
+        correlation_id="corr-1",
+        source_reference="archive:hand-built",
+        rights_status="own_research",
+        rights_reference="license-1",
+        records=records,
+    )
+
+
+def hand_record(  # noqa: ANN201
+    series: str,
+    key: str,
+    sequence: int,
+    event: int,
+    values: dict[str, object],
+    *,
+    instrument: str = ingt.INS,
+    received: int | None = None,
+):
+    return build_historical_pit_record(
+        series_id=series,
+        data_requirement_key=key,
+        instrument=instrument,
+        sequence_id=sequence,
+        event_time_ns=event,
+        available_at_ns=event + 1 if received is None else received,
+        finalized_at_ns=event,
+        revision_vintage_id=None,
+        values=tuple(HistoricalPitValue(name, d(value)) for name, value in sorted(values.items())),
+    )
+
+
+def test_a_hand_built_archive_is_read_only_through_its_own_well_formed_visible_records() -> None:
+    at = W + 10 * SECOND
+    trades = [
+        hand_record("trades", "last_trade", 1, W, {"trade_price": 40, "trade_quantity": 1, "trade_run_first_id": 1})
+    ]
+    index = [hand_record("index", "index_price", W, W, {"index_price": 0, "index_utc_second_slot": W // SECOND})]
+    facts = facts_of(market_archive((*trades, *index)), at=at, kline=None)
+    assert facts.index_reason == "index_price_not_positive"  # a zero index is never compared
+    assert check_of(decided(facts, at=at), "NT-D04").reason == code("NT-D04:index_price_not_positive")
+    # a malformed trade record blocks the trade readings from the instant it is visible, never before (no look-ahead)
+    broken = hand_record("trades", "last_trade", 2, W + 20 * SECOND, {"trade_price": 40})
+    archive = market_archive((*trades, broken))
+    assert facts_of(archive, at=at, kline=None).trade_reason == ""
+    assert facts_of(archive, at=W + 20 * SECOND + 1, kline=None).trade_reason == "last_trade_record_malformed"
+    # a run some visible records name and others do not is no declared profile, from the instant both are visible
+    mixed = market_archive(
+        (*trades, hand_record("trades", "last_trade", 2, W + 5 * SECOND, {"trade_price": 40, "trade_quantity": 1}))
+    )
+    assert facts_of(mixed, at=at, kline=None).volume_reason == "trade_continuity_declaration_inconsistent"
+    assert facts_of(mixed, at=W + 5 * SECOND, kline=None).volume_reason == "no_visible_trade_before_the_30d_baseline"
+
+
+# --- G.2b producer/consumer trust parity: a public READY archive can bypass the ingress, so the index publication
+# profile and the series semantics the ingress enforces are re-proven on what the archive carries, never trusted -------
+
+PUBLISHED = (W // SECOND + 10) * SECOND  # SYNTHETIC: the first nanosecond of a UTC second
+READ = PUBLISHED + 500_000_000  # inside that second, after every record below is received (1 ns after its event)
+PARITY_TRADE = hand_record(
+    "trades", "last_trade", 1, PUBLISHED - 2 * SECOND, {"trade_price": 40, "trade_quantity": 1, "trade_run_first_id": 1}
+)
+SLOT_CONFLICT = "index_publication_slot_conflict"
+MIXED_PROFILE = "index_publication_declaration_inconsistent"
+WITHIN_2PCT = "PASS:last_trade_within_2pct_of_the_index"
+
+
+def index_record(event: int, price: object, *, slot: bool = True, sequence: int | None = None, **changes: object):  # noqa: ANN201
+    """One HAND-BUILT index record of native event ``event`` (its identity unless ``sequence``), naming its UTC second
+    when ``slot``."""
+
+    values = {"index_price": price} | ({"index_utc_second_slot": event // SECOND} if slot else {})
+    return hand_record("index", "index_price", event if sequence is None else sequence, event, values, **changes)  # type: ignore[arg-type]
+
+
+PARITY_RECORDS = (PARITY_TRADE, index_record(PUBLISHED + 1, 40))
+
+
+def index_reading(*records: object, at: int = READ, chain: tuple | None = None) -> tuple[str, str | None, str]:
+    """``(index reason, index price, "NT-D04 status:reason")`` at ``at`` of a hand-built archive of ``records``."""
+
+    facts = facts_of(market_archive(records, chain=chain), at=at, kline=None)
+    check = check_of(decided(facts, at=at), "NT-D04")
+    return facts.index_reason, facts.index_price, f"{check.status.value}:{check.reason.removeprefix(code('NT-D04:'))}"
+
+
+@functools.cache
+def two_instrument_chain() -> tuple:
+    return ingt.build_market_chain(instruments=(ingt.INS, ingt.ETH))
+
+
+@functools.cache
+def substituted_chain(key: str, field: str, value: str) -> tuple:
+    """The SYNTHETIC market chain over a registry whose ``key`` row differs from registry 1.0 in ``field`` alone."""
+
+    payload = data_requirement_registry_to_dict(default_perp_data_requirement_registry())
+    payload["requirements"][key][field] = value  # type: ignore[index]
+    registry = data_requirement_registry_from_dict(payload).registry
+    assert registry is not None
+    return ingt.build_market_chain(registry)
+
+
+@functools.cache
+def two_trade_series_chain() -> tuple:
+    """The SYNTHETIC market manifest with a second LAST_TRADE series covering the instrument: ``(manifest, -, registry)``."""
+
+    registry = default_perp_data_requirement_registry()
+    intake = ingt._intake(ingt.MARKET_KEYS)  # noqa: SLF001
+    declared = (*((ingt.MARKET_SERIES_IDS[key], key) for key in ingt.MARKET_KEYS), ("trades-2", "last_trade"))
+    manifest = build_edge_source_packet_evidence(
+        intake,
+        expected_root_intake_digest=intake.intake_digest,
+        data_requirement_registry=registry,
+        expected_data_requirement_registry_digest=data_requirement_registry_digest(registry),
+        manifest_id="manifest-1",
+        correlation_id="corr-1",
+        input_series=tuple(
+            EdgeInputSeries(
+                series,
+                key,
+                f"archive:{series}",
+                "own_research",
+                "note-1",
+                "finalized_only",
+                "immutable_after_finalization",
+                (ingt.INS,),
+            )
+            for series, key in declared
+        ),
+    )
+    return manifest, None, registry
+
+
+def test_distinct_index_publications_in_one_declared_second_are_blocked_whatever_their_values_or_order() -> None:
+    blocked = (SLOT_CONFLICT, None, f"{BLOCKED.value}:{SLOT_CONFLICT}")
+    # the historical false PASS (100 then 40, against a trade at 40) and its order twin (a FAIL) now read alike
+    assert index_reading(PARITY_TRADE, index_record(PUBLISHED, 100), index_record(PUBLISHED + 1, 40)) == blocked
+    assert index_reading(PARITY_TRADE, index_record(PUBLISHED, 40), index_record(PUBLISHED + 1, 100)) == blocked
+    # the same value at two native events is still two publications of one second
+    assert index_reading(PARITY_TRADE, index_record(PUBLISHED, 40), index_record(PUBLISHED + 1, 40)) == blocked
+    # one native event carrying two values (the ingress's identity conflict), under another sequence id
+    other_value = index_record(PUBLISHED + 1, 100, sequence=PUBLISHED + 2)
+    assert index_reading(*PARITY_RECORDS, other_value) == blocked
+    # the valid control, and an identical replay of its native event (another record, same event and value): one
+    # publication, read as one
+    control = ("", d(40), WITHIN_2PCT)
+    assert index_reading(*PARITY_RECORDS) == control
+    assert index_reading(*PARITY_RECORDS, index_record(PUBLISHED + 1, 40, sequence=PUBLISHED + 2)) == control
+
+
+def test_mixed_index_publication_declarations_never_give_a_trusted_index_in_either_order() -> None:
+    blocked = (MIXED_PROFILE, None, f"{BLOCKED.value}:{MIXED_PROFILE}")
+    declared = index_record(PUBLISHED + 1, 40)
+    assert index_reading(PARITY_TRADE, index_record(PUBLISHED, 100, slot=False), declared) == blocked
+    assert (
+        index_reading(PARITY_TRADE, index_record(PUBLISHED, 100), index_record(PUBLISHED + 1, 40, slot=False))
+        == blocked
+    )
+    # in another second too: a stream that names its second only sometimes declares no profile
+    assert index_reading(PARITY_TRADE, index_record(PUBLISHED - SECOND, 40, slot=False), declared) == blocked
+    # no record declaring claims no profile, so none is broken: the currency stays unprovable
+    plain = (index_record(PUBLISHED, 100, slot=False), index_record(PUBLISHED + 1, 40, slot=False))
+    reason = "index_currency_unprovable_without_a_declared_publication_profile"
+    assert index_reading(PARITY_TRADE, *plain)[2] == f"{BLOCKED.value}:{reason}"
+
+
+def test_a_malformed_slot_marker_blocks_from_its_visibility_and_another_instruments_slots_never_count() -> None:
+    second = PUBLISHED // SECOND
+    for marker in (second + 1, Fraction(2 * second + 1, 2)):  # another second, or no whole second
+        values = {"index_price": 40, "index_utc_second_slot": marker}
+        wrong = hand_record("index", "index_price", PUBLISHED + 1, PUBLISHED + 1, values)
+        assert index_reading(PARITY_TRADE, wrong)[0] == "index_price_record_malformed"
+    eth = (index_record(PUBLISHED, 100, instrument=ingt.ETH), index_record(PUBLISHED + 1, 40, instrument=ingt.ETH))
+    records = (*PARITY_RECORDS, *eth)
+    assert index_reading(*records, chain=two_instrument_chain()) == ("", d(40), WITHIN_2PCT)
+    archive = market_archive(records, chain=two_instrument_chain())
+    assert facts_of(archive, at=READ, kline=None, instrument=ingt.ETH).index_reason == SLOT_CONFLICT
+
+
+def test_a_broken_publication_profile_counts_only_from_the_instant_both_records_are_visible() -> None:
+    for late, broken in (
+        (index_record(PUBLISHED, 100, received=READ + 1), SLOT_CONFLICT),
+        (index_record(PUBLISHED, 100, slot=False, received=READ + 1), MIXED_PROFILE),
+    ):
+        assert index_reading(*PARITY_RECORDS, late) == ("", d(40), WITHIN_2PCT)  # received 1 ns after READ
+        assert index_reading(*PARITY_RECORDS, late, at=READ + 1)[0] == broken
+
+
+def test_adjacent_utc_seconds_are_distinct_publication_slots_up_to_the_exact_currency_boundary() -> None:
+    records = (PARITY_TRADE, index_record(PUBLISHED - 1, 100), index_record(PUBLISHED, 40))
+    assert index_reading(*records) == ("", d(40), WITHIN_2PCT)  # the last ns of one second and the first of the next
+    assert index_reading(*records, at=PUBLISHED + SECOND - 1)[2] == WITHIN_2PCT
+    elapsed = f"{BLOCKED.value}:index_publication_second_elapsed_at_the_decision_instant"
+    assert index_reading(*records, at=PUBLISHED + SECOND)[2] == elapsed
+
+
+def test_the_publication_judgement_is_order_free() -> None:
+    records = (PARITY_TRADE, index_record(PUBLISHED - SECOND, 40), index_record(PUBLISHED, 100), *PARITY_RECORDS[1:])
+    forward, backward = market_archive(records), market_archive(tuple(reversed(records)))
+    assert forward.dataset_digest == backward.dataset_digest
+    assert (
+        index_reading(*records)
+        == index_reading(*reversed(records))
+        == (SLOT_CONFLICT, None, f"{BLOCKED.value}:{SLOT_CONFLICT}")
+    )
+    # the judgement itself over every order of its publications, an identical replay among them
+    second, index = PUBLISHED // SECOND, entry_safety._Index  # noqa: SLF001
+    parsed = [
+        index(PUBLISHED - SECOND, PUBLISHED - SECOND, PUBLISHED - SECOND + 1, d(40), second - 1, "0" * 64),
+        index(PUBLISHED, PUBLISHED, PUBLISHED + 1, d(100), second, "1" * 64),
+        index(PUBLISHED + 1, PUBLISHED + 1, PUBLISHED + 2, d(40), second, "2" * 64),
+        index(PUBLISHED + 1, PUBLISHED + 3, PUBLISHED + 3, d(40), second, "3" * 64),  # an identical replay
+    ]
+    judged = {entry_safety._publication_profile(order) for order in itertools.permutations(parsed)}  # noqa: SLF001
+    assert judged == {(None, PUBLISHED + 2)}
+
+
+SUBSTITUTIONS = (
+    ("last_trade", "price_semantics", "mark_price"),
+    ("index_price", "price_semantics", "mark_price"),
+    ("last_trade", "historical_source", "mark_price_history_v1"),
+    ("index_price", "historical_source", "mark_price_history_v1"),
+    ("last_trade", "event_time_policy", "mark_event_ns"),
+    ("index_price", "available_at_policy", "mark_available_ns"),
+    ("last_trade", "finalized_at_policy", "mark_finalized_ns"),
+    ("index_price", "finality_policy", "mark_snapshot_final"),
+)
+
+
+@pytest.mark.parametrize(("key", "field", "value"), SUBSTITUTIONS)
+def test_a_ready_authentic_archive_with_substituted_series_semantics_is_blocked_never_measured(
+    key: str, field: str, value: str
+) -> None:
+    chain = substituted_chain(key, field, value)
+    archive = market_archive(PARITY_RECORDS, chain=chain)
+    # an internally valid self-digest over an authentic manifest: the public verifiers alone cannot see a substitution
+    assert archive.status is EdgeEvidenceStatus.READY
+    assert verify_historical_pit_dataset(archive).intact and verify_edge_source_packet_evidence(chain[0]).intact
+    facts = facts_of(archive, at=READ, kline=None)
+    decision = decided(facts, at=READ)
+    if key == "last_trade":
+        reason = "last_trade_series_semantics_unsupported"
+        assert (facts.trade_reason, facts.trade_gap_reason, facts.volume_reason, facts.trade_price) == (
+            reason,
+            reason,
+            reason,
+            None,
+        )
+        assert facts.index_reason == ""  # the registry 1.0 index series is still read
+        assert check_of(decision, "NT-D01").status is BLOCKED
+        for name in ("NT-D03", "NT-D04", "NT-D05"):
+            assert (check_of(decision, name).status, check_of(decision, name).reason) == (
+                BLOCKED,
+                code(f"{name}:{reason}"),
+            )
+    else:
+        reason = "index_price_series_semantics_unsupported"
+        assert (facts.trade_reason, facts.index_reason, facts.index_price) == ("", reason, None)
+        assert (check_of(decision, "NT-D04").status, check_of(decision, "NT-D04").reason) == (
+            BLOCKED,
+            code(f"NT-D04:{reason}"),
+        )
+
+
+class _StrAlias(str):
+    """Equal to an accepted text, but not a str: equality alone would accept it."""
+
+
+def test_the_gate_re_proves_exactly_the_producer_series_semantics_by_value_and_exact_type() -> None:
+    producer = {
+        key: (
+            ("registry_requirement_bound", True),
+            ("finality", ingress._FINALIZED_ONLY),  # noqa: SLF001
+            ("revision_policy", ingress._IMMUTABLE_AFTER_FINALIZATION),  # noqa: SLF001
+            *ingress._REGISTRY_SEMANTICS[key],  # noqa: SLF001
+        )
+        for key in (DataRequirementKey.LAST_TRADE, DataRequirementKey.INDEX_PRICE)
+    }
+    records = {record.data_requirement_key: record for record in ingt.market_chain()[0].series}
+    for key, fields_ in producer.items():
+        consumer = entry_safety._MARKET_SERIES_SEMANTICS[key]  # noqa: SLF001
+        assert [(name, type(value), value) for name, value in consumer] == [
+            (name, type(value), value) for name, value in fields_
+        ]
+        record = records[key.value]
+        assert entry_safety._registry_semantics_hold(record, key)  # noqa: SLF001 - the registry 1.0 control
+        for name, value in fields_:
+            # another value of the same type, and an equal value of another type (1 for True, "" for None, a str alias)
+            wrongs = {True: (False, 1), None: ("strict_monotonic", "")}.get(value, (f"{value}_other", _StrAlias(value)))  # type: ignore[call-overload]
+            for wrong in wrongs:
+                assert not entry_safety._registry_semantics_hold(replace(record, **{name: wrong}), key)  # noqa: SLF001
+
+
+def test_series_selection_precedes_the_semantics_proof_and_the_consumer_re_proves_the_manifest_itself() -> None:
+    # two LAST_TRADE series covering the instrument are ambiguous (never one picked); another instrument has none
+    facts = facts_of(market_archive(PARITY_RECORDS, chain=two_trade_series_chain()), at=READ, kline=None)
+    assert facts.trade_reason == "last_trade_series_ambiguous"
+    foreign = facts_of(market_archive(PARITY_RECORDS), at=READ, kline=None, instrument=ingt.ETH)
+    assert (foreign.trade_reason, foreign.index_reason) == (
+        NO_TRADE_SERIES,
+        "index_price_series_not_in_the_selected_data_contract",
+    )
+    # the consumer recomputes the bound manifest itself: a mismatching anchor, or a snapshot claiming registry 1.0
+    # semantics over a substituted registry, is never authentic (and the public reader refuses both up front)
+    substituted = market_archive(PARITY_RECORDS, chain=substituted_chain("last_trade", "price_semantics", "mark_price"))
+    snapshot = json.loads(substituted.source_manifest_binding.snapshot_json)
+    for series in snapshot["series"]:
+        if series["series_id"] == "trades":
+            series["price_semantics"] = "last_trade"
+    binding = replace(substituted.source_manifest_binding, snapshot_json=edge_canonical_json(snapshot))
+    for bad in (
+        replace(market_archive(PARITY_RECORDS), source_manifest_digest="0" * 64),
+        replace(substituted, source_manifest_binding=binding),
+    ):
+        with pytest.raises(GovernedPaperEntrySafetyError, match=f"^{code('market_data_archive_not_authentic')}$"):
+            entry_safety._MarketData(bad, instrument=ingt.INS, kline=None)  # type: ignore[arg-type]  # noqa: SLF001
+        with pytest.raises(GovernedPaperEntrySafetyError, match=f"^{code('market_data_archive_not_authentic')}$"):
+            facts_of(bad, kline=None)
+
+
+def test_the_public_reading_refuses_unauthentic_inputs() -> None:
+    dataset = thirty_day_dataset()
+    forged = replace(dataset, dataset_digest="0" * 64)
+    for bad, reason in (
+        (forged, "market_data_archive_not_authentic"),
+        (object(), "market_data_archive_not_authentic"),
+    ):
+        with pytest.raises(GovernedPaperEntrySafetyError, match=f"^{code(reason)}$"):
+            facts_of(bad, kline=None)
+    with pytest.raises(GovernedPaperEntrySafetyError, match=f"^{code('market_data_kline_archive_not_authentic')}$"):
+        facts_of(dataset, kline=replace(default_klines(), archive_digest="0" * 64))
+    with pytest.raises(GovernedPaperEntrySafetyError, match=f"^{code('market_data_instant_invalid')}$"):
+        facts_of(dataset, at=0, kline=None)
+
+
+# --- G.3 world G's market-data lineage (seal v5) on the PRODUCTION table --------------------------------------------------
+
+
+@functools.cache
+def market_data_days(count: int) -> tuple:
+    """World G's first ``count`` days of the market-data integrity lineage (seal v5), on the PRODUCTION table."""
+
+    assert entry_safety._CHECKS is PRODUCTION_CHECKS  # noqa: SLF001
+    if count == 0:
+        return ()
+    days = market_data_days(count - 1)
+    return (*days, lineage.protective_day(days, portfolio_no_trade=True, market_data_integrity=True))
+
+
+def test_world_g_native_portfolio_lineage_is_byte_identical_to_accepted_main() -> None:
+    days = portfolio_days(4)
+    assert tuple(item.seal.seal_digest for item in days) == ACCEPTED_MAIN_V4_SEALS
+    assert tuple(item.seal.entry_safety_evidence_digest for item in days) == ACCEPTED_MAIN_V4_ENTRY_EVIDENCE
+    assert lineage.evidence_of(days).evidence_digest == ACCEPTED_MAIN_V4_EVIDENCE
+
+
+def test_world_g_market_data_lineage_reads_its_data_contract_and_still_refuses_every_entry_at_nt_d01() -> None:
+    days, legacy = market_data_days(4), portfolio_days(4)
+    for item, old in zip(days, legacy, strict=True):
+        seal = item.seal
+        assert (seal.schema_version, seal.status, seal.reason_codes) == (
+            "governed-paper-day-seal.v5",
+            GovernedPaperDaySealStatus.SEALED,
+            (),
+        )
+        assert seal.entry_safety_rule_set_digest == RULE_SET_V4_DIGEST
+        # the readings are facts of the archive, never of the schedule: the sequential admission is unchanged
+        assert (seal.schedule, seal.governed_outcome_digest) == (old.seal.schedule, old.seal.governed_outcome_digest)
+        verification = verify_governed_paper_day_seal(seal, item.seal_inputs)
+        assert (verification.intact, verification.reason_codes) == (True, ())
+    item = days[3]
+    (entry,) = item.seal.entry_safety_decisions
+    (old_entry,) = legacy[3].seal.entry_safety_decisions
+    assert (entry.entry_permitted, entry.first_failure_check_id) == (False, "NT-D01")
+    # world G's genesis data contract declares no LAST_TRADE or INDEX_PRICE series: each reading says exactly that
+    for name in D_IDS:
+        check = check_of(entry, name)
+        assert (check.status, check.reason) == (BLOCKED, code(f"{name}:{NO_TRADE_SERIES}"))
+    assert check_of(entry, "NT-D01").observed == "trade_gap_ns=unobserved;kline_gap_ns=unobserved"
+    assert [check for check in entry.checks if check.check_id not in D_IDS] == [
+        check for check in old_entry.checks if check.check_id not in D_IDS
+    ]
+    # the public reading reproduces what the seal evaluated: the archive and the protective OHLC archive (mark bars of
+    # undeclared origin, so no exchange kline feed either)
+    facts = governed_paper_entry_safety_market_data(
+        item.seal_inputs.dataset,
+        instrument=gpe.INS,
+        decision_time_ns=entry.decision_time_ns,
+        kline_archive=item.seal_inputs.protection.ohlc_archive,
+    )
+    assert (facts.trade_reason, facts.kline_gap_reason, facts.index_reason) == (
+        NO_TRADE_SERIES,
+        "kline_origin_undeclared",
+        "index_price_series_not_in_the_selected_data_contract",
+    )
+    # the public builder re-derives exactly the sealed rule set v4 evaluation
+    authority, run, _ = run_and_evidence(item)
+    economics = lineage.protected_replay(item)[0]
+    evidence = build_governed_paper_entry_safety_evidence(
+        authority=authority,
+        run=run,
+        dataset=item.seal_inputs.dataset,
+        invalidated_from_ns=None,
+        protection=seal_protection(item),
+        portfolio=GovernedPaperEntrySafetyPortfolio(economics, item.seal.schedule),
+        market_data=True,
+    )
+    assert (evidence.rule_set_id, evidence.rule_set_digest, evidence.evidence_digest) == (
+        GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_ID,
+        RULE_SET_V4_DIGEST,
+        item.seal.entry_safety_evidence_digest,
+    )
+    for flag, supplied, reason in (
+        (True, None, "market_data_without_a_governed_portfolio"),
+        (1, GovernedPaperEntrySafetyPortfolio(economics, item.seal.schedule), "market_data_flag_malformed"),
+    ):
+        with pytest.raises(GovernedPaperEntrySafetyError, match=f"^{code(reason)}$"):
+            build_governed_paper_entry_safety_evidence(
+                authority=authority,
+                run=run,
+                dataset=item.seal_inputs.dataset,
+                invalidated_from_ns=None,
+                protection=seal_protection(item),
+                portfolio=supplied,
+                market_data=flag,  # type: ignore[arg-type]
+            )
+    lineage_evidence = lineage.evidence_of(days)
+    assert (lineage_evidence.schema_version, lineage_evidence.status) == (
+        "governed-paper-execution-evidence.v5",
+        GovernedPaperExecutionStatus.READY,
+    )
+    verification = verify_governed_paper_execution_evidence(lineage_evidence, gpe.evidence_inputs(days))
+    assert (verification.intact, verification.reason_codes) == (True, ())
+    # a forged reading or rule set never verifies, even resealed
+    seal = item.seal
+    forged_entry = replace(
+        entry, checks=tuple(replace(c, status=S.PASS) if c.check_id == "NT-D01" else c for c in entry.checks)
+    )
+    for changes in (
+        {"entry_safety_decisions": (forged_entry,)},
+        {"entry_safety_rule_set_digest": RULE_SET_V3_DIGEST},
+        {"schema_version": "governed-paper-day-seal.v4"},
+    ):
+        for forged in (replace(seal, **changes), gpe.reseal_seal(seal, **changes)):
+            assert verify_governed_paper_day_seal(forged, item.seal_inputs).intact is False

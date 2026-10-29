@@ -99,25 +99,90 @@ decision's portfolio depends only on the admissions before it, round k is exact 
 fixed point exists, is unique and is reached in at most one round more than there are entries. Every other check is
 unchanged, and a refusal never reaches an exit.
 
+Native market-data integrity (``S1_MARKET_DATA_INTEGRITY_NATIVE_MEASUREMENT_CLOSURE_V1``, rule set v4). Rule sets v1-v3
+hold for every evaluation without market data. When the day seal opts in, on top of the governed portfolio of rule set
+v3, NT-D01, NT-D03, NT-D04 and NT-D05 are measured on the archive at ``t``
+(``governed_paper_entry_safety_market_data``). The series are the registered LAST_TRADE and INDEX_PRICE series of
+the genesis data contract, each the one final, immutable series of its key covering the instrument, read under PIT
+visibility (available and final at or before ``t``, by native event time then native id). A public dataset can bypass
+their only producer (``authenticated_pit_ingress``). So each series is selected (key and instrument coverage) and
+judged on the dataset's own EF-3 manifest, reconstructed from its source-manifest binding and re-verified by the public
+EF-3 verifier with its digest recomputed. Every registry 1.0 field that producer implements (source, event,
+availability and finality times, price semantics, no sequence policy, finality policy, final-only, immutable) must hold
+with its exact type, or the series is BLOCKED as unsupported. A dataset label never stands in for those semantics.
+
+The kline feed is the protective context's OHLC archive only when its source DECLARES the ``exchange_kline`` origin,
+last-trade bars and the 1-minute interval: trade-derived bars, an undeclared origin or any other source is never an
+exchange kline feed. A
+series the data contract does not declare is BLOCKED with that reason and never substituted (no mark, mid or book stands
+in for a trade or an index). The thresholds are PRDV4 §1.21's, and equality passes:
+
+* NT-D01 (feed gap), over the span from the open ``w`` of the latest completed UTC 5-minute window to ``t``: the
+  largest observed gap of the trade stream, between consecutive visible trades from the latest one at or before ``w``
+  and from the newest one to ``t`` (by native event time), FAILs strictly above 60 s; the largest gap of the 1-minute
+  exchange klines, between consecutive visible bars from the latest one closing at or before ``w`` and from the newest
+  close to ``t``, FAILs strictly above 5 minutes. A PASS needs both feeds observed back to ``w`` and the trade stream
+  proven continuous there: one contiguous run of its DECLARED ``contiguous_trade_id.v1`` profile. Without the profile no
+  continuity is claimed (BLOCKED), a native gap inside the span is BLOCKED, and a recent trade never repairs an
+  unobserved span start;
+* NT-D03 (trade/book timestamp divergence): ``|e_trade - e_book|`` between the latest visible trade and the latest
+  visible L2 update (NT-D02's), both by native event time, FAILs strictly above 5 s. Receipt times only decide
+  visibility and are never compared;
+* NT-D04 (price vs index): the price is the latest visible trade's price (the versioned reading of "price"; never the
+  mark or the mid) and ``|price - index| / index`` against the latest visible index FAILs strictly above 2%. Both must be
+  current: the trade within NT-D01's 60 s trade-stream bound, the index inside the UTC second of its DECLARED
+  ``index_one_per_utc_second.v1`` profile, where no later value can exist yet. No index freshness bound is invented: an
+  index without that profile, or whose second has elapsed, is BLOCKED. The profile is re-proven on the index records
+  visible at ``t``, as its producer enforces it. A stream that mixes declared and undeclared records is BLOCKED, and so
+  are two distinct publications (native event time and value) in one declared second, whatever their values or order:
+  no preferred value is ever chosen. An identical replay is one publication;
+* NT-D05 (volume anomaly): the base-asset traded quantity of the latest completed UTC 5-minute window against the mean
+  of the 8640 completed windows before it (30 days), the target excluded. Every window must be proven covered: one
+  contiguous run of the declared trade profile from a visible trade strictly before the first window to one at or
+  after the target window's end, so no unseen trade can lie inside and no unknown interval is read as zero volume. The
+  mean must be strictly positive; the target FAILs strictly below 5% of it.
+
+These facts read the archive alone and never the admission schedule, so the sequential admission is unchanged. A
+declared capture profile is documented, never qualified (M1): a PASS proves software construction on the supplied
+archive, never real market continuity, source rights or venue facts.
+
 The evidence is digest-bound and paper-only. It proves no venue fact, edge, profitability, readiness or Stage-4
 completion. Exact arithmetic, no float, no ``decimal`` context, and no IO, clock, randomness, network or environment.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import bisect
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
 from fractions import Fraction
 
+from crypto_core.data.requirements import DataRequirementKey
+from crypto_core.validation.authenticated_pit_ingress import (
+    INDEX_PRICE_VALUE_NAME,
+    INDEX_UTC_SECOND_SLOT_VALUE_NAME,
+    TRADE_PRICE_VALUE_NAME,
+    TRADE_QUANTITY_VALUE_NAME,
+    TRADE_RUN_FIRST_ID_VALUE_NAME,
+    NativeIndexPublicationProfile,
+    NativeTradeContinuityProfile,
+)
 from crypto_core.validation.edge_artifact_core import (
     EdgeArtifactError,
     EdgeEvidenceStatus,
     EdgeGateVerdict,
+    edge_authority_binding_snapshot,
     edge_canonical_json,
     edge_is_hex64,
     edge_payload_digest,
     edge_sha256_text,
+)
+from crypto_core.validation.edge_source_packet_evidence import (
+    EdgeSourceSeriesRecord,
+    edge_source_packet_evidence_from_payload,
+    edge_source_packet_evidence_payload_is_well_formed,
+    verify_edge_source_packet_evidence,
 )
 from crypto_core.validation.governed_paper_execution_authority import GovernedPaperGenesisAuthority
 from crypto_core.validation.historical_decision_run import HistoricalDecisionRun
@@ -139,10 +204,16 @@ from crypto_core.validation.historical_execution_economics_policy import (
 )
 from crypto_core.validation.historical_ohlc_bar_archive import (
     HistoricalOhlcBarArchive,
+    HistoricalOhlcBarOrigin,
+    HistoricalOhlcPriceSemantics,
     historical_ohlc_wilder_atr,
     verify_historical_ohlc_bar_archive,
 )
-from crypto_core.validation.historical_pit_dataset import HistoricalPitDataset
+from crypto_core.validation.historical_pit_dataset import (
+    HistoricalPitDataset,
+    HistoricalPitRecord,
+    verify_historical_pit_dataset,
+)
 from crypto_core.validation.historical_position_management_policy import (
     MAX_HOLD_NS,
     TIGHTENING_DEC9_READING_V1,
@@ -175,10 +246,51 @@ _CANDIDATE_REASONS = ("no_fresh_visible_mark", "nav_unavailable", "candidate_nav
 _ZERO_RENDERING = "0.000000000000000000"  # the zero open risk of an empty portfolio, at the numeric policy's scale 18
 _ANTI_TREND_BOUND = Fraction(2, 100)  # §1.9 anti-trend protection, ±2%
 _ENTRY_DIRECTIONS = ("LONG", "SHORT")
+# Rule set v4 (§1.21 Data): PRDV4's published thresholds and the windows of their versioned readings.
+_TRADE_GAP_NS = 60 * _NS_PER_SECOND  # NT-D01: a trade stream gap strictly above 60 s
+_KLINE_GAP_NS = 5 * 60 * _NS_PER_SECOND  # NT-D01: a kline feed gap strictly above 5 minutes
+_KLINE_INTERVAL_NS = 60 * _NS_PER_SECOND  # the 1-minute exchange kline (§4.1) the NT-D01 kline reading consumes
+_DIVERGENCE_NS = 5 * _NS_PER_SECOND  # NT-D03: |trade - book event time| strictly above 5 s
+_INDEX_DEVIATION = Fraction(2, 100)  # NT-D04: |price - index| / index strictly above 2%
+_WINDOW_NS = 5 * 60 * _NS_PER_SECOND  # NT-D05: UTC 5-minute windows (the NT-D01 span opens on one)
+_BASELINE_WINDOWS = 30 * 24 * 12  # NT-D05: the 8640 completed windows of the 30 days before the target window
+_VOLUME_FLOOR = Fraction(5, 100)  # NT-D05: target volume strictly below 5% of the 30-day mean
+_INDEX_SLOT_NS = _NS_PER_SECOND  # index_one_per_utc_second.v1: at most one index value per UTC second
+_IMMUTABLE = "immutable_after_finalization"
+# The registry 1.0 semantics of the two market series, exactly as their only producer (authenticated_pit_ingress)
+# implements and enforces them on the bound EF-3 series record, field by field and by exact type. A public dataset can
+# bypass that producer, so the gate re-proves the same set on the dataset's own authenticated manifest.
+_MARKET_SERIES_SEMANTICS: dict[DataRequirementKey, tuple[tuple[str, object], ...]] = {
+    DataRequirementKey.LAST_TRADE: (
+        ("registry_requirement_bound", True),
+        ("finality", "finalized_only"),
+        ("revision_policy", _IMMUTABLE),
+        ("historical_source", "trade_history_v1"),
+        ("event_time_policy", "trade_event_ns"),
+        ("available_at_policy", "trade_available_ns"),
+        ("finalized_at_policy", "trade_finalized_ns"),
+        ("price_semantics", "last_trade"),
+        ("sequence_policy", None),  # no native continuity is ever inferred: it is only a declared capture profile
+        ("finality_policy", "trade_tick_final"),
+    ),
+    DataRequirementKey.INDEX_PRICE: (
+        ("registry_requirement_bound", True),
+        ("finality", "finalized_only"),
+        ("revision_policy", _IMMUTABLE),
+        ("historical_source", "index_price_history_v1"),
+        ("event_time_policy", "index_event_ns"),
+        ("available_at_policy", "index_available_ns"),
+        ("finalized_at_policy", "index_finalized_ns"),
+        ("price_semantics", "index_price"),
+        ("sequence_policy", None),
+        ("finality_policy", "index_snapshot_final"),
+    ),
+}
 
 GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID = "governed-paper-entry-safety.v1"
 GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_ID = "governed-paper-entry-safety.v2"
 GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET_ID = "governed-paper-entry-safety.v3"
+GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_ID = "governed-paper-entry-safety.v4"
 
 GOVERNED_PAPER_ENTRY_SAFETY_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
     ("paper_only", True),
@@ -221,6 +333,85 @@ class GovernedPaperEntrySafetyFamily(str, Enum):
 
 
 _ADMITTING = (GovernedPaperEntrySafetyStatus.PASS, GovernedPaperEntrySafetyStatus.PROVEN_NOT_APPLICABLE)
+
+# Rule set v4: why a market-data reading is unavailable (each a fixed vocabulary, never caller text).
+_TRADE_SERIES_REASONS = (
+    "last_trade_series_not_in_the_selected_data_contract",
+    "last_trade_series_ambiguous",
+    "last_trade_series_not_final_and_immutable",
+    "last_trade_series_semantics_unsupported",
+    "last_trade_record_malformed",
+)
+_TRADE_REASONS = (*_TRADE_SERIES_REASONS, "no_trade_visible_at_the_decision_instant")
+_CONTINUITY_REASONS = ("trade_continuity_profile_not_declared", "trade_continuity_declaration_inconsistent")
+_TRADE_GAP_REASONS = (
+    *_TRADE_REASONS,
+    *_CONTINUITY_REASONS,
+    "trade_stream_not_observed_back_to_the_span_start",
+    "trade_stream_continuity_broken_in_the_span",
+)
+_KLINE_GAP_REASONS = (
+    "exchange_kline_feed_not_in_the_selected_data_contract",
+    "kline_origin_undeclared",
+    "kline_bars_trade_derived_not_an_exchange_kline_feed",
+    "exchange_kline_bars_not_last_trade",
+    "exchange_kline_1m_interval_not_declared",
+    "exchange_kline_feed_of_another_instrument",
+    "no_exchange_kline_bar_visible_at_the_decision_instant",
+    "exchange_kline_feed_not_observed_back_to_the_span_start",
+)
+_INDEX_REASONS = (
+    "index_price_series_not_in_the_selected_data_contract",
+    "index_price_series_ambiguous",
+    "index_price_series_not_final_and_immutable",
+    "index_price_series_semantics_unsupported",
+    "index_price_record_malformed",
+    "index_publication_declaration_inconsistent",
+    "index_publication_slot_conflict",
+    "no_index_price_visible_at_the_decision_instant",
+    "index_price_not_positive",
+)
+_VOLUME_REASONS = (
+    *_TRADE_SERIES_REASONS,
+    *_CONTINUITY_REASONS,
+    "no_visible_trade_before_the_30d_baseline",
+    "no_visible_trade_at_or_after_the_target_window_end",
+    "trade_continuity_broken_inside_the_30d_baseline_and_target_windows",
+    "volume_unrepresentable",
+)
+
+
+@dataclass(frozen=True)
+class GovernedPaperEntrySafetyMarketData:
+    """The native market-data facts of one decision at ``t`` (rule set v4), derived from the archive, never accepted.
+
+    ``trade_reason`` is empty exactly when the LAST_TRADE series is usable and a trade is visible: the latest one (by
+    native event time, then native id) gives the digest, event time and price. Each NT-D01 feed carries its largest
+    observed gap over the span (None when nothing is observed), why the span is not proven continuous (empty when it
+    is) and the digest of the records it read. ``index_*`` is the latest visible index likewise, ``index_slot_ns`` its
+    declared publication second (None without the profile). NT-D05 carries the exact base-asset volumes of the target
+    window and of the 8640 windows before it, present exactly when every window is proven covered.
+    """
+
+    trade_reason: str
+    trade_record_digest: str | None
+    trade_event_time_ns: int | None
+    trade_price: str | None
+    trade_gap_ns: int | None
+    trade_gap_reason: str
+    trade_gap_evidence: tuple[str, ...]
+    kline_gap_ns: int | None
+    kline_gap_reason: str
+    kline_gap_evidence: tuple[str, ...]
+    index_reason: str
+    index_record_digest: str | None
+    index_event_time_ns: int | None
+    index_price: str | None
+    index_slot_ns: int | None
+    volume_target: str | None
+    volume_baseline: str | None
+    volume_reason: str
+    volume_evidence: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -267,6 +458,8 @@ class GovernedPaperEntrySafetyObservation:
     candidate_position_quantity: str | None = None
     candidate_nav: str | None = None
     candidate_nav_reason: str = ""
+    # Rule set v4 only: the native market-data facts of the decision (absent without them, as in rule sets v1-v3).
+    market_data: GovernedPaperEntrySafetyMarketData | None = None
 
 
 @dataclass(frozen=True)
@@ -645,6 +838,102 @@ def _concentration(observation: _Observation) -> _Outcome:
     return _Outcome(_Status.PASS, observed, "candidate_position_within_25pct_of_nav_and_bounded_at_its_fill", evidence)
 
 
+def _gap_text(gap: int | None) -> str:
+    return "unobserved" if gap is None else str(gap)
+
+
+def _feed_gap(observation: _Observation) -> _Outcome:
+    """NT-D01 (rule set v4): an observed gap above its bound FAILs; a PASS needs both feeds proven over the span."""
+
+    data = observation.market_data
+    if data is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "trade_and_kline_feeds_not_in_the_selected_data_contract")
+    observed = f"trade_gap_ns={_gap_text(data.trade_gap_ns)};kline_gap_ns={_gap_text(data.kline_gap_ns)}"
+    evidence = (*data.trade_gap_evidence, *data.kline_gap_evidence)
+    if data.trade_gap_ns is not None and data.trade_gap_ns > _TRADE_GAP_NS:
+        return _Outcome(_Status.FAIL, observed, "trade_stream_gap_above_60s", evidence)
+    if data.kline_gap_ns is not None and data.kline_gap_ns > _KLINE_GAP_NS:
+        return _Outcome(_Status.FAIL, observed, "kline_feed_gap_above_5min", evidence)
+    for reason in (data.trade_gap_reason, data.kline_gap_reason):
+        if reason:
+            return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, observed, reason, evidence)
+    return _Outcome(_Status.PASS, observed, "trade_and_kline_feeds_continuous_within_their_gap_bounds", evidence)
+
+
+def _timestamp_divergence(observation: _Observation) -> _Outcome:
+    """NT-D03 (rule set v4): native event times of the latest visible trade and L2 update, never receipt times."""
+
+    data = observation.market_data
+    if data is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "trade_stream_not_in_the_selected_data_contract")
+    if data.trade_reason:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", data.trade_reason)
+    book_event, book_digest = observation.book_update_event_time_ns, observation.book_update_record_digest
+    if book_event is None or book_digest is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "no_order_book_update_visible_at_the_decision_instant")
+    evidence = (data.trade_record_digest, book_digest)  # type: ignore[assignment]
+    if book_event > observation.decision_time_ns:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "order_book_update_after_the_decision", evidence)  # type: ignore[arg-type]
+    divergence = abs(data.trade_event_time_ns - book_event)  # type: ignore[operator]
+    if divergence > _DIVERGENCE_NS:
+        return _Outcome(_Status.FAIL, str(divergence), "trade_book_event_time_divergence_above_5s", evidence)  # type: ignore[arg-type]
+    return _Outcome(_Status.PASS, str(divergence), "trade_book_event_time_divergence_within_5s", evidence)  # type: ignore[arg-type]
+
+
+def _index_deviation(observation: _Observation) -> _Outcome:
+    """NT-D04 (rule set v4): the latest trade price against the latest index, both proven current at ``t``."""
+
+    data = observation.market_data
+    if data is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "index_price_series_not_in_the_selected_data_contract")
+    if data.trade_reason:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", data.trade_reason)
+    instant = observation.decision_time_ns
+    if instant - data.trade_event_time_ns > _TRADE_GAP_NS:  # type: ignore[operator]
+        reason = "last_trade_not_current_beyond_the_nt_d01_60s_trade_bound"
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", reason, (data.trade_record_digest,))  # type: ignore[arg-type]
+    if data.index_reason:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", data.index_reason)
+    evidence = (data.trade_record_digest, data.index_record_digest)
+    slot = data.index_slot_ns
+    if slot is None:
+        reason = "index_currency_unprovable_without_a_declared_publication_profile"
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", reason, evidence)  # type: ignore[arg-type]
+    if instant >= (data.index_event_time_ns // slot + 1) * slot:  # type: ignore[operator]
+        reason = "index_publication_second_elapsed_at_the_decision_instant"
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", reason, evidence)  # type: ignore[arg-type]
+    index = Fraction(data.index_price)  # type: ignore[arg-type]
+    deviation = abs(Fraction(data.trade_price) - index) / index  # type: ignore[arg-type]
+    observed = historical_execution_render_amount(deviation)
+    if observed is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "price_index_deviation_unrepresentable", evidence)  # type: ignore[arg-type]
+    if deviation > _INDEX_DEVIATION:
+        return _Outcome(_Status.FAIL, observed, "last_trade_deviates_from_the_index_beyond_2pct", evidence)  # type: ignore[arg-type]
+    return _Outcome(_Status.PASS, observed, "last_trade_within_2pct_of_the_index", evidence)  # type: ignore[arg-type]
+
+
+def _volume_anomaly(observation: _Observation) -> _Outcome:
+    """NT-D05 (rule set v4): the latest completed 5-minute volume against the 30-day mean of proven-covered windows."""
+
+    data = observation.market_data
+    if data is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "volume_series_not_in_the_selected_data_contract")
+    if data.volume_reason:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", data.volume_reason)
+    evidence = data.volume_evidence
+    baseline = Fraction(data.volume_baseline)  # type: ignore[arg-type]
+    if baseline <= 0:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "thirty_day_mean_5min_volume_not_positive", evidence)
+    mean = baseline / _BASELINE_WINDOWS
+    share = Fraction(data.volume_target) / mean  # type: ignore[arg-type]
+    observed = historical_execution_render_amount(share)
+    if observed is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "volume_share_unrepresentable", evidence)
+    if share < _VOLUME_FLOOR:
+        return _Outcome(_Status.FAIL, observed, "volume_5min_below_5pct_of_the_30d_mean", evidence)
+    return _Outcome(_Status.PASS, observed, "volume_5min_at_or_above_5pct_of_the_30d_mean", evidence)
+
+
 _D, _R, _M, _E, _X, _T, _B = (
     _Family.DATA,
     _Family.RISK,
@@ -660,7 +949,7 @@ _CHECKS: tuple[_Check, ...] = (
         _D,
         "PRDV4 §1.21 NT-D01 OHLCV feed gap",
         "trade_stream_gap_gt_60s_or_kline_gap_gt_5min",
-        _missing("trade_and_kline_feeds_not_in_the_selected_data_contract"),
+        _feed_gap,
     ),
     _Check("NT-D02", _D, "PRDV4 §1.21 NT-D02 order book stale", "last_l2_update_age_gt_10s", _book_staleness),
     _Check(
@@ -668,21 +957,21 @@ _CHECKS: tuple[_Check, ...] = (
         _D,
         "PRDV4 §1.21 NT-D03 trade/book timestamp divergence",
         "abs_trade_book_timestamp_divergence_gt_5s",
-        _missing("trade_stream_not_in_the_selected_data_contract"),
+        _timestamp_divergence,
     ),
     _Check(
         "NT-D04",
         _D,
         "PRDV4 §1.21 NT-D04 price vs index deviation",
         "abs_price_minus_index_over_index_gt_2pct",
-        _missing("index_price_series_not_in_the_selected_data_contract"),
+        _index_deviation,
     ),
     _Check(
         "NT-D05",
         _D,
         "PRDV4 §1.21 NT-D05 volume anomaly",
         "volume_5min_lt_5pct_of_the_30d_mean_5min_volume",
-        _missing("volume_series_not_in_the_selected_data_contract"),
+        _volume_anomaly,
     ),
     _Check(
         "NT-R01",
@@ -871,17 +1160,23 @@ _CHECKS: tuple[_Check, ...] = (
 )
 
 
-def governed_paper_entry_safety_rule_set(*, protective: bool = False, portfolio: bool = False) -> dict[str, object]:
+def governed_paper_entry_safety_rule_set(
+    *, protective: bool = False, portfolio: bool = False, market_data: bool = False
+) -> dict[str, object]:
     """The rule set this module evaluates: every check, in order, with its PRDV4 clause and published threshold.
 
     ``protective=True`` is rule set v2: the same checks, with the §1.9 position-management gates evaluated against the
     protective context of ``PROTECTIVE_POSITION_LIFECYCLE_V1`` (see the module docstring). ``portfolio=True`` (only
     with ``protective=True``) is rule set v3: rule set v2 with NT-R02, NT-R03 and NT-R04 evaluated on the governed
-    decision portfolio of ``S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1``.
+    decision portfolio of ``S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1``. ``market_data=True`` (only with
+    ``portfolio=True``) is rule set v4: rule set v3 with NT-D01, NT-D03, NT-D04 and NT-D05 measured on the archive's
+    market data (``S1_MARKET_DATA_INTEGRITY_NATIVE_MEASUREMENT_CLOSURE_V1``).
     """
 
     if portfolio and not protective:
         raise _fail("portfolio_rule_set_needs_the_protective_rule_set")
+    if market_data and not portfolio:
+        raise _fail("market_data_rule_set_needs_the_portfolio_rule_set")
 
     rule_set: dict[str, object] = {
         "rule_set_id": GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID,
@@ -932,6 +1227,46 @@ def governed_paper_entry_safety_rule_set(*, protective: bool = False, portfolio:
                 "concentration_cap": _render_threshold(_CONCENTRATION_CAP),
             },
         )
+    if market_data:
+        rule_set.update(
+            rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_ID,
+            contract_id="S1_MARKET_DATA_INTEGRITY_NATIVE_MEASUREMENT_CLOSURE_V1",
+            market_data_rule={
+                "series": "the_one_final_immutable_last_trade_and_index_price_series_of_the_genesis_data_contract_"
+                "covering_the_instrument_with_their_registry_1_0_semantics",
+                "visibility": "a_record_is_read_once_available_and_final_at_or_before_t_latest_by_event_time_then_id",
+                "substitution": "none_an_undeclared_series_is_blocked_and_no_mark_mid_or_book_stands_in_for_it",
+                "kline_feed": "the_protective_ohlc_archive_only_when_its_source_declares_the_exchange_kline_origin_"
+                "last_trade_bars_and_the_1m_interval",
+                "NT-D01_span": "from_the_open_of_the_latest_completed_utc_5min_window_to_t",
+                "NT-D01_trade": "largest_gap_of_consecutive_visible_trades_from_the_latest_at_or_before_the_span_start_"
+                "and_from_the_newest_to_t_by_native_event_time_strictly_above_60s",
+                "NT-D01_kline": "largest_gap_of_consecutive_visible_1m_exchange_klines_from_the_latest_closing_at_or_"
+                "before_the_span_start_and_from_the_newest_close_to_t_strictly_above_5min",
+                "NT-D01_pass": "both_feeds_observed_back_to_the_span_start_and_the_trades_one_contiguous_run_of_the_"
+                "declared_trade_continuity_profile",
+                "NT-D03": "abs_native_event_time_of_the_latest_visible_trade_minus_the_latest_visible_l2_update_"
+                "strictly_above_5s",
+                "NT-D04": "abs_latest_visible_trade_price_minus_the_latest_visible_index_over_the_index_strictly_"
+                "above_2pct",
+                "NT-D04_currency": "the_trade_within_the_nt_d01_60s_trade_bound_and_the_index_inside_the_utc_second_"
+                "of_its_declared_publication_profile",
+                "NT-D05": "base_asset_volume_of_the_latest_completed_utc_5min_window_strictly_below_5pct_of_the_mean_"
+                "of_the_8640_completed_windows_before_it",
+                "NT-D05_coverage": "one_contiguous_run_of_the_declared_trade_continuity_profile_from_a_visible_trade_"
+                "strictly_before_the_first_window_to_one_at_or_after_the_target_window_end",
+                "trade_continuity_profile": NativeTradeContinuityProfile.CONTIGUOUS_TRADE_ID_V1.value,
+                "index_publication_profile": NativeIndexPublicationProfile.ONE_PER_UTC_SECOND_V1.value,
+                "trade_gap_ns": _TRADE_GAP_NS,
+                "kline_gap_ns": _KLINE_GAP_NS,
+                "kline_interval_ns": _KLINE_INTERVAL_NS,
+                "divergence_ns": _DIVERGENCE_NS,
+                "index_deviation": _render_threshold(_INDEX_DEVIATION),
+                "volume_window_ns": _WINDOW_NS,
+                "baseline_windows": _BASELINE_WINDOWS,
+                "volume_floor": _render_threshold(_VOLUME_FLOOR),
+            },
+        )
     return rule_set
 
 
@@ -942,9 +1277,13 @@ def _render_threshold(value: Fraction) -> str:
     return rendered
 
 
-def governed_paper_entry_safety_rule_set_digest(*, protective: bool = False, portfolio: bool = False) -> str:
+def governed_paper_entry_safety_rule_set_digest(
+    *, protective: bool = False, portfolio: bool = False, market_data: bool = False
+) -> str:
     return edge_sha256_text(
-        edge_canonical_json(governed_paper_entry_safety_rule_set(protective=protective, portfolio=portfolio))
+        edge_canonical_json(
+            governed_paper_entry_safety_rule_set(protective=protective, portfolio=portfolio, market_data=market_data)
+        )
     )
 
 
@@ -955,6 +1294,12 @@ GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_DIGEST = governed_paper_entry_sa
 GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET = governed_paper_entry_safety_rule_set(protective=True, portfolio=True)
 GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(
     protective=True, portfolio=True
+)
+GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET = governed_paper_entry_safety_rule_set(
+    protective=True, portfolio=True, market_data=True
+)
+GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(
+    protective=True, portfolio=True, market_data=True
 )
 
 
@@ -997,6 +1342,7 @@ def _canonical_observation(observation: object) -> GovernedPaperEntrySafetyObser
             raise _fail(f"observation_malformed:{name}")
     _canonical_protection_facts(observation)
     _canonical_portfolio_facts(observation)
+    _canonical_market_data(observation)
     return observation
 
 
@@ -1142,6 +1488,101 @@ def _canonical_protection_facts(observation: GovernedPaperEntrySafetyObservation
         raise _fail("observation_malformed:stop_tightening_method_id")
 
 
+def _canonical_reason(value: object, vocabulary: tuple[str, ...], name: str) -> str:
+    if type(value) is not str or (value != "" and value not in vocabulary):
+        raise _fail(f"observation_malformed:{name}")
+    return value
+
+
+def _canonical_latest(
+    reason: str, digest: object, event: object, price: object, *, instant: int, positive: bool, name: str
+) -> None:
+    """A latest visible record: absent exactly with a reason, else a digest, an event at or before ``t`` and a price."""
+
+    if reason:
+        if digest is not None or event is not None or price is not None:
+            raise _fail(f"observation_malformed:{name}_without_a_visible_record")
+        return
+    if not edge_is_hex64(digest) or not historical_execution_wire_int_is_valid(event, minimum=0) or event > instant:  # type: ignore[operator]
+        raise _fail(f"observation_malformed:{name}_record")
+    if not historical_execution_decimal_is_canonical(price) or (positive and Fraction(price) <= 0):  # type: ignore[arg-type]
+        raise _fail(f"observation_malformed:{name}_price")
+
+
+def _canonical_feed(gap: object, reason: str, evidence: object, *, name: str) -> None:
+    """One NT-D01 feed: an observed gap binds the digest of what it read; an unobserved feed carries its reason."""
+
+    if gap is not None and not historical_execution_wire_int_is_valid(gap, minimum=0):
+        raise _fail(f"observation_malformed:{name}_gap_ns")
+    if type(evidence) is not tuple or any(not edge_is_hex64(item) for item in evidence):
+        raise _fail(f"observation_malformed:{name}_gap_evidence")
+    if (gap is None) is not (evidence == ()) or (gap is None and not reason):
+        raise _fail(f"observation_malformed:{name}_gap_inconsistent")
+
+
+def _canonical_market_data(observation: GovernedPaperEntrySafetyObservation) -> None:  # noqa: C901
+    """The rule set v4 facts are exact types and one consistent reading, and exist only with a governed portfolio."""
+
+    data = observation.market_data
+    if data is None:
+        return
+    if type(data) is not GovernedPaperEntrySafetyMarketData:
+        raise _fail("observation_malformed:market_data")
+    if not observation.portfolio_present:
+        raise _fail("observation_malformed:market_data_without_a_governed_portfolio")
+    instant = observation.decision_time_ns
+    trade_reason = _canonical_reason(data.trade_reason, _TRADE_REASONS, "trade_reason")
+    _canonical_latest(
+        trade_reason,
+        data.trade_record_digest,
+        data.trade_event_time_ns,
+        data.trade_price,
+        instant=instant,
+        positive=True,
+        name="trade",
+    )
+    trade_gap_reason = _canonical_reason(data.trade_gap_reason, _TRADE_GAP_REASONS, "trade_gap_reason")
+    _canonical_feed(data.trade_gap_ns, trade_gap_reason, data.trade_gap_evidence, name="trade")
+    if trade_reason and (data.trade_gap_ns is not None or trade_gap_reason != trade_reason):
+        raise _fail("observation_malformed:trade_gap_without_a_visible_trade")
+    if not trade_reason and (data.trade_gap_ns is None or trade_gap_reason in _TRADE_REASONS):
+        raise _fail("observation_malformed:trade_gap_of_a_visible_trade")
+    kline_gap_reason = _canonical_reason(data.kline_gap_reason, _KLINE_GAP_REASONS, "kline_gap_reason")
+    _canonical_feed(data.kline_gap_ns, kline_gap_reason, data.kline_gap_evidence, name="kline")
+    # an observed kline feed can only lack the proof that it reaches back to the span start
+    if data.kline_gap_ns is not None and kline_gap_reason not in (
+        "",
+        "exchange_kline_feed_not_observed_back_to_the_span_start",
+    ):
+        raise _fail("observation_malformed:kline_gap_inconsistent")
+    index_reason = _canonical_reason(data.index_reason, _INDEX_REASONS, "index_reason")
+    _canonical_latest(
+        index_reason,
+        data.index_record_digest,
+        data.index_event_time_ns,
+        data.index_price,
+        instant=instant,
+        positive=True,
+        name="index",
+    )
+    if data.index_slot_ns is not None and (data.index_slot_ns != _INDEX_SLOT_NS or index_reason):
+        raise _fail("observation_malformed:index_slot_ns")
+    volume_reason = _canonical_reason(data.volume_reason, _VOLUME_REASONS, "volume_reason")
+    volumes = (data.volume_target, data.volume_baseline)
+    evidence = data.volume_evidence
+    if type(evidence) is not tuple or any(not edge_is_hex64(item) for item in evidence):
+        raise _fail("observation_malformed:volume_evidence")
+    if volume_reason:
+        if volumes != (None, None) or evidence != ():
+            raise _fail("observation_malformed:volume_without_its_coverage")
+        return
+    if len(evidence) != 3 or any(
+        not historical_execution_decimal_is_canonical(value) or Fraction(value) < 0  # type: ignore[arg-type]
+        for value in volumes
+    ):
+        raise _fail("observation_malformed:volume")
+
+
 def evaluate_governed_paper_entry_safety(
     observation: GovernedPaperEntrySafetyObservation,
 ) -> GovernedPaperEntrySafetyDecision:
@@ -1251,6 +1692,407 @@ def _protection_facts(
     }
 
 
+@dataclass(frozen=True)
+class _Trade:
+    trade_id: int
+    event_ns: int
+    visible_ns: int
+    price: str
+    quantity: Fraction
+    run_first: int | None
+    digest: str
+
+
+@dataclass(frozen=True)
+class _Index:
+    event_ns: int
+    sequence_id: int
+    visible_ns: int
+    price: str
+    slot: int | None
+    digest: str
+
+
+@dataclass(frozen=True)
+class _Bar:
+    open_ns: int
+    close_ns: int
+    visible_ns: int
+    digest: str
+
+
+def _record_values(record: HistoricalPitRecord, names: tuple[frozenset[str], ...]) -> dict[str, str] | None:
+    """The record's values when their name set is one of ``names``, else None (a malformed record)."""
+
+    values = {value.name: value.value for value in record.values}
+    return values if frozenset(values) in names else None
+
+
+def _continuity_reason(trades: Sequence[_Trade]) -> str:
+    """Whether the visible trades DECLARE the contiguous-id profile: every one names its run (none visible declares
+    nothing either way, so the coverage itself is what is missing)."""
+
+    declared = {item.run_first is not None for item in trades}
+    if declared in (set(), {True}):
+        return ""
+    if declared == {True, False}:
+        return "trade_continuity_declaration_inconsistent"
+    return "trade_continuity_profile_not_declared"
+
+
+def _whole_number(text: str) -> int | None:
+    value = Fraction(text)
+    return value.numerator if value.denominator == 1 and value >= 0 else None
+
+
+def _authenticated_series(dataset: HistoricalPitDataset) -> tuple[EdgeSourceSeriesRecord, ...]:
+    """The dataset's own EF-3 series records, reconstructed from its source-manifest binding and re-proven by the public
+    EF-3 verifier with the digest recomputed. A series is selected and judged on them, never on a dataset label."""
+
+    snapshot = edge_authority_binding_snapshot(dataset.source_manifest_binding)
+    if not edge_source_packet_evidence_payload_is_well_formed(snapshot):
+        raise _fail("market_data_archive_not_authentic")
+    manifest = edge_source_packet_evidence_from_payload(snapshot)
+    verification = verify_edge_source_packet_evidence(manifest)
+    if (
+        not verification.intact
+        or verification.recomputed_digest != dataset.source_manifest_digest
+        or manifest.status is not EdgeEvidenceStatus.READY
+    ):
+        raise _fail("market_data_archive_not_authentic")
+    return manifest.series
+
+
+def _registry_semantics_hold(record: EdgeSourceSeriesRecord, key: DataRequirementKey) -> bool:
+    """Whether an authenticated EF-3 series record carries exactly the producer's registry 1.0 semantics of ``key``."""
+
+    return all(
+        type(getattr(record, name)) is type(value) and getattr(record, name) == value
+        for name, value in _MARKET_SERIES_SEMANTICS[key]
+    )
+
+
+def _market_series(
+    authenticated: Sequence[EdgeSourceSeriesRecord], key: DataRequirementKey, label: str, instrument: str
+) -> tuple[str, str]:
+    """``(reason, series id)``: among the ``authenticated`` EF-3 series, the one final, immutable series of ``key``
+    covering the instrument, carrying the producer's registry 1.0 semantics, or why there is none."""
+
+    candidates = [
+        record
+        for record in authenticated
+        if record.data_requirement_key == key.value and instrument in record.instrument_coverage
+    ]
+    if not candidates:
+        return f"{label}_series_not_in_the_selected_data_contract", ""
+    if len(candidates) > 1:
+        return f"{label}_series_ambiguous", ""
+    record = candidates[0]
+    if record.finalized_only is not True or record.revision_policy != _IMMUTABLE:
+        return f"{label}_series_not_final_and_immutable", ""
+    if not _registry_semantics_hold(record, key):
+        return f"{label}_series_semantics_unsupported", ""
+    return "", record.series_id
+
+
+_TRADE_NAMES = (
+    frozenset({TRADE_PRICE_VALUE_NAME, TRADE_QUANTITY_VALUE_NAME}),
+    frozenset({TRADE_PRICE_VALUE_NAME, TRADE_QUANTITY_VALUE_NAME, TRADE_RUN_FIRST_ID_VALUE_NAME}),
+)
+_INDEX_NAMES = (
+    frozenset({INDEX_PRICE_VALUE_NAME}),
+    frozenset({INDEX_PRICE_VALUE_NAME, INDEX_UTC_SECOND_SLOT_VALUE_NAME}),
+)
+
+
+def _trade_of(record: HistoricalPitRecord, visible: int) -> _Trade | None:
+    """One well-formed trade record (positive price and quantity; a run that starts at or before it), else None."""
+
+    values = _record_values(record, _TRADE_NAMES)
+    if values is None:
+        return None
+    price, quantity = Fraction(values[TRADE_PRICE_VALUE_NAME]), Fraction(values[TRADE_QUANTITY_VALUE_NAME])
+    run = values.get(TRADE_RUN_FIRST_ID_VALUE_NAME)
+    first = None if run is None else _whole_number(run)
+    if price <= 0 or quantity <= 0 or (run is not None and (first is None or first > record.sequence_id)):
+        return None
+    return _Trade(
+        record.sequence_id,
+        record.event_time_ns,
+        visible,
+        values[TRADE_PRICE_VALUE_NAME],
+        quantity,
+        first,
+        record.record_digest,
+    )
+
+
+def _index_of(record: HistoricalPitRecord, visible: int) -> _Index | None:
+    """One well-formed index record (a declared second, when named, is its own UTC second), else None."""
+
+    values = _record_values(record, _INDEX_NAMES)
+    if values is None:
+        return None
+    text = values.get(INDEX_UTC_SECOND_SLOT_VALUE_NAME)
+    slot = None if text is None else _whole_number(text)
+    if text is not None and slot != record.event_time_ns // _INDEX_SLOT_NS:
+        return None
+    return _Index(
+        record.event_time_ns,
+        record.sequence_id,
+        visible,
+        values[INDEX_PRICE_VALUE_NAME],
+        slot,
+        record.record_digest,
+    )
+
+
+def _series_entries(
+    dataset: HistoricalPitDataset, series: str, instrument: str, parse: Callable[[HistoricalPitRecord, int], object]
+) -> tuple[int | None, list[object]]:
+    """``(the first instant a malformed record is visible, the well-formed entries)`` of one series and instrument.
+
+    A final-required series never shows a record before its finality; a malformed record only matters from the instant
+    it is visible, so no reading at ``t`` depends on a record unknown at ``t``.
+    """
+
+    malformed: int | None = None
+    entries: list[object] = []
+    for record in dataset.records:
+        if record.series_id != series or record.instrument != instrument or record.finalized_at_ns is None:
+            continue
+        visible = max(record.available_at_ns, record.finalized_at_ns)
+        entry = parse(record, visible)
+        if entry is None:
+            malformed = visible if malformed is None else min(malformed, visible)
+        else:
+            entries.append(entry)
+    return malformed, entries
+
+
+def _kline_index(archive: HistoricalOhlcBarArchive | None, instrument: str) -> tuple[str, tuple[_Bar, ...]]:
+    """``(reason, 1-minute bars by open time)``: the archive is a kline feed only by its DECLARED exchange origin."""
+
+    if archive is None:
+        return "exchange_kline_feed_not_in_the_selected_data_contract", ()
+    source = archive.source
+    if source.bar_origin is None:
+        return "kline_origin_undeclared", ()
+    if source.bar_origin is not HistoricalOhlcBarOrigin.EXCHANGE_KLINE:
+        return "kline_bars_trade_derived_not_an_exchange_kline_feed", ()
+    if source.price_semantics is not HistoricalOhlcPriceSemantics.LAST_TRADE:
+        return "exchange_kline_bars_not_last_trade", ()
+    if _KLINE_INTERVAL_NS not in source.bar_intervals_ns:
+        return "exchange_kline_1m_interval_not_declared", ()
+    if source.instrument != instrument:
+        return "exchange_kline_feed_of_another_instrument", ()
+    return "", tuple(
+        _Bar(bar.open_time_ns, bar.close_time_ns, max(bar.available_at_ns, bar.finalized_at_ns), bar.bar_digest)
+        for bar in archive.bars
+        if bar.interval_ns == _KLINE_INTERVAL_NS
+    )
+
+
+def _span_digest(digests: Sequence[str]) -> str:
+    return edge_sha256_text(edge_canonical_json(list(digests)))
+
+
+def _publication_profile(indexes: Sequence[_Index]) -> tuple[int | None, int | None]:
+    """When the index records first break ``index_one_per_utc_second.v1`` as its producer enforces it: ``(the first
+    instant declared and undeclared records are both visible, the first instant two distinct publications of one
+    declared UTC second are)``. A publication is a native event time and its value, so an identical replay is the same
+    publication, known from its earliest visibility. Order-free, and nothing visible after ``t`` breaks it at ``t``."""
+
+    declared = [item.visible_ns for item in indexes if item.slot is not None]
+    undeclared = [item.visible_ns for item in indexes if item.slot is None]
+    mixed = max(min(declared), min(undeclared)) if declared and undeclared else None
+    seconds: dict[int, dict[tuple[int, Fraction], int]] = {}
+    for item in indexes:
+        if item.slot is not None:
+            known = seconds.setdefault(item.slot, {})
+            publication = (item.event_ns, Fraction(item.price))
+            known[publication] = min(known.get(publication, item.visible_ns), item.visible_ns)
+    conflicts = [sorted(known.values())[1] for known in seconds.values() if len(known) > 1]
+    return mixed, min(conflicts, default=None)
+
+
+def _contiguous(trades: Sequence[_Trade]) -> bool:
+    """One contiguous run of the declared profile: one run, consecutive native ids, every one visible."""
+
+    first = trades[0]
+    return all(
+        item.run_first is not None and item.run_first == first.run_first and item.trade_id == first.trade_id + offset
+        for offset, item in enumerate(trades)
+    )
+
+
+def _trade_feed(
+    trades: Sequence[_Trade], reason: str, continuity: str, instant: int, start: int
+) -> tuple[int | None, str, tuple[str, ...]]:
+    """NT-D01 trade reading over ``[start, t]``: the largest observed gap and why the span is not proven continuous."""
+
+    if reason:
+        return None, reason, ()
+    events = [item.event_ns for item in trades]
+    witness = bisect.bisect_right(events, start) - 1
+    chosen = trades[max(witness, 0) :]
+    gaps = [later.event_ns - earlier.event_ns for earlier, later in zip(chosen, chosen[1:], strict=False)]
+    gap = max((*gaps, instant - chosen[-1].event_ns))
+    if witness < 0:
+        reason = "trade_stream_not_observed_back_to_the_span_start"
+    elif continuity:
+        reason = continuity
+    elif not _contiguous(chosen):
+        reason = "trade_stream_continuity_broken_in_the_span"
+    return gap, reason, (_span_digest([item.digest for item in chosen]),)
+
+
+def _kline_feed(bars: Sequence[_Bar], reason: str, instant: int, start: int) -> tuple[int | None, str, tuple[str, ...]]:
+    """NT-D01 kline reading over ``[start, t]``: a missing 1-minute bar is a gap of the delivered kline feed."""
+
+    if reason:
+        return None, reason, ()
+    visible = [bar for bar in bars if bar.visible_ns <= instant]
+    if not visible:
+        return None, "no_exchange_kline_bar_visible_at_the_decision_instant", ()
+    witness = bisect.bisect_right([bar.close_ns for bar in visible], start) - 1
+    chosen = visible[max(witness, 0) :]
+    gaps = [later.open_ns - earlier.close_ns for earlier, later in zip(chosen, chosen[1:], strict=False)]
+    gap = max((*gaps, instant - chosen[-1].close_ns))
+    reason = "" if witness >= 0 else "exchange_kline_feed_not_observed_back_to_the_span_start"
+    return gap, reason, (_span_digest([bar.digest for bar in chosen]),)
+
+
+def _volume(
+    trades: Sequence[_Trade], reason: str, continuity: str, start: int
+) -> tuple[str | None, str | None, str, tuple[str, ...]]:
+    """NT-D05 reading for the target window opening at ``start``: ``(target, baseline, reason, evidence)``."""
+
+    if reason or continuity:
+        return None, None, reason or continuity, ()
+    first, end = start - _BASELINE_WINDOWS * _WINDOW_NS, start + _WINDOW_NS
+    events = [item.event_ns for item in trades]
+    before = bisect.bisect_left(events, first) - 1  # the latest visible trade strictly before the first window
+    after = bisect.bisect_left(events, end)  # the earliest visible trade at or after the target window's end
+    if before < 0:
+        return None, None, "no_visible_trade_before_the_30d_baseline", ()
+    if after >= len(trades):
+        return None, None, "no_visible_trade_at_or_after_the_target_window_end", ()
+    chosen = trades[before : after + 1]
+    if not _contiguous(chosen):
+        return None, None, "trade_continuity_broken_inside_the_30d_baseline_and_target_windows", ()
+    baseline = sum((item.quantity for item in chosen if first <= item.event_ns < start), Fraction(0))
+    target = sum((item.quantity for item in chosen if start <= item.event_ns < end), Fraction(0))
+    rendered = historical_execution_render_amount(target), historical_execution_render_amount(baseline)
+    if None in rendered:
+        return None, None, "volume_unrepresentable", ()
+    evidence = (chosen[0].digest, chosen[-1].digest, _span_digest([item.digest for item in chosen]))
+    return rendered[0], rendered[1], "", evidence
+
+
+class _MarketData:
+    """The rule set v4 facts of one verified archive, instrument and kline feed; every query reads only what is visible
+    at its instant and never the admission schedule."""
+
+    def __init__(
+        self, dataset: HistoricalPitDataset, *, instrument: str, kline: HistoricalOhlcBarArchive | None
+    ) -> None:
+        authenticated = _authenticated_series(dataset)
+        self._trade_reason, series = _market_series(
+            authenticated, DataRequirementKey.LAST_TRADE, "last_trade", instrument
+        )
+        self._trade_malformed, trades = _series_entries(dataset, series, instrument, _trade_of)
+        # The archive's own integrity: native ids never run backwards in event time, so id order is event-time order.
+        self._trades: tuple[_Trade, ...] = tuple(sorted(trades, key=lambda item: item.trade_id))  # type: ignore[attr-defined]
+        self._index_reason, series = _market_series(
+            authenticated, DataRequirementKey.INDEX_PRICE, "index_price", instrument
+        )
+        self._index_malformed, indexes = _series_entries(dataset, series, instrument, _index_of)
+        self._indexes: tuple[_Index, ...] = tuple(sorted(indexes, key=lambda item: (item.event_ns, item.sequence_id)))  # type: ignore[attr-defined]
+        self._index_mixed, self._index_conflict = _publication_profile(self._indexes)
+        self._kline_reason, self._bars = _kline_index(kline, instrument)
+
+    def facts_at(self, instant: int) -> GovernedPaperEntrySafetyMarketData:  # noqa: C901
+        if not historical_execution_wire_int_is_valid(instant, minimum=1):
+            raise _fail("market_data_instant_invalid")
+        start = (instant // _WINDOW_NS - 1) * _WINDOW_NS  # the open of the latest completed UTC 5-minute window
+        series_reason = self._trade_reason
+        if not series_reason and self._trade_malformed is not None and self._trade_malformed <= instant:
+            series_reason = "last_trade_record_malformed"
+        trades = [] if series_reason else [item for item in self._trades if item.visible_ns <= instant]
+        trade_reason = series_reason or ("" if trades else "no_trade_visible_at_the_decision_instant")
+        continuity = _continuity_reason(trades)
+        latest = None if trade_reason else trades[-1]
+        trade_gap = _trade_feed(trades, trade_reason, continuity, instant, start)
+        kline_gap = _kline_feed(self._bars, self._kline_reason, instant, start)
+        index_reason, index = self._index_reason, None
+        for since, broken in (
+            (self._index_malformed, "index_price_record_malformed"),
+            (self._index_mixed, "index_publication_declaration_inconsistent"),
+            (self._index_conflict, "index_publication_slot_conflict"),
+        ):
+            if not index_reason and since is not None and since <= instant:
+                index_reason = broken
+        if not index_reason:
+            index = next((item for item in reversed(self._indexes) if item.visible_ns <= instant), None)
+            if index is None:
+                index_reason = "no_index_price_visible_at_the_decision_instant"
+            elif Fraction(index.price) <= 0:
+                index_reason, index = "index_price_not_positive", None
+        target, baseline, volume_reason, volume_evidence = _volume(trades, series_reason, continuity, start)
+        return GovernedPaperEntrySafetyMarketData(
+            trade_reason=trade_reason,
+            trade_record_digest=None if latest is None else latest.digest,
+            trade_event_time_ns=None if latest is None else latest.event_ns,
+            trade_price=None if latest is None else latest.price,
+            trade_gap_ns=trade_gap[0],
+            trade_gap_reason=trade_gap[1],
+            trade_gap_evidence=trade_gap[2],
+            kline_gap_ns=kline_gap[0],
+            kline_gap_reason=kline_gap[1],
+            kline_gap_evidence=kline_gap[2],
+            index_reason=index_reason,
+            index_record_digest=None if index is None else index.digest,
+            index_event_time_ns=None if index is None else index.event_ns,
+            index_price=None if index is None else index.price,
+            index_slot_ns=None if index is None or index.slot is None else _INDEX_SLOT_NS,
+            volume_target=target,
+            volume_baseline=baseline,
+            volume_reason=volume_reason,
+            volume_evidence=volume_evidence,
+        )
+
+
+def governed_paper_entry_safety_market_data(
+    dataset: HistoricalPitDataset,
+    *,
+    instrument: str,
+    decision_time_ns: int,
+    kline_archive: HistoricalOhlcBarArchive | None = None,
+) -> GovernedPaperEntrySafetyMarketData:
+    """The rule set v4 market-data facts of ``instrument`` at ``decision_time_ns``, exactly as the gate derives them.
+
+    The archive must be authentic, READY and advancing, and the kline archive (the kline feed candidate, None for none)
+    authentic; both are verified here. Malformed or non-authentic input raises ``GovernedPaperEntrySafetyError``. Pure.
+    """
+
+    if (
+        type(dataset) is not HistoricalPitDataset
+        or not verify_historical_pit_dataset(dataset).intact
+        or dataset.status is not EdgeEvidenceStatus.READY
+        or dataset.advances is not True
+    ):
+        raise _fail("market_data_archive_not_authentic")
+    if kline_archive is not None and (
+        type(kline_archive) is not HistoricalOhlcBarArchive
+        or not verify_historical_ohlc_bar_archive(kline_archive).intact
+    ):
+        raise _fail("market_data_kline_archive_not_authentic")
+    if type(instrument) is not str or instrument == "":
+        raise _fail("market_data_instrument_invalid")
+    return _MarketData(dataset, instrument=instrument, kline=kline_archive).facts_at(decision_time_ns)
+
+
 def governed_paper_entry_safety_portfolio_facts(
     snapshot: HistoricalExecutionDecisionPortfolioSnapshot | None,
 ) -> dict[str, object]:
@@ -1352,6 +2194,7 @@ def build_governed_paper_entry_safety_evidence(
     invalidated_from_ns: int | None,
     protection: GovernedPaperEntrySafetyProtection | None = None,
     portfolio: GovernedPaperEntrySafetyPortfolio | None = None,
+    market_data: bool = False,
 ) -> GovernedPaperEntrySafetyEvidence:
     """Evaluate every entry decision of ``run`` over the archive ``dataset`` it was built from (see the module docstring).
 
@@ -1359,8 +2202,9 @@ def build_governed_paper_entry_safety_evidence(
     observations re-verify the archive and the economics policy. ``protection`` (rule set v2) is the verified protective
     context the day seal derives; without it the evaluation is rule set v1, unchanged. ``portfolio`` (rule set v3, only
     with ``protection``) is the replayed protective economics of this run and the schedule under evaluation, from which
-    the one engine derives the decision portfolio. A malformed or foreign input raises ``GovernedPaperEntrySafetyError``.
-    Pure.
+    the one engine derives the decision portfolio. ``market_data=True`` (rule set v4, only with ``portfolio``) measures
+    NT-D01, NT-D03, NT-D04 and NT-D05 on the archive's own market-data series and the protective context's OHLC
+    archive as the kline feed candidate. A malformed or foreign input raises ``GovernedPaperEntrySafetyError``. Pure.
     """
 
     if type(authority) is not GovernedPaperGenesisAuthority:
@@ -1369,6 +2213,8 @@ def build_governed_paper_entry_safety_evidence(
         raise _fail("decision_run_or_archive_malformed")
     if invalidated_from_ns is not None and not historical_execution_wire_int_is_valid(invalidated_from_ns, minimum=0):
         raise _fail("invalidated_from_ns_invalid")
+    if type(market_data) is not bool:
+        raise _fail("market_data_flag_malformed")
     genesis = authority.genesis
     protection = _canonical_protection(protection, instrument=genesis.instrument)
     if run.status is not EdgeEvidenceStatus.READY or run.gate_verdict is not EdgeGateVerdict.PASS:
@@ -1386,7 +2232,15 @@ def build_governed_paper_entry_safety_evidence(
     snapshots = _portfolio_snapshots(
         portfolio, run=run, economics_policy_digest=genesis.economics_policy_digest, protection=protection
     )
+    if market_data and snapshots is None:
+        raise _fail("market_data_without_a_governed_portfolio")
     observations = historical_execution_visible_observations(dataset, policy=policy, instrument=genesis.instrument)
+    # the archive is verified just above and the kline feed candidate in ``_canonical_protection``
+    market = (
+        _MarketData(dataset, instrument=genesis.instrument, kline=protection.ohlc_archive)  # type: ignore[union-attr]
+        if market_data
+        else None
+    )
     registered = get_strategy_executable_profile(PASSIVE_FUNDING_CARRY_V1)
     family_b = (
         run.profile_id == registered.profile_id and run.profile_semantics_digest == registered.profile_semantics_digest
@@ -1426,17 +2280,22 @@ def build_governed_paper_entry_safety_evidence(
                 if snapshots is None
                 else governed_paper_entry_safety_portfolio_facts(snapshots.get(decision.decision_sequence))
             ),
+            market_data=None if market is None else market.facts_at(instant),
         )
         decisions.append(evaluate_governed_paper_entry_safety(observation))
     protective, measured = protection is not None, snapshots is not None
     seed = GovernedPaperEntrySafetyEvidence(
         schema_version=_SCHEMA_VERSION,
-        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET_ID
+        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_ID
+        if market_data
+        else GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET_ID
         if measured
         else GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_ID
         if protective
         else GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID,
-        rule_set_digest=governed_paper_entry_safety_rule_set_digest(protective=protective, portfolio=measured),
+        rule_set_digest=governed_paper_entry_safety_rule_set_digest(
+            protective=protective, portfolio=measured, market_data=market_data
+        ),
         genesis_id=genesis.genesis_id,
         genesis_digest=genesis.genesis_digest,
         run_digest=run.run_digest,

@@ -42,6 +42,29 @@ settlement time: event time is the window open (settlement minus the declared go
 observed publication receipt (never before the settlement), finality is the settlement, and the PIT sequence id is the
 governed cycle ordinal ``settlement // interval``. Settlements must be spaced by exactly the declared interval.
 
+Trades and index prices (``S1_MARKET_DATA_INTEGRITY_NATIVE_MEASUREMENT_CLOSURE_V1``, evidence schema v2). A capture that
+declares a ``last_trade`` or ``index_price`` stream binds it to the registered LAST_TRADE or INDEX_PRICE series with
+their unchanged EF-3 semantics (registry 1.0: no sequence policy for either), and its evidence is
+``authenticated-pit-ingress.v2``; a capture without one keeps the v1 evidence exactly.
+
+* A trade is identified by its native trade id. Its record is that id as the PIT sequence id, its native event time,
+  availability at its receipt (never before the event), finality at its event, and its exact price and base-asset
+  quantity, both positive. One id carries exactly one trade: a content-identical redelivery is a replay with no effect,
+  any other content under that id rejects the capture.
+* Registry 1.0 declares no trade sequence policy, so no continuity is ever inferred. A trade stream may DECLARE the
+  native continuity profile ``contiguous_trade_id.v1``: within its native epoch the source numbers consecutive trades
+  by consecutive ids in non-decreasing event time. Under it a new trade id never regresses below the newest one, nor
+  does its event time; a jump above the newest id is a native gap that opens a new contiguous run, and every trade
+  record names the first id of its run (``trade_run_first_id``), which is fixed at its receipt. Without the profile no
+  run is named and no gap is claimed.
+* An index price is identified by its native event time, one positive value per event time, observed no earlier than
+  that event and final at it, exactly like a mark. An index stream may DECLARE the native publication profile
+  ``index_one_per_utc_second.v1``: the source publishes at most one index value per UTC second. Under it a second value
+  inside one UTC second rejects the capture and every record names its UTC second (``index_utc_second_slot``).
+
+A declared profile is documented, never qualified for any provider: the verdict keeps
+``native_continuity_profile_unqualified`` open, and a capture never proves that a provider supplied complete history.
+
 The evidence binds the source declaration (rights and source object identity), the exact canonical capture digest, the
 EF-3 and registry anchors, every stream-to-series lineage and the output dataset digest. Status is integrity only. The
 verdict always carries the open external facts (provider continuity qualification, rights, historical coverage and the
@@ -96,6 +119,7 @@ from crypto_core.validation.historical_pit_dataset import (
 )
 
 _SCHEMA_VERSION = "authenticated-pit-ingress.v1"
+_MARKET_SCHEMA_VERSION = "authenticated-pit-ingress.v2"
 _REASON_PREFIX = "authenticated_pit_ingress"
 _SELF_DIGEST_FIELD = "ingress_digest"
 _MAX_WIRE_INT = 9223372036854775807
@@ -138,8 +162,36 @@ _REGISTRY_SEMANTICS: dict[DataRequirementKey, tuple[tuple[str, object], ...]] = 
         ("funding_semantics", "final"),
         ("finality_policy", "funding_cycle_closed"),
     ),
+    # Registry 1.0 exactly: no sequence policy, so a trade or index continuity is only ever a declared capture profile.
+    DataRequirementKey.LAST_TRADE: (
+        ("historical_source", "trade_history_v1"),
+        ("event_time_policy", "trade_event_ns"),
+        ("available_at_policy", "trade_available_ns"),
+        ("finalized_at_policy", "trade_finalized_ns"),
+        ("price_semantics", "last_trade"),
+        ("sequence_policy", None),
+        ("finality_policy", "trade_tick_final"),
+    ),
+    DataRequirementKey.INDEX_PRICE: (
+        ("historical_source", "index_price_history_v1"),
+        ("event_time_policy", "index_event_ns"),
+        ("available_at_policy", "index_available_ns"),
+        ("finalized_at_policy", "index_finalized_ns"),
+        ("price_semantics", "index_price"),
+        ("sequence_policy", None),
+        ("finality_policy", "index_snapshot_final"),
+    ),
 }
 _BOOK_DEPTH = 50
+_NS_PER_SECOND = 1_000_000_000
+_UNIT = 10**18  # one whole unit at the canonical scale 18
+
+# The record value names of the trade and index-price series (their only producer and the entry gate share them).
+TRADE_PRICE_VALUE_NAME = "trade_price"
+TRADE_QUANTITY_VALUE_NAME = "trade_quantity"
+TRADE_RUN_FIRST_ID_VALUE_NAME = "trade_run_first_id"
+INDEX_PRICE_VALUE_NAME = "index_price"
+INDEX_UTC_SECOND_SLOT_VALUE_NAME = "index_utc_second_slot"
 
 # The open M1 source gate: facts no capture can prove about itself, so the evidence never advances.
 _EXTERNAL_FACT_REASONS = (
@@ -176,6 +228,18 @@ class NativeBookContinuityProfile(str, Enum):
     """Declared native semantics of an order-book stream. Unknown semantics are refused, never guessed."""
 
     UPDATE_SPAN_CHAIN_ABSOLUTE_LEVELS_V1 = "update_span_chain_absolute_levels.v1"
+
+
+class NativeTradeContinuityProfile(str, Enum):
+    """Optional declared native continuity of a trade stream. Unknown semantics are refused, never guessed."""
+
+    CONTIGUOUS_TRADE_ID_V1 = "contiguous_trade_id.v1"
+
+
+class NativeIndexPublicationProfile(str, Enum):
+    """Optional declared native publication model of an index-price stream. Unknown semantics are refused."""
+
+    ONE_PER_UTC_SECOND_V1 = "index_one_per_utc_second.v1"
 
 
 # --- capture (caller input) ----------------------------------------------------------------------------------------
@@ -235,8 +299,34 @@ class CapturedFundingSettlement:
 
 
 @dataclass(frozen=True)
+class CapturedTrade:
+    """A native trade identified by its native trade id: event time, price and base-asset quantity as captured."""
+
+    stream_id: str
+    trade_id: int
+    event_time_ns: int
+    receipt_ns: int
+    price: str
+    quantity: str
+
+
+@dataclass(frozen=True)
+class CapturedIndexPrice:
+    """A native index-price observation identified by its native event time."""
+
+    stream_id: str
+    event_time_ns: int
+    receipt_ns: int
+    index_price: str
+
+
+@dataclass(frozen=True)
 class CaptureStreamDeclaration:
-    """One captured stream: its native scope, its EF-3 series lineage and its declared native semantics."""
+    """One captured stream: its native scope, its EF-3 series lineage and its declared native semantics.
+
+    ``continuity_profile`` is required for an order-book stream, optional for a trade stream (its continuity) and an
+    index-price stream (its publication model), and absent for every other stream.
+    """
 
     stream_id: str
     data_requirement_key: DataRequirementKey | str
@@ -244,7 +334,9 @@ class CaptureStreamDeclaration:
     series_id: str
     source_reference: str
     native_epoch_id: str
-    continuity_profile: NativeBookContinuityProfile | str | None
+    continuity_profile: (
+        NativeBookContinuityProfile | NativeTradeContinuityProfile | NativeIndexPublicationProfile | str | None
+    )
     funding_interval_ns: int | None
 
 
@@ -493,12 +585,25 @@ def _to_payload(artifact: object) -> dict[str, object]:
 
 # --- canonical capture -----------------------------------------------------------------------------------------------
 
-_SUPPORTED_KEYS = (DataRequirementKey.ORDER_BOOK, DataRequirementKey.MARK_PRICE, DataRequirementKey.FUNDING_RATE)
+_SUPPORTED_KEYS = (
+    DataRequirementKey.ORDER_BOOK,
+    DataRequirementKey.MARK_PRICE,
+    DataRequirementKey.FUNDING_RATE,
+    DataRequirementKey.LAST_TRADE,
+    DataRequirementKey.INDEX_PRICE,
+)
+_MARKET_KEYS = (DataRequirementKey.LAST_TRADE, DataRequirementKey.INDEX_PRICE)
 _OBSERVATION_KINDS: dict[type, tuple[str, DataRequirementKey]] = {
     CapturedBookSnapshot: ("book_snapshot", DataRequirementKey.ORDER_BOOK),
     CapturedBookDelta: ("book_delta", DataRequirementKey.ORDER_BOOK),
     CapturedMarkPrice: ("mark_price", DataRequirementKey.MARK_PRICE),
     CapturedFundingSettlement: ("funding_settlement", DataRequirementKey.FUNDING_RATE),
+    CapturedTrade: ("trade", DataRequirementKey.LAST_TRADE),
+    CapturedIndexPrice: ("index_price", DataRequirementKey.INDEX_PRICE),
+}
+_OPTIONAL_PROFILES: dict[DataRequirementKey, type[Enum]] = {
+    DataRequirementKey.LAST_TRADE: NativeTradeContinuityProfile,
+    DataRequirementKey.INDEX_PRICE: NativeIndexPublicationProfile,
 }
 
 
@@ -514,6 +619,9 @@ def _canonical_stream(item: object) -> CaptureStreamDeclaration:
         if profile is None:
             raise _fail("stream_continuity_profile_missing")
         profile = _require_member(profile, NativeBookContinuityProfile, "stream_continuity_profile")
+    elif key in _OPTIONAL_PROFILES:
+        if profile is not None:
+            profile = _require_member(profile, _OPTIONAL_PROFILES[key], "stream_continuity_profile")  # type: ignore[index]
     elif profile is not None:
         raise _fail("stream_continuity_profile_unexpected")
     if key is DataRequirementKey.FUNDING_RATE:
@@ -607,6 +715,22 @@ def _canonical_observation(item: object, streams: Mapping[str, CaptureStreamDecl
             event_time_ns=_require_positive_int(item.event_time_ns, "mark_event_time_ns"),
             receipt_ns=_require_positive_int(item.receipt_ns, "mark_receipt_ns"),
             mark_price=_require_decimal(item.mark_price, "mark_price"),
+        )
+    if type(item) is CapturedTrade:
+        return CapturedTrade(
+            stream_id=stream_id,
+            trade_id=_require_nonnegative_int(item.trade_id, "trade_id"),
+            event_time_ns=_require_positive_int(item.event_time_ns, "trade_event_time_ns"),
+            receipt_ns=_require_positive_int(item.receipt_ns, "trade_receipt_ns"),
+            price=_require_decimal(item.price, "trade_price"),
+            quantity=_require_decimal(item.quantity, "trade_quantity"),
+        )
+    if type(item) is CapturedIndexPrice:
+        return CapturedIndexPrice(
+            stream_id=stream_id,
+            event_time_ns=_require_positive_int(item.event_time_ns, "index_event_time_ns"),
+            receipt_ns=_require_positive_int(item.receipt_ns, "index_receipt_ns"),
+            index_price=_require_decimal(item.index_price, "index_price"),
         )
     return CapturedFundingSettlement(
         stream_id=stream_id,
@@ -1154,10 +1278,112 @@ class _FundingProcessor(_StreamProcessor):
             )
 
 
+class _TradeProcessor(_StreamProcessor):
+    """Native trade stream: one trade per native id; under ``contiguous_trade_id.v1`` its contiguous runs are named."""
+
+    def __init__(self, stream: CaptureStreamDeclaration) -> None:
+        super().__init__(stream)
+        self.contiguous = stream.continuity_profile is NativeTradeContinuityProfile.CONTIGUOUS_TRADE_ID_V1
+        self.trades: dict[int, tuple[int, int, int]] = {}
+        self.newest: tuple[int, int] | None = None
+        self.run_first = 0
+        self.runs = 0
+
+    def _counts(self) -> tuple[int, int, int]:
+        return self.runs, 0, 0
+
+    def _observe(self, item: object, now: int) -> None:
+        trade: CapturedTrade = item  # type: ignore[assignment]
+        where = f"{self.scope}:{trade.trade_id}"
+        price, quantity = _scaled(trade.price), _scaled(trade.quantity)
+        if price <= 0 or quantity <= 0:
+            raise _Violation(f"trade_value_invalid:{where}")
+        if trade.receipt_ns < trade.event_time_ns:
+            raise _Violation(f"trade_receipt_before_event:{where}")
+        native = (trade.event_time_ns, price, quantity)
+        existing = self.trades.get(trade.trade_id)
+        if existing is not None:
+            if existing != native:
+                raise _Violation(f"trade_identity_conflict:{where}")
+            self.replays += 1
+            return
+        values = [
+            HistoricalPitValue(TRADE_PRICE_VALUE_NAME, _render(price)),
+            HistoricalPitValue(TRADE_QUANTITY_VALUE_NAME, _render(quantity)),
+        ]
+        if self.contiguous:
+            # The run of a trade is fixed at its receipt: an older id arriving later would rewrite a published run.
+            if self.newest is not None and trade.trade_id < self.newest[0]:
+                raise _Violation(f"trade_native_id_regression:{where}")
+            if self.newest is not None and trade.event_time_ns < self.newest[1]:
+                raise _Violation(f"trade_event_time_regression:{where}")
+            if self.newest is None or trade.trade_id != self.newest[0] + 1:
+                self.run_first, self.runs = trade.trade_id, self.runs + 1  # capture start or a native gap
+            self.newest = (trade.trade_id, trade.event_time_ns)
+            values.append(HistoricalPitValue(TRADE_RUN_FIRST_ID_VALUE_NAME, _render(self.run_first * _UNIT)))
+        self.trades[trade.trade_id] = native
+        self._record(
+            sequence_id=trade.trade_id,
+            event_ns=trade.event_time_ns,
+            available_ns=trade.receipt_ns,
+            finalized_ns=trade.event_time_ns,
+            values=tuple(values),
+        )
+
+
+class _IndexProcessor(_StreamProcessor):
+    """Native index-price stream: one value per native event time; under ``index_one_per_utc_second.v1`` at most one
+    value per UTC second, each record naming its second."""
+
+    def __init__(self, stream: CaptureStreamDeclaration) -> None:
+        super().__init__(stream)
+        self.slotted = stream.continuity_profile is NativeIndexPublicationProfile.ONE_PER_UTC_SECOND_V1
+        self.prices: dict[int, tuple[int, int]] = {}
+        self.slots: set[int] = set()
+
+    def _observe(self, item: object, now: int) -> None:
+        index: CapturedIndexPrice = item  # type: ignore[assignment]
+        where = f"{self.scope}:{index.event_time_ns}"
+        price = _scaled(index.index_price)
+        if price <= 0:
+            raise _Violation(f"index_price_invalid:{where}")
+        if index.receipt_ns < index.event_time_ns:
+            raise _Violation(f"index_receipt_before_event:{where}")
+        existing = self.prices.get(index.event_time_ns)
+        if existing is not None:
+            if existing[0] != price:
+                raise _Violation(f"index_identity_conflict:{where}")
+            self.replays += 1
+            return
+        if self.slotted:
+            slot = index.event_time_ns // _NS_PER_SECOND
+            if slot in self.slots:
+                raise _Violation(f"index_publication_slot_conflict:{where}")
+            self.slots.add(slot)
+        self.prices[index.event_time_ns] = (price, index.receipt_ns)
+
+    def _finish(self) -> None:
+        for event_ns in sorted(self.prices):
+            price, receipt_ns = self.prices[event_ns]
+            values = [HistoricalPitValue(INDEX_PRICE_VALUE_NAME, _render(price))]
+            if self.slotted:
+                slot = event_ns // _NS_PER_SECOND
+                values.append(HistoricalPitValue(INDEX_UTC_SECOND_SLOT_VALUE_NAME, _render(slot * _UNIT)))
+            self._record(
+                sequence_id=event_ns,
+                event_ns=event_ns,
+                available_ns=receipt_ns,
+                finalized_ns=event_ns,
+                values=tuple(values),
+            )
+
+
 _PROCESSORS: dict[DataRequirementKey, Callable[[CaptureStreamDeclaration], _StreamProcessor]] = {
     DataRequirementKey.ORDER_BOOK: _BookProcessor,
     DataRequirementKey.MARK_PRICE: _MarkProcessor,
     DataRequirementKey.FUNDING_RATE: _FundingProcessor,
+    DataRequirementKey.LAST_TRADE: _TradeProcessor,
+    DataRequirementKey.INDEX_PRICE: _IndexProcessor,
 }
 
 
@@ -1327,8 +1553,9 @@ def _assemble(inputs: object) -> AuthenticatedPitIngressResult:
         verdict = resolve_edge_gate_verdict(fail, needs_external, needs_governance)
         verdict_reasons = _sorted_unique(fail + needs_external + needs_governance)
 
+    market = any(stream.data_requirement_key in _MARKET_KEYS for stream in declaration.streams)
     seed = AuthenticatedPitIngressEvidence(
-        schema_version=_SCHEMA_VERSION,
+        schema_version=_MARKET_SCHEMA_VERSION if market else _SCHEMA_VERSION,
         status=status,
         gate_verdict=verdict,
         advances=status is EdgeEvidenceStatus.READY and verdict is EdgeGateVerdict.PASS,
@@ -1495,6 +1722,11 @@ def verify_authenticated_pit_ingress(evidence: object, inputs: object) -> EdgeEv
 
 __all__ = [
     "AUTHENTICATED_PIT_INGRESS_NON_CLAIM_FLAGS",
+    "INDEX_PRICE_VALUE_NAME",
+    "INDEX_UTC_SECOND_SLOT_VALUE_NAME",
+    "TRADE_PRICE_VALUE_NAME",
+    "TRADE_QUANTITY_VALUE_NAME",
+    "TRADE_RUN_FIRST_ID_VALUE_NAME",
     "AuthenticatedPitIngressError",
     "AuthenticatedPitIngressEvidence",
     "AuthenticatedPitIngressInputs",
@@ -1505,9 +1737,13 @@ __all__ = [
     "CapturedBookDelta",
     "CapturedBookSnapshot",
     "CapturedFundingSettlement",
+    "CapturedIndexPrice",
     "CapturedLevel",
     "CapturedMarkPrice",
+    "CapturedTrade",
     "NativeBookContinuityProfile",
+    "NativeIndexPublicationProfile",
+    "NativeTradeContinuityProfile",
     "authenticated_pit_ingress_evidence_digest",
     "authenticated_pit_ingress_evidence_from_payload",
     "authenticated_pit_ingress_evidence_to_dict",
