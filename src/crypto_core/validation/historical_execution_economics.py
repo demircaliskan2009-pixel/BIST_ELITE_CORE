@@ -222,6 +222,8 @@ the recording changes no ledger. One snapshot holds:
 
 Only admitted economic transitions earlier in the event order reach a snapshot: a rejected or unfilled intent leaves no
 state, and no later mark, fill, rate or admission is read. Each amount is rendered once from exact state.
+``simulate_historical_execution_governed_paper_decision_portfolio_and_outcome`` returns that portfolio together with the
+governed outcome of the same one re-run, so a consumer that reads both (the kill-switch ladder) reads one run.
 """
 
 from __future__ import annotations
@@ -3596,6 +3598,27 @@ def simulate_historical_execution_governed_paper_decision_portfolio(
     """
 
     outcome, snapshots = _governed_run(result, expected_result_digest, schedule, record_decision_portfolio=True)
+    return _decision_portfolio(outcome, snapshots)
+
+
+def simulate_historical_execution_governed_paper_decision_portfolio_and_outcome(
+    result: HistoricalExecutionEconomicsResult,
+    *,
+    expected_result_digest: str,
+    schedule: HistoricalExecutionAdmissionSchedule,
+) -> tuple[HistoricalExecutionGovernedPaperDecisionPortfolio, HistoricalExecutionGovernedPaperOutcome]:
+    """The decision portfolio of ``simulate_historical_execution_governed_paper_decision_portfolio`` together with the
+    governed outcome its ``outcome_digest`` binds, from ONE re-run: the same authorities, refusals and failure modes, and
+    both artifacts byte-identical to their own functions under the same inputs. Pure."""
+
+    outcome, snapshots = _governed_run(result, expected_result_digest, schedule, record_decision_portfolio=True)
+    return _decision_portfolio(outcome, snapshots), outcome
+
+
+def _decision_portfolio(
+    outcome: HistoricalExecutionGovernedPaperOutcome,
+    snapshots: tuple[HistoricalExecutionDecisionPortfolioSnapshot, ...],
+) -> HistoricalExecutionGovernedPaperDecisionPortfolio:
     seed = HistoricalExecutionGovernedPaperDecisionPortfolio(
         schema_version=HISTORICAL_EXECUTION_GOVERNED_PAPER_DECISION_PORTFOLIO_SCHEMA_VERSION,
         schedule=outcome.schedule,
@@ -4756,6 +4779,7 @@ __all__ = [
     "historical_execution_stress_scenario_digest",
     "simulate_historical_execution_governed_paper",
     "simulate_historical_execution_governed_paper_decision_portfolio",
+    "simulate_historical_execution_governed_paper_decision_portfolio_and_outcome",
     "simulate_historical_execution_stress",
     "verify_historical_execution_economics",
 ]

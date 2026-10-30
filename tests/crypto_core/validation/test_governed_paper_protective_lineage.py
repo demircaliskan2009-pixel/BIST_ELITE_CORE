@@ -114,6 +114,7 @@ def protection_for(
     archive: object | None = None,
     portfolio_no_trade: bool = False,
     market_data_integrity: bool = False,
+    kill_switch_escalation: bool = False,
 ) -> GovernedPaperDayProtectionInputs:
     """The protective inputs of ``day``: the world's authority, the day's OHLC archive and the open excursion's cycle."""
 
@@ -132,6 +133,7 @@ def protection_for(
         excursion_cycle=None if excursion is None else excursion[1],
         portfolio_no_trade=portfolio_no_trade,
         market_data_integrity=market_data_integrity,
+        kill_switch_escalation=kill_switch_escalation,
     )
 
 

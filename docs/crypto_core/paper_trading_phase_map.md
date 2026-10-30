@@ -414,3 +414,27 @@ Native market-data integrity measurement (`S1_MARKET_DATA_INTEGRITY_NATIVE_MEASU
   PASS of the whole Data family is proven on authentic synthetic captures and still stops at NT-R01. M1 source
   qualification, D1 venue facts, source rights and C1-C9 stay open, a declared capture profile is documented, never
   qualified, and REAL_PAPER_EXECUTION stays BLOCKED. Every value in the tests is synthetic.
+
+Proven kill-switch escalation (`S1_KILL_SWITCH_PROVEN_ESCALATION_CLOSURE_V1`, recorded 2026-10-30):
+
+- a market-data lineage that opts in from day 0 (day seal v6, lineage evidence v6) evaluates entry gate rule set v5. Each
+  sequential-admission round derives the proven LOWER BOUND of the PRDV4 §1.19 level (`governed_paper_kill_switch.py`)
+  from the decision portfolio and the governed outcome of one engine re-run (one read-only engine API returns both), the
+  archive's final funding series and the governed latency. Only triggers proven TRUE are read: T1 intraday drawdown (the
+  NT-R02 intraday base), T2 and T11 drawdown from the running peak since G, T5 five closed trades known losing (gross and
+  net strictly negative, every settled funding record visible), T6 four consecutive final rates strictly beyond 0.1% on
+  an approved 8 h grid, and T7 the governed latency strictly above 10 x the T1 budget for more than 60 s. T4 is not
+  applicable on the one-sleeve portfolio. T3 (CVaR), T8 (liquidity), T9 (exchange-API health), T10 (no authenticated
+  BTC identity), T12 (no defined critical-feed membership), KS-4 and the §1.26 DTL input are never read TRUE or FALSE;
+- the bound is the level of the triggers proven at each instant, and KS-3 from the instant it is proven (absorbing: no
+  governed recovery approval exists). No persistence below KS-3 is claimed, because §1.19's cool-down reads from the
+  clearing or from the level's entry and the two disagree after an earlier unproven entry. NT-R01 FAILs exactly on a
+  proven KS-2 or more and is otherwise BLOCKED, naming every unproven trigger; it never passes. NT-T02 stays BLOCKED, and
+  no cool-down is claimed or denied. A refusal still reaches entries only, never a protective close-only exit;
+- the seal binds the ladder digest and its run-independent prefix before `E_k` and `E_k+1`, and the prefix before `E_k`
+  must equal the previous seal's (X1 for the ladder). Every v1-v5 artifact, rule sets v1-v4 and every accepted economic
+  outcome stay byte-identical;
+- every S1 entry is still refused (first by NT-D01 on the accepted worlds, by NT-R01 after a Data PASS). A PASS-capable
+  NT-R01 stays blocked on H1-H6: an exchange-API health reading on the paper path, the CVaR and liquidity
+  methodologies, the margin and DTL model, the KS-1 actions and the KS-2/KS-3 position mechanics. REAL_PAPER_EXECUTION
+  stays BLOCKED. Every value in the tests is synthetic.
