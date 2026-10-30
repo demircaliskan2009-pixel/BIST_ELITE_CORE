@@ -418,19 +418,26 @@ Native market-data integrity measurement (`S1_MARKET_DATA_INTEGRITY_NATIVE_MEASU
 Proven kill-switch escalation (`S1_KILL_SWITCH_PROVEN_ESCALATION_CLOSURE_V1`, recorded 2026-10-30):
 
 - a market-data lineage that opts in from day 0 (day seal v6, lineage evidence v6) evaluates entry gate rule set v5. Each
-  sequential-admission round derives the proven LOWER BOUND of the PRDV4 §1.19 level (`governed_paper_kill_switch.py`)
-  from the decision portfolio and the governed outcome of one engine re-run (one read-only engine API returns both), the
-  archive's final funding series and the governed latency. Only triggers proven TRUE are read: T1 intraday drawdown (the
-  NT-R02 intraday base), T2 and T11 drawdown from the running peak since G, T5 five closed trades known losing (gross and
-  net strictly negative, every settled funding record visible), T6 four consecutive final rates strictly beyond 0.1% on
-  an approved 8 h grid, and T7 the governed latency strictly above 10 x the T1 budget for more than 60 s. T4 is not
-  applicable on the one-sleeve portfolio. T3 (CVaR), T8 (liquidity), T9 (exchange-API health), T10 (no authenticated
-  BTC identity), T12 (no defined critical-feed membership), KS-4 and the §1.26 DTL input are never read TRUE or FALSE;
-- the bound is the level of the triggers proven at each instant, and KS-3 from the instant it is proven (absorbing: no
-  governed recovery approval exists). No persistence below KS-3 is claimed, because §1.19's cool-down reads from the
-  clearing or from the level's entry and the two disagree after an earlier unproven entry. NT-R01 FAILs exactly on a
-  proven KS-2 or more and is otherwise BLOCKED, naming every unproven trigger; it never passes. NT-T02 stays BLOCKED, and
-  no cool-down is claimed or denied. A refusal still reaches entries only, never a protective close-only exit;
+  sequential-admission round derives the proven LOWER BOUND of the PRDV4 §1.19 level (`governed_paper_kill_switch.py`).
+  It reads the archive's final funding series, the governed latency, and the decision portfolio, governed outcome and
+  exact values of one engine re-run. One read-only engine API derives all three, and none is ever accepted. Only
+  triggers proven TRUE are read, each on the engine's exact values, never a rendered amount:
+  - T1 intraday drawdown (the NT-R02 intraday base);
+  - T2 and T11 drawdown from the running peak since G;
+  - T5 five closed trades known losing (gross and net strictly negative, every settled funding record visible);
+  - T6 four consecutive final rates strictly beyond 0.1% on an approved 8 h grid;
+  - T7 the governed latency strictly above 10 x the T1 budget for more than 60 s.
+
+  T4 is not applicable on the one-sleeve portfolio. T3 (CVaR), T8 (liquidity), T9 (exchange-API health), T10 (no
+  authenticated BTC identity), T12 (no defined critical-feed membership), KS-4 and the §1.26 DTL input are never read
+  TRUE or FALSE;
+- the bound is the level of the DISTINCT triggers proven at each instant, and KS-3 from the instant it is proven
+  (absorbing: no governed recovery approval exists). An instant is a nanosecond and one of the engine's equal-instant
+  phases, and a decision reads its own instant at its DECISION phase, before its fills. No persistence below KS-3 is
+  claimed, because §1.19's cool-down reads from the clearing or from the level's entry and the two disagree after an
+  earlier unproven entry. NT-R01 FAILs exactly on a proven KS-2 or more and is otherwise BLOCKED, naming every unproven
+  trigger; it never passes. NT-T02 stays BLOCKED, and no cool-down is claimed or denied. A refusal still reaches entries
+  only, never a protective close-only exit;
 - the seal binds the ladder digest and its run-independent prefix before `E_k` and `E_k+1`, and the prefix before `E_k`
   must equal the previous seal's (X1 for the ladder). Every v1-v5 artifact, rule sets v1-v4 and every accepted economic
   outcome stay byte-identical;

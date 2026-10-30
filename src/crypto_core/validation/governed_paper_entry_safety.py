@@ -148,23 +148,28 @@ archive, never real market continuity, source rights or venue facts.
 
 Proven kill-switch escalation (``S1_KILL_SWITCH_PROVEN_ESCALATION_CLOSURE_V1``, rule set v5). Rule sets v1-v4 hold for
 every evaluation without it. When the day seal opts in, on top of rule set v4, the evaluation derives the proven
-lower-bound PRDV4 §1.19 ladder of its own governed re-run (``governed_paper_kill_switch``): the decision portfolio and
-the governed outcome of ONE engine re-run under the schedule under evaluation, the archive's final funding series, the
-governed latency and the genesis envelope. A reading there is a trigger proven TRUE; every other trigger is unproven,
-never FALSE:
+lower-bound PRDV4 §1.19 ladder of its own governed re-run (``governed_paper_kill_switch``). The ladder reads:
+* the decision portfolio, the governed outcome and the exact values behind them, from the ONE engine re-run under the
+  schedule under evaluation (the same re-run whose snapshots rule set v3 reads, never a supplied artifact);
+* the archive's final funding series;
+* the governed latency;
+* the genesis envelope.
+A reading there is a trigger proven TRUE; every other trigger is unproven, never FALSE. A decision at ``t`` reads the
+ladder at its own DECISION phase: after the funding settlements and protective events of that nanosecond, before its
+fills.
 
 * NT-R01 (kill-switch active) FAILs exactly when the proven lower bound of the level at ``t`` is at least KS-2: two
-  standard triggers proven at ``t`` itself, or a KS-3 proven at or before ``t`` (absorbing without a governed recovery
-  approval), with the triggers that prove it. Otherwise it is BLOCKED with that lower bound and every trigger neither
-  proven TRUE at ``t`` nor proven not applicable. It never passes: an unmeasured trigger (no CVaR, liquidity,
+  distinct standard triggers proven at ``t`` itself, or a KS-3 proven at or before ``t`` (absorbing without a governed
+  recovery approval), with the triggers that prove it. Otherwise it is BLOCKED with that lower bound and every trigger
+  neither proven TRUE at ``t`` nor proven not applicable. It never passes: an unmeasured trigger (no CVaR, liquidity,
   venue-health, BTC-identity, critical-feed, system-integrity or margin reading exists) may be active, so neither KS-0
   nor KS-1 is ever proven, and a KS-1 entry would also need the §1.19 KS-1 actions, which nothing represents;
 * NT-T02 (post-kill-switch cool-down) stays BLOCKED: a cool-down state is exact only over a complete trigger history,
   and this one is not, so no absence of a cool-down is ever claimed.
 
-The ladder at ``t`` reads only the portfolio the admissions before ``t`` produced, so the sequential admission of rule
-set v3 stays the unique causal fixed point, and a refusal still reaches an entry only, never an exit or a protective
-close-only action. The evidence binds the ladder; every v1-v4 payload is unchanged.
+The ladder at ``t`` reads only the portfolio the admissions before ``t`` produced, never a later phase of ``t``. So the
+sequential admission of rule set v3 stays the unique causal fixed point, and a refusal still reaches an entry only,
+never an exit or a protective close-only action. The evidence binds the ladder; every v1-v4 payload is unchanged.
 
 The evidence is digest-bound and paper-only. It proves no venue fact, edge, profitability, readiness or Stage-4
 completion. Exact arithmetic, no float, no ``decimal`` context, and no IO, clock, randomness, network or environment.
@@ -206,13 +211,14 @@ from crypto_core.validation.edge_source_packet_evidence import (
 )
 from crypto_core.validation.governed_paper_execution_authority import GovernedPaperGenesisAuthority
 from crypto_core.validation.governed_paper_kill_switch import (
+    GOVERNED_PAPER_KILL_SWITCH_DECISION_PHASE,
     GOVERNED_PAPER_KILL_SWITCH_RULE_DIGEST,
     GOVERNED_PAPER_KILL_SWITCH_RULE_ID,
     GOVERNED_PAPER_KILL_SWITCH_TIER_LATENCY_BUDGET_NS,
     GOVERNED_PAPER_KILL_SWITCH_TRIGGER_IDS,
     GovernedPaperKillSwitchError,
     GovernedPaperKillSwitchLadder,
-    build_governed_paper_kill_switch_ladder,
+    derive_governed_paper_kill_switch_ladder,
     governed_paper_kill_switch_level_at,
     governed_paper_kill_switch_proven_at,
     governed_paper_kill_switch_unmeasured,
@@ -225,13 +231,12 @@ from crypto_core.validation.historical_execution_economics import (
     HistoricalExecutionDecisionPortfolioSnapshot,
     HistoricalExecutionEconomicsError,
     HistoricalExecutionEconomicsResult,
-    HistoricalExecutionGovernedPaperDecisionPortfolio,
-    HistoricalExecutionGovernedPaperOutcome,
     HistoricalExecutionProtectiveWindow,
     historical_execution_visible_observations,
-    simulate_historical_execution_governed_paper_decision_portfolio_and_outcome,
+    simulate_historical_execution_governed_paper_decision_portfolio,
 )
 from crypto_core.validation.historical_execution_economics_policy import (
+    HistoricalExecutionEconomicsPolicy,
     historical_execution_decimal_is_canonical,
     historical_execution_render_amount,
     historical_execution_wire_int_is_valid,
@@ -2293,16 +2298,22 @@ def governed_paper_entry_safety_portfolio_facts(
 def governed_paper_entry_safety_kill_switch_facts(
     ladder: GovernedPaperKillSwitchLadder, time_ns: int
 ) -> GovernedPaperEntrySafetyKillSwitch:
-    """The rule set v5 observation facts of one decision at ``time_ns``, read from its evaluation's ladder."""
+    """The rule set v5 observation facts of the decision at ``time_ns``, read from its evaluation's ladder at that
+    decision's own DECISION phase: after the funding and protective events of its nanosecond, before its fills."""
 
-    level, setting = governed_paper_kill_switch_level_at(ladder, time_ns)
+    phase = GOVERNED_PAPER_KILL_SWITCH_DECISION_PHASE
+    level, setting = governed_paper_kill_switch_level_at(ladder, time_ns, phase=phase)
     bound = level > 0 and setting is not None
     # below KS-3 the bound is the level of the triggers proven at the instant; an absorbed KS-3 rests on its escalation
-    proving = setting.proven_trigger_ids if level == 3 else governed_paper_kill_switch_proven_at(ladder, time_ns)  # type: ignore[union-attr]
+    proving = (
+        setting.proven_trigger_ids  # type: ignore[union-attr]
+        if level == 3
+        else governed_paper_kill_switch_proven_at(ladder, time_ns, phase=phase)
+    )
     return GovernedPaperEntrySafetyKillSwitch(
         level=level,
         proving_trigger_ids=proving if bound else (),
-        unproven_trigger_ids=governed_paper_kill_switch_unproven_at(ladder, time_ns),
+        unproven_trigger_ids=governed_paper_kill_switch_unproven_at(ladder, time_ns, phase=phase),
         unmeasured_trigger_ids=governed_paper_kill_switch_unmeasured(ladder),
         ladder_digest=ladder.ladder_digest,
         transition_digest=setting.transition_digest if bound else None,  # type: ignore[union-attr]
@@ -2311,12 +2322,11 @@ def governed_paper_entry_safety_kill_switch_facts(
 
 @dataclass(frozen=True)
 class _GovernedRun:
-    """The one engine re-run of an evaluation (rule set v3 on): its snapshots by decision, its portfolio and outcome."""
+    """The one engine re-run of an evaluation (rule set v3 on): its snapshots by decision and, under rule set v5, the
+    ladder derived from that same re-run."""
 
     snapshots: dict[int, HistoricalExecutionDecisionPortfolioSnapshot]
-    portfolio: HistoricalExecutionGovernedPaperDecisionPortfolio
-    outcome: HistoricalExecutionGovernedPaperOutcome
-    economics: HistoricalExecutionEconomicsResult
+    ladder: GovernedPaperKillSwitchLadder | None
 
 
 def _governed_run(
@@ -2325,11 +2335,14 @@ def _governed_run(
     run: HistoricalDecisionRun,
     economics_policy_digest: str,
     protection: GovernedPaperEntrySafetyProtection | None,
+    ladder: tuple[HistoricalExecutionEconomicsPolicy, HistoricalPitDataset, bool] | None,
 ) -> _GovernedRun | None:
-    """The decision snapshots the one engine derives for this evaluation (rule set v3), keyed by decision sequence,
-    with the decision portfolio and the governed outcome of that same re-run (the rule set v5 ladder reads both).
+    """The decision snapshots the one engine derives for this evaluation (rule set v3), keyed by decision sequence.
 
-    Only an information-time schedule v4 has a decision portfolio: any other schedule is ``portfolio_not_derivable``.
+    ``ladder`` (rule set v5) is the economics policy, the archive and the single-instrument fact the kill-switch ladder
+    reads. The ladder then derives the decision portfolio from the same ONE engine re-run whose snapshots are read here
+    (``derive_governed_paper_kill_switch_ladder``). Only an information-time schedule v4 has a decision portfolio: any
+    other schedule is ``portfolio_not_derivable``.
     """
 
     if portfolio is None:
@@ -2348,13 +2361,27 @@ def _governed_run(
         or economics.ohlc_archive_digest != protection.ohlc_archive.archive_digest
     ):
         raise _fail("portfolio_economics_not_of_this_evaluation")
+    derived_ladder: GovernedPaperKillSwitchLadder | None = None
     try:  # derived, never accepted: the engine re-proves the economics and re-runs it under the schedule
-        derived, outcome = simulate_historical_execution_governed_paper_decision_portfolio_and_outcome(
-            economics, expected_result_digest=economics.result_digest, schedule=portfolio.schedule
-        )
+        if ladder is None:
+            derived = simulate_historical_execution_governed_paper_decision_portfolio(
+                economics, expected_result_digest=economics.result_digest, schedule=portfolio.schedule
+            )
+        else:
+            policy, dataset, single = ladder
+            derivation = derive_governed_paper_kill_switch_ladder(
+                policy=policy,
+                dataset=dataset,
+                economics=economics,
+                schedule=portfolio.schedule,
+                single_instrument_portfolio=single,
+            )
+            derived, derived_ladder = derivation.portfolio, derivation.ladder
     except HistoricalExecutionEconomicsError as exc:
         raise _fail("portfolio_not_derivable") from exc
-    return _GovernedRun({item.decision_sequence: item for item in derived.snapshots}, derived, outcome, economics)
+    except GovernedPaperKillSwitchError as exc:
+        raise _fail("kill_switch_ladder_not_derivable") from exc
+    return _GovernedRun({item.decision_sequence: item for item in derived.snapshots}, derived_ladder)
 
 
 def governed_paper_entry_safety_entry_sequences(run: HistoricalDecisionRun) -> tuple[int, ...]:
@@ -2436,8 +2463,13 @@ def build_governed_paper_entry_safety_evidence(
     ):
         raise _fail("decision_run_or_archive_not_of_the_genesis")
     policy = authority.economics_policy
+    single = _single_instrument_portfolio(authority)
     governed = _governed_run(
-        portfolio, run=run, economics_policy_digest=genesis.economics_policy_digest, protection=protection
+        portfolio,
+        run=run,
+        economics_policy_digest=genesis.economics_policy_digest,
+        protection=protection,
+        ladder=(policy, dataset, single) if kill_switch else None,
     )
     snapshots = None if governed is None else governed.snapshots
     if market_data and snapshots is None:
@@ -2453,20 +2485,7 @@ def build_governed_paper_entry_safety_evidence(
     family_b = (
         run.profile_id == registered.profile_id and run.profile_semantics_digest == registered.profile_semantics_digest
     )
-    single = _single_instrument_portfolio(authority)
-    ladder: GovernedPaperKillSwitchLadder | None = None
-    if kill_switch:
-        try:  # derived, never accepted: the ladder re-proves every input by its public digest and their bindings
-            ladder = build_governed_paper_kill_switch_ladder(
-                policy=policy,
-                dataset=dataset,
-                economics=governed.economics,  # type: ignore[union-attr]
-                portfolio=governed.portfolio,  # type: ignore[union-attr]
-                outcome=governed.outcome,  # type: ignore[union-attr]
-                single_instrument_portfolio=single,
-            )
-        except GovernedPaperKillSwitchError as exc:
-            raise _fail("kill_switch_ladder_not_derivable") from exc
+    ladder = None if governed is None else governed.ladder
     decisions: list[GovernedPaperEntrySafetyDecision] = []
     for decision in run.decisions:
         if decision.resulting_direction not in _ENTRY_DIRECTIONS:
