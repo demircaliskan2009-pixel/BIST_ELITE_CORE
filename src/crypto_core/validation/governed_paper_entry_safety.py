@@ -146,6 +146,31 @@ These facts read the archive alone and never the admission schedule, so the sequ
 declared capture profile is documented, never qualified (M1): a PASS proves software construction on the supplied
 archive, never real market continuity, source rights or venue facts.
 
+Proven kill-switch escalation (``S1_KILL_SWITCH_PROVEN_ESCALATION_CLOSURE_V1``, rule set v5). Rule sets v1-v4 hold for
+every evaluation without it. When the day seal opts in, on top of rule set v4, the evaluation derives the proven
+lower-bound PRDV4 §1.19 ladder of its own governed re-run (``governed_paper_kill_switch``). The ladder reads:
+* the decision portfolio, the governed outcome and the exact values behind them, from the ONE engine re-run under the
+  schedule under evaluation (the same re-run whose snapshots rule set v3 reads, never a supplied artifact);
+* the archive's final funding series;
+* the governed latency;
+* the genesis envelope.
+A reading there is a trigger proven TRUE; every other trigger is unproven, never FALSE. A decision at ``t`` reads the
+ladder at its own DECISION phase: after the funding settlements and protective events of that nanosecond, before its
+fills.
+
+* NT-R01 (kill-switch active) FAILs exactly when the proven lower bound of the level at ``t`` is at least KS-2: two
+  distinct standard triggers proven at ``t`` itself, or a KS-3 proven at or before ``t`` (absorbing without a governed
+  recovery approval), with the triggers that prove it. Otherwise it is BLOCKED with that lower bound and every trigger
+  neither proven TRUE at ``t`` nor proven not applicable. It never passes: an unmeasured trigger (no CVaR, liquidity,
+  venue-health, BTC-identity, critical-feed, system-integrity or margin reading exists) may be active, so neither KS-0
+  nor KS-1 is ever proven, and a KS-1 entry would also need the §1.19 KS-1 actions, which nothing represents;
+* NT-T02 (post-kill-switch cool-down) stays BLOCKED: a cool-down state is exact only over a complete trigger history,
+  and this one is not, so no absence of a cool-down is ever claimed.
+
+The ladder at ``t`` reads only the portfolio the admissions before ``t`` produced, never a later phase of ``t``. So the
+sequential admission of rule set v3 stays the unique causal fixed point, and a refusal still reaches an entry only,
+never an exit or a protective close-only action. The evidence binds the ladder; every v1-v4 payload is unchanged.
+
 The evidence is digest-bound and paper-only. It proves no venue fact, edge, profitability, readiness or Stage-4
 completion. Exact arithmetic, no float, no ``decimal`` context, and no IO, clock, randomness, network or environment.
 """
@@ -185,6 +210,20 @@ from crypto_core.validation.edge_source_packet_evidence import (
     verify_edge_source_packet_evidence,
 )
 from crypto_core.validation.governed_paper_execution_authority import GovernedPaperGenesisAuthority
+from crypto_core.validation.governed_paper_kill_switch import (
+    GOVERNED_PAPER_KILL_SWITCH_DECISION_PHASE,
+    GOVERNED_PAPER_KILL_SWITCH_RULE_DIGEST,
+    GOVERNED_PAPER_KILL_SWITCH_RULE_ID,
+    GOVERNED_PAPER_KILL_SWITCH_TIER_LATENCY_BUDGET_NS,
+    GOVERNED_PAPER_KILL_SWITCH_TRIGGER_IDS,
+    GovernedPaperKillSwitchError,
+    GovernedPaperKillSwitchLadder,
+    derive_governed_paper_kill_switch_ladder,
+    governed_paper_kill_switch_level_at,
+    governed_paper_kill_switch_proven_at,
+    governed_paper_kill_switch_unmeasured,
+    governed_paper_kill_switch_unproven_at,
+)
 from crypto_core.validation.historical_decision_run import HistoricalDecisionRun
 from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP,
@@ -197,7 +236,7 @@ from crypto_core.validation.historical_execution_economics import (
     simulate_historical_execution_governed_paper_decision_portfolio,
 )
 from crypto_core.validation.historical_execution_economics_policy import (
-    LATENCY_TIER_PRDV4_T1,
+    HistoricalExecutionEconomicsPolicy,
     historical_execution_decimal_is_canonical,
     historical_execution_render_amount,
     historical_execution_wire_int_is_valid,
@@ -232,7 +271,7 @@ _NS_PER_SECOND = 1_000_000_000
 
 # PRDV4 doctrine values: published thresholds, never governed parameters.
 _BOOK_STALE_AFTER_NS = 10 * _NS_PER_SECOND  # NT-D02 (§1.21, §4.2)
-_TIER_LATENCY_BUDGET_NS = {LATENCY_TIER_PRDV4_T1: 100_000_000}  # §1.16 T1 Critical, < 100 ms: Funding (B)
+_TIER_LATENCY_BUDGET_NS = GOVERNED_PAPER_KILL_SWITCH_TIER_LATENCY_BUDGET_NS  # §1.16 T1 Critical, < 100 ms: Funding (B)
 _LATENCY_BREACH_MULTIPLE = 5  # NT-X01
 _STARTUP_WARMUP_NS = 5 * 60 * _NS_PER_SECOND  # NT-T01
 _RETURN_LOOKBACK_NS = 4 * 3600 * _NS_PER_SECOND  # §1.9 r_4h
@@ -291,6 +330,7 @@ GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID = "governed-paper-entry-safety.v1"
 GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_ID = "governed-paper-entry-safety.v2"
 GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET_ID = "governed-paper-entry-safety.v3"
 GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_ID = "governed-paper-entry-safety.v4"
+GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_ID = "governed-paper-entry-safety.v5"
 
 GOVERNED_PAPER_ENTRY_SAFETY_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
     ("paper_only", True),
@@ -415,6 +455,24 @@ class GovernedPaperEntrySafetyMarketData:
 
 
 @dataclass(frozen=True)
+class GovernedPaperEntrySafetyKillSwitch:
+    """The kill-switch facts of one decision at ``t`` (rule set v5), derived from the evaluation's ladder, never accepted.
+
+    ``level`` is the PROVEN LOWER BOUND of the PRDV4 §1.19 level at ``t``, never a proven level; ``transition_digest`` is
+    the ladder transition that set it and ``proving_trigger_ids`` the triggers that prove it: those proven at ``t``, or
+    for an absorbed KS-3 those proven when it was reached (both absent at 0). ``unproven_trigger_ids`` are the triggers
+    neither proven TRUE at ``t`` nor proven not applicable, and ``unmeasured_trigger_ids`` those never read TRUE.
+    """
+
+    level: int
+    proving_trigger_ids: tuple[str, ...]
+    unproven_trigger_ids: tuple[str, ...]
+    unmeasured_trigger_ids: tuple[str, ...]
+    ladder_digest: str
+    transition_digest: str | None
+
+
+@dataclass(frozen=True)
 class GovernedPaperEntrySafetyObservation:
     """The point-in-time facts one decision is evaluated on (derived by this module, never caller authority)."""
 
@@ -460,6 +518,8 @@ class GovernedPaperEntrySafetyObservation:
     candidate_nav_reason: str = ""
     # Rule set v4 only: the native market-data facts of the decision (absent without them, as in rule sets v1-v3).
     market_data: GovernedPaperEntrySafetyMarketData | None = None
+    # Rule set v5 only: the proven kill-switch facts of the decision (absent without them, as in rule sets v1-v4).
+    kill_switch: GovernedPaperEntrySafetyKillSwitch | None = None
 
 
 @dataclass(frozen=True)
@@ -548,6 +608,8 @@ class GovernedPaperEntrySafetyEvidence:
     stage4_complete: bool = False
     edge_proven: bool = False
     profitability_proven: bool = False
+    # Rule set v5 only: the proven lower-bound §1.19 ladder the evaluation read (never in a v1-v4 payload).
+    kill_switch_ladder: GovernedPaperKillSwitchLadder | None = None
 
 
 # --- helpers -----------------------------------------------------------------------------------------------------------
@@ -573,6 +635,20 @@ def _serialize(value: object) -> object:
 
 def _to_payload(artifact: object) -> dict[str, object]:
     return {item.name: _serialize(getattr(artifact, item.name)) for item in fields(artifact)}  # type: ignore[arg-type]
+
+
+def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, object]:
+    """The wire payload of one evaluation; a v1-v4 payload is exactly its accepted one and carries no ladder.
+
+    A v1-v4 evidence holding a ladder is never serialized (``ValueError``): a forged ladder never hides behind it.
+    """
+
+    payload = _to_payload(evidence)
+    if evidence.rule_set_id != GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_ID:
+        if evidence.kill_switch_ladder is not None:
+            raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_kill_switch_ladder")
+        del payload["kill_switch_ladder"]
+    return payload
 
 
 # --- the checks --------------------------------------------------------------------------------------------------------
@@ -934,6 +1010,36 @@ def _volume_anomaly(observation: _Observation) -> _Outcome:
     return _Outcome(_Status.PASS, observed, "volume_5min_at_or_above_5pct_of_the_30d_mean", evidence)
 
 
+def _trigger_text(ids: tuple[str, ...]) -> str:
+    return "_".join(ids).lower() if ids else "none"
+
+
+def _kill_switch_level(observation: _Observation) -> _Outcome:
+    """NT-R01: FAIL only on a proven lower bound of KS-2 or more (rule set v5), BLOCKED otherwise, never PASS."""
+
+    facts = observation.kill_switch
+    if facts is None:  # rule sets v1-v4: exactly the earlier missing-input outcome
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "kill_switch_ladder_level_not_produced")
+    evidence = (
+        (facts.ladder_digest,) if facts.transition_digest is None else (facts.ladder_digest, facts.transition_digest)
+    )
+    if facts.level >= 2:
+        reason = f"kill_switch_level_ge_2_proven_by_{_trigger_text(facts.proving_trigger_ids)}"
+        return _Outcome(_Status.FAIL, str(facts.level), reason, evidence)
+    reason = f"kill_switch_lower_bound_{facts.level}_unproven_{_trigger_text(facts.unproven_trigger_ids)}"
+    return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, str(facts.level), reason, evidence)
+
+
+def _kill_switch_cooldown(observation: _Observation) -> _Outcome:
+    """NT-T02: BLOCKED under rule set v5 too; no absence of a cool-down is ever claimed."""
+
+    facts = observation.kill_switch
+    if facts is None:  # rule sets v1-v4: exactly the earlier missing-input outcome
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "kill_switch_cooldown_state_not_produced")
+    reason = f"kill_switch_cooldown_history_unprovable_unmeasured_{_trigger_text(facts.unmeasured_trigger_ids)}"
+    return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", reason, (facts.ladder_digest,))
+
+
 _D, _R, _M, _E, _X, _T, _B = (
     _Family.DATA,
     _Family.RISK,
@@ -978,7 +1084,7 @@ _CHECKS: tuple[_Check, ...] = (
         _R,
         "PRDV4 §1.21 NT-R01 kill-switch active (§1.19)",
         "kill_switch_level_ge_2",
-        _missing("kill_switch_ladder_level_not_produced"),
+        _kill_switch_level,
     ),
     _Check(
         "NT-R02",
@@ -1099,7 +1205,7 @@ _CHECKS: tuple[_Check, ...] = (
         _T,
         "PRDV4 §1.21 NT-T02 post-kill-switch cool-down (§1.19)",
         "inside_the_kill_switch_cooldown",
-        _missing("kill_switch_cooldown_state_not_produced"),
+        _kill_switch_cooldown,
     ),
     _Check(
         "NT-T03",
@@ -1161,7 +1267,7 @@ _CHECKS: tuple[_Check, ...] = (
 
 
 def governed_paper_entry_safety_rule_set(
-    *, protective: bool = False, portfolio: bool = False, market_data: bool = False
+    *, protective: bool = False, portfolio: bool = False, market_data: bool = False, kill_switch: bool = False
 ) -> dict[str, object]:
     """The rule set this module evaluates: every check, in order, with its PRDV4 clause and published threshold.
 
@@ -1170,13 +1276,17 @@ def governed_paper_entry_safety_rule_set(
     with ``protective=True``) is rule set v3: rule set v2 with NT-R02, NT-R03 and NT-R04 evaluated on the governed
     decision portfolio of ``S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1``. ``market_data=True`` (only with
     ``portfolio=True``) is rule set v4: rule set v3 with NT-D01, NT-D03, NT-D04 and NT-D05 measured on the archive's
-    market data (``S1_MARKET_DATA_INTEGRITY_NATIVE_MEASUREMENT_CLOSURE_V1``).
+    market data (``S1_MARKET_DATA_INTEGRITY_NATIVE_MEASUREMENT_CLOSURE_V1``). ``kill_switch=True`` (only with
+    ``market_data=True``) is rule set v5: rule set v4 with NT-R01 and NT-T02 read on the proven lower-bound §1.19 ladder
+    (``S1_KILL_SWITCH_PROVEN_ESCALATION_CLOSURE_V1``).
     """
 
     if portfolio and not protective:
         raise _fail("portfolio_rule_set_needs_the_protective_rule_set")
     if market_data and not portfolio:
         raise _fail("market_data_rule_set_needs_the_portfolio_rule_set")
+    if kill_switch and not market_data:
+        raise _fail("kill_switch_rule_set_needs_the_market_data_rule_set")
 
     rule_set: dict[str, object] = {
         "rule_set_id": GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID,
@@ -1267,6 +1377,22 @@ def governed_paper_entry_safety_rule_set(
                 "volume_floor": _render_threshold(_VOLUME_FLOOR),
             },
         )
+    if kill_switch:
+        rule_set.update(
+            rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_ID,
+            contract_id="S1_KILL_SWITCH_PROVEN_ESCALATION_CLOSURE_V1",
+            kill_switch_rule={
+                "ladder_rule_id": GOVERNED_PAPER_KILL_SWITCH_RULE_ID,
+                "ladder_rule_digest": GOVERNED_PAPER_KILL_SWITCH_RULE_DIGEST,
+                "source": "the_proven_lower_bound_ladder_of_the_decision_portfolio_and_governed_outcome_of_one_engine_"
+                "re_run_under_the_schedule_under_evaluation",
+                "NT-R01": "fail_exactly_when_the_proven_lower_bound_at_t_is_at_least_ks_2_otherwise_blocked_never_pass",
+                "NT-R01_observed": "the_proven_lower_bound_of_the_kill_switch_level_never_a_proven_level",
+                "NT-R01_blocked": "names_every_trigger_neither_proven_true_at_t_nor_proven_not_applicable",
+                "NT-T02": "blocked_no_cooldown_state_is_exact_over_an_incomplete_trigger_history",
+                "admission": "the_ladder_at_t_reads_only_the_admissions_before_t_the_sequential_fixed_point_is_unchanged",
+            },
+        )
     return rule_set
 
 
@@ -1278,11 +1404,13 @@ def _render_threshold(value: Fraction) -> str:
 
 
 def governed_paper_entry_safety_rule_set_digest(
-    *, protective: bool = False, portfolio: bool = False, market_data: bool = False
+    *, protective: bool = False, portfolio: bool = False, market_data: bool = False, kill_switch: bool = False
 ) -> str:
     return edge_sha256_text(
         edge_canonical_json(
-            governed_paper_entry_safety_rule_set(protective=protective, portfolio=portfolio, market_data=market_data)
+            governed_paper_entry_safety_rule_set(
+                protective=protective, portfolio=portfolio, market_data=market_data, kill_switch=kill_switch
+            )
         )
     )
 
@@ -1300,6 +1428,12 @@ GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET = governed_paper_entry_safety_r
 )
 GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(
     protective=True, portfolio=True, market_data=True
+)
+GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET = governed_paper_entry_safety_rule_set(
+    protective=True, portfolio=True, market_data=True, kill_switch=True
+)
+GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(
+    protective=True, portfolio=True, market_data=True, kill_switch=True
 )
 
 
@@ -1343,6 +1477,7 @@ def _canonical_observation(observation: object) -> GovernedPaperEntrySafetyObser
     _canonical_protection_facts(observation)
     _canonical_portfolio_facts(observation)
     _canonical_market_data(observation)
+    _canonical_kill_switch(observation)
     return observation
 
 
@@ -1581,6 +1716,46 @@ def _canonical_market_data(observation: GovernedPaperEntrySafetyObservation) -> 
         for value in volumes
     ):
         raise _fail("observation_malformed:volume")
+
+
+def _canonical_trigger_ids(value: object, name: str) -> tuple[str, ...]:
+    """Distinct §1.19 trigger ids in PRDV4 order, exact str."""
+
+    if type(value) is not tuple or any(type(item) is not str for item in value):
+        raise _fail(f"observation_malformed:{name}")
+    if list(value) != [item for item in GOVERNED_PAPER_KILL_SWITCH_TRIGGER_IDS if item in value] or len(
+        set(value)
+    ) != len(value):
+        raise _fail(f"observation_malformed:{name}")
+    return value  # type: ignore[return-value]
+
+
+def _canonical_kill_switch(observation: GovernedPaperEntrySafetyObservation) -> None:
+    """The rule set v5 facts are exact types and one consistent ladder reading, and exist only on top of rule set v4."""
+
+    facts = observation.kill_switch
+    if facts is None:
+        return
+    if type(facts) is not GovernedPaperEntrySafetyKillSwitch:
+        raise _fail("observation_malformed:kill_switch")
+    if observation.market_data is None:
+        raise _fail("observation_malformed:kill_switch_without_the_market_data_facts")
+    level = facts.level
+    if type(level) is not int or not 0 <= level <= 3:
+        raise _fail("observation_malformed:kill_switch_level")
+    proving = _canonical_trigger_ids(facts.proving_trigger_ids, "kill_switch_proving_trigger_ids")
+    unproven = _canonical_trigger_ids(facts.unproven_trigger_ids, "kill_switch_unproven_trigger_ids")
+    unmeasured = _canonical_trigger_ids(facts.unmeasured_trigger_ids, "kill_switch_unmeasured_trigger_ids")
+    if not edge_is_hex64(facts.ladder_digest):
+        raise _fail("observation_malformed:kill_switch_ladder_digest")
+    transition = facts.transition_digest
+    if (transition is None) is not (level == 0) or (transition is not None and not edge_is_hex64(transition)):
+        raise _fail("observation_malformed:kill_switch_transition")
+    # a positive bound always rests on proven triggers, and a zero bound on none
+    if (level == 0) is not (not proving):
+        raise _fail("observation_malformed:kill_switch_proving_trigger_ids")
+    if not set(unmeasured) <= set(unproven):
+        raise _fail("observation_malformed:kill_switch_unmeasured_trigger_ids")
 
 
 def evaluate_governed_paper_entry_safety(
@@ -2120,16 +2295,54 @@ def governed_paper_entry_safety_portfolio_facts(
     }
 
 
-def _portfolio_snapshots(
+def governed_paper_entry_safety_kill_switch_facts(
+    ladder: GovernedPaperKillSwitchLadder, time_ns: int
+) -> GovernedPaperEntrySafetyKillSwitch:
+    """The rule set v5 observation facts of the decision at ``time_ns``, read from its evaluation's ladder at that
+    decision's own DECISION phase: after the funding and protective events of its nanosecond, before its fills."""
+
+    phase = GOVERNED_PAPER_KILL_SWITCH_DECISION_PHASE
+    level, setting = governed_paper_kill_switch_level_at(ladder, time_ns, phase=phase)
+    bound = level > 0 and setting is not None
+    # below KS-3 the bound is the level of the triggers proven at the instant; an absorbed KS-3 rests on its escalation
+    proving = (
+        setting.proven_trigger_ids  # type: ignore[union-attr]
+        if level == 3
+        else governed_paper_kill_switch_proven_at(ladder, time_ns, phase=phase)
+    )
+    return GovernedPaperEntrySafetyKillSwitch(
+        level=level,
+        proving_trigger_ids=proving if bound else (),
+        unproven_trigger_ids=governed_paper_kill_switch_unproven_at(ladder, time_ns, phase=phase),
+        unmeasured_trigger_ids=governed_paper_kill_switch_unmeasured(ladder),
+        ladder_digest=ladder.ladder_digest,
+        transition_digest=setting.transition_digest if bound else None,  # type: ignore[union-attr]
+    )
+
+
+@dataclass(frozen=True)
+class _GovernedRun:
+    """The one engine re-run of an evaluation (rule set v3 on): its snapshots by decision and, under rule set v5, the
+    ladder derived from that same re-run."""
+
+    snapshots: dict[int, HistoricalExecutionDecisionPortfolioSnapshot]
+    ladder: GovernedPaperKillSwitchLadder | None
+
+
+def _governed_run(
     portfolio: object,
     *,
     run: HistoricalDecisionRun,
     economics_policy_digest: str,
     protection: GovernedPaperEntrySafetyProtection | None,
-) -> dict[int, HistoricalExecutionDecisionPortfolioSnapshot] | None:
+    ladder: tuple[HistoricalExecutionEconomicsPolicy, HistoricalPitDataset, bool] | None,
+) -> _GovernedRun | None:
     """The decision snapshots the one engine derives for this evaluation (rule set v3), keyed by decision sequence.
 
-    Only an information-time schedule v4 has a decision portfolio: any other schedule is ``portfolio_not_derivable``.
+    ``ladder`` (rule set v5) is the economics policy, the archive and the single-instrument fact the kill-switch ladder
+    reads. The ladder then derives the decision portfolio from the same ONE engine re-run whose snapshots are read here
+    (``derive_governed_paper_kill_switch_ladder``). Only an information-time schedule v4 has a decision portfolio: any
+    other schedule is ``portfolio_not_derivable``.
     """
 
     if portfolio is None:
@@ -2148,13 +2361,27 @@ def _portfolio_snapshots(
         or economics.ohlc_archive_digest != protection.ohlc_archive.archive_digest
     ):
         raise _fail("portfolio_economics_not_of_this_evaluation")
+    derived_ladder: GovernedPaperKillSwitchLadder | None = None
     try:  # derived, never accepted: the engine re-proves the economics and re-runs it under the schedule
-        derived = simulate_historical_execution_governed_paper_decision_portfolio(
-            economics, expected_result_digest=economics.result_digest, schedule=portfolio.schedule
-        )
+        if ladder is None:
+            derived = simulate_historical_execution_governed_paper_decision_portfolio(
+                economics, expected_result_digest=economics.result_digest, schedule=portfolio.schedule
+            )
+        else:
+            policy, dataset, single = ladder
+            derivation = derive_governed_paper_kill_switch_ladder(
+                policy=policy,
+                dataset=dataset,
+                economics=economics,
+                schedule=portfolio.schedule,
+                single_instrument_portfolio=single,
+            )
+            derived, derived_ladder = derivation.portfolio, derivation.ladder
     except HistoricalExecutionEconomicsError as exc:
         raise _fail("portfolio_not_derivable") from exc
-    return {item.decision_sequence: item for item in derived.snapshots}
+    except GovernedPaperKillSwitchError as exc:
+        raise _fail("kill_switch_ladder_not_derivable") from exc
+    return _GovernedRun({item.decision_sequence: item for item in derived.snapshots}, derived_ladder)
 
 
 def governed_paper_entry_safety_entry_sequences(run: HistoricalDecisionRun) -> tuple[int, ...]:
@@ -2195,6 +2422,7 @@ def build_governed_paper_entry_safety_evidence(
     protection: GovernedPaperEntrySafetyProtection | None = None,
     portfolio: GovernedPaperEntrySafetyPortfolio | None = None,
     market_data: bool = False,
+    kill_switch: bool = False,
 ) -> GovernedPaperEntrySafetyEvidence:
     """Evaluate every entry decision of ``run`` over the archive ``dataset`` it was built from (see the module docstring).
 
@@ -2204,7 +2432,9 @@ def build_governed_paper_entry_safety_evidence(
     with ``protection``) is the replayed protective economics of this run and the schedule under evaluation, from which
     the one engine derives the decision portfolio. ``market_data=True`` (rule set v4, only with ``portfolio``) measures
     NT-D01, NT-D03, NT-D04 and NT-D05 on the archive's own market-data series and the protective context's OHLC
-    archive as the kline feed candidate. A malformed or foreign input raises ``GovernedPaperEntrySafetyError``. Pure.
+    archive as the kline feed candidate. ``kill_switch=True`` (rule set v5, only with ``market_data``) reads NT-R01 and
+    NT-T02 on the proven lower-bound §1.19 ladder of the same governed re-run. A malformed or foreign input raises
+    ``GovernedPaperEntrySafetyError``. Pure.
     """
 
     if type(authority) is not GovernedPaperGenesisAuthority:
@@ -2215,6 +2445,10 @@ def build_governed_paper_entry_safety_evidence(
         raise _fail("invalidated_from_ns_invalid")
     if type(market_data) is not bool:
         raise _fail("market_data_flag_malformed")
+    if type(kill_switch) is not bool:
+        raise _fail("kill_switch_flag_malformed")
+    if kill_switch and not market_data:
+        raise _fail("kill_switch_without_the_market_data_rule_set")
     genesis = authority.genesis
     protection = _canonical_protection(protection, instrument=genesis.instrument)
     if run.status is not EdgeEvidenceStatus.READY or run.gate_verdict is not EdgeGateVerdict.PASS:
@@ -2229,9 +2463,15 @@ def build_governed_paper_entry_safety_evidence(
     ):
         raise _fail("decision_run_or_archive_not_of_the_genesis")
     policy = authority.economics_policy
-    snapshots = _portfolio_snapshots(
-        portfolio, run=run, economics_policy_digest=genesis.economics_policy_digest, protection=protection
+    single = _single_instrument_portfolio(authority)
+    governed = _governed_run(
+        portfolio,
+        run=run,
+        economics_policy_digest=genesis.economics_policy_digest,
+        protection=protection,
+        ladder=(policy, dataset, single) if kill_switch else None,
     )
+    snapshots = None if governed is None else governed.snapshots
     if market_data and snapshots is None:
         raise _fail("market_data_without_a_governed_portfolio")
     observations = historical_execution_visible_observations(dataset, policy=policy, instrument=genesis.instrument)
@@ -2245,7 +2485,7 @@ def build_governed_paper_entry_safety_evidence(
     family_b = (
         run.profile_id == registered.profile_id and run.profile_semantics_digest == registered.profile_semantics_digest
     )
-    single = _single_instrument_portfolio(authority)
+    ladder = None if governed is None else governed.ladder
     decisions: list[GovernedPaperEntrySafetyDecision] = []
     for decision in run.decisions:
         if decision.resulting_direction not in _ENTRY_DIRECTIONS:
@@ -2281,12 +2521,15 @@ def build_governed_paper_entry_safety_evidence(
                 else governed_paper_entry_safety_portfolio_facts(snapshots.get(decision.decision_sequence))
             ),
             market_data=None if market is None else market.facts_at(instant),
+            kill_switch=None if ladder is None else governed_paper_entry_safety_kill_switch_facts(ladder, instant),
         )
         decisions.append(evaluate_governed_paper_entry_safety(observation))
     protective, measured = protection is not None, snapshots is not None
     seed = GovernedPaperEntrySafetyEvidence(
         schema_version=_SCHEMA_VERSION,
-        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_ID
+        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_ID
+        if kill_switch
+        else GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_ID
         if market_data
         else GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET_ID
         if measured
@@ -2294,7 +2537,7 @@ def build_governed_paper_entry_safety_evidence(
         if protective
         else GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID,
         rule_set_digest=governed_paper_entry_safety_rule_set_digest(
-            protective=protective, portfolio=measured, market_data=market_data
+            protective=protective, portfolio=measured, market_data=market_data, kill_switch=kill_switch
         ),
         genesis_id=genesis.genesis_id,
         genesis_digest=genesis.genesis_digest,
@@ -2310,17 +2553,18 @@ def build_governed_paper_entry_safety_evidence(
             sorted(item.decision_sequence for item in decisions if not item.entry_permitted)
         ),
         evidence_digest="",
+        kill_switch_ladder=ladder,
     )
-    return replace(seed, evidence_digest=edge_payload_digest(_to_payload(seed), _DIGEST_FIELD))
+    return replace(seed, evidence_digest=edge_payload_digest(_evidence_payload(seed), _DIGEST_FIELD))
 
 
 def governed_paper_entry_safety_evidence_to_dict(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, object]:
     """Canonical JSON-ready mapping of the evidence, including its self-digest."""
 
-    return _to_payload(evidence)
+    return _evidence_payload(evidence)
 
 
 def governed_paper_entry_safety_evidence_digest(evidence: GovernedPaperEntrySafetyEvidence) -> str:
     """Recompute the canonical evidence digest, excluding only ``evidence_digest``."""
 
-    return edge_payload_digest(_to_payload(evidence), _DIGEST_FIELD)
+    return edge_payload_digest(_evidence_payload(evidence), _DIGEST_FIELD)

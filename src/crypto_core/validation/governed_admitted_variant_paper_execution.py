@@ -75,6 +75,17 @@ on the day's archive (its LAST_TRADE and INDEX_PRICE series under the genesis da
 archive as the kline feed candidate. Those readings are facts of the archive at each decision and never of the
 schedule, so the sequential admission and every other rule are the v4 lineage's, and without
 ``market_data_integrity`` every portfolio seal and evidence is exactly the accepted v4 artifact.
+
+Proven kill-switch escalation lineage (``S1_KILL_SWITCH_PROVEN_ESCALATION_CLOSURE_V1``, seal v6 and evidence v6). A
+market-data integrity lineage whose protection inputs set ``kill_switch_escalation`` does so on every day from day 0,
+and never switches. Its entry gate evaluates rule set v5: rule set v4 with NT-R01 read on the proven lower bound of the
+PRDV4 §1.19 ladder that each sequential-admission round derives from its own governed re-run
+(``governed_paper_kill_switch``), and NT-T02 BLOCKED. The ladder is re-derived from G at every seal from authenticated
+inputs only; no kill-switch state is ever an input, carried over or selected as the newest one. The seal binds the
+ladder digest and the ladder's prefix before ``E_k`` and before ``E_{k+1}``, and the prefix before ``E_k`` must equal the
+previous seal's (X1 for the ladder), so no replay rewrites a sealed kill-switch history. Without
+``kill_switch_escalation`` every market-data seal and evidence is exactly the accepted v5 artifact, and no v2-v5
+payload carries a seal v6 field.
 """
 
 from __future__ import annotations
@@ -126,6 +137,7 @@ from crypto_core.validation.governed_paper_execution_authority import (
     governed_paper_sealed_history_digest,
     verify_governed_paper_cycle_authority,
 )
+from crypto_core.validation.governed_paper_kill_switch import governed_paper_kill_switch_prefix_digest
 from crypto_core.validation.governed_paper_protective_authority import (
     GovernedPaperProtectiveAuthority,
     GovernedPaperProtectiveAuthorityError,
@@ -220,11 +232,14 @@ _SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v2"
 _PROTECTIVE_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v3"
 _PORTFOLIO_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v4"
 _MARKET_DATA_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v5"
+_KILL_SWITCH_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v6"
 _EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v2"
 _PROTECTIVE_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v3"
 _PORTFOLIO_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v4"
 _MARKET_DATA_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v5"
-_PORTFOLIO_SEALS = (_PORTFOLIO_SEAL_SCHEMA_VERSION, _MARKET_DATA_SEAL_SCHEMA_VERSION)
+_KILL_SWITCH_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v6"
+_MARKET_DATA_SEALS = (_MARKET_DATA_SEAL_SCHEMA_VERSION, _KILL_SWITCH_SEAL_SCHEMA_VERSION)
+_PORTFOLIO_SEALS = (_PORTFOLIO_SEAL_SCHEMA_VERSION, *_MARKET_DATA_SEALS)
 _PROTECTIVE_SEALS = (_PROTECTIVE_SEAL_SCHEMA_VERSION, *_PORTFOLIO_SEALS)
 _SEAL_DIGEST_FIELD = "seal_digest"
 _EVIDENCE_DIGEST_FIELD = "evidence_digest"
@@ -356,8 +371,17 @@ class GovernedPaperDaySeal:
     pending_protective_attempt_time_ns: int | None = None
     day_protective_obligation_count: int = 0
     outstanding_protective_obligation_count: int = 0
+    # Seal v6 only (a kill-switch lineage, S1_KILL_SWITCH_PROVEN_ESCALATION_CLOSURE_V1): no v2-v5 payload carries these.
+    kill_switch_ladder_digest: str = ""
+    kill_switch_prefix_digest_open: str = ""
+    kill_switch_prefix_digest_close: str = ""
 
 
+_SEAL_V6_FIELDS = (
+    "kill_switch_ladder_digest",
+    "kill_switch_prefix_digest_open",
+    "kill_switch_prefix_digest_close",
+)
 _SEAL_V3_FIELDS = (
     "protective_authority_digest",
     "protective_revocation_digests",
@@ -379,8 +403,9 @@ class GovernedPaperDayProtectionInputs:
     ``revocations`` are the human revocations effective inside this day. ``ohlc_archive`` holds the adopted source's bars
     known at ``E_{k+1}``. The excursion cycle is the cycle that decided the opening intent of an excursion the previous
     seal left open; it is None exactly when no excursion was open then. ``portfolio_no_trade`` selects the native
-    portfolio NO-TRADE lineage (seal v4, entry rule set v3) for the whole lineage, and ``market_data_integrity`` (only
-    with it) the native market-data integrity lineage (seal v5, entry rule set v4).
+    portfolio NO-TRADE lineage (seal v4, entry rule set v3) for the whole lineage, ``market_data_integrity`` (only
+    with it) the native market-data integrity lineage (seal v5, entry rule set v4), and ``kill_switch_escalation`` (only
+    with that) the proven kill-switch escalation lineage (seal v6, entry rule set v5).
     """
 
     authority_inputs: GovernedPaperProtectiveAuthorityInputs
@@ -391,6 +416,7 @@ class GovernedPaperDayProtectionInputs:
     excursion_cycle: GovernedPaperCycleAuthority | None
     portfolio_no_trade: bool = False
     market_data_integrity: bool = False
+    kill_switch_escalation: bool = False
 
 
 @dataclass(frozen=True)
@@ -573,25 +599,34 @@ def _is_neutral(value: object) -> bool:
 
 
 def _to_payload(artifact: object) -> dict[str, object]:
-    """The wire payload of one artifact; a v2 seal or evidence carries exactly its v2 fields.
+    """The wire payload of one artifact; a v2 seal or evidence carries exactly its v2 fields, a v3-v5 seal its v5 ones.
 
-    A v2 artifact holding a non-neutral v3 field is never serialized (``ValueError``): a forged protective fact never
-    hides behind the legacy payload.
+    A legacy artifact holding a non-neutral extension field is never serialized (``ValueError``): a forged protective or
+    kill-switch fact never hides behind a legacy payload.
     """
 
     payload = {item.name: _serialize(getattr(artifact, item.name)) for item in fields(artifact)}  # type: ignore[arg-type]
-    legacy = _LEGACY_PAYLOADS.get(type(artifact))
-    if legacy is not None and getattr(artifact, "schema_version", None) == legacy[0]:
-        for name in legacy[1]:
+    version = getattr(artifact, "schema_version", None)
+    for versions, names in _LEGACY_PAYLOADS.get(type(artifact), ()):
+        if version not in versions:
+            continue
+        for name in names:
             if not _is_neutral(getattr(artifact, name)):
                 raise ValueError(f"{_PREFIX}:legacy_schema_carries_an_extension_field:{name}")
             del payload[name]
     return payload
 
 
-_LEGACY_PAYLOADS: dict[type, tuple[str, tuple[str, ...]]] = {
-    GovernedPaperDaySeal: (_SEAL_SCHEMA_VERSION, _SEAL_V3_FIELDS),
-    GovernedPaperExecutionEvidence: (_EVIDENCE_SCHEMA_VERSION, _EVIDENCE_V3_FIELDS),
+# Per artifact type: the legacy schema versions and the extension fields their payloads never carry.
+_LEGACY_PAYLOADS: dict[type, tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]] = {
+    GovernedPaperDaySeal: (
+        ((_SEAL_SCHEMA_VERSION,), (*_SEAL_V3_FIELDS, *_SEAL_V6_FIELDS)),
+        (
+            (_PROTECTIVE_SEAL_SCHEMA_VERSION, _PORTFOLIO_SEAL_SCHEMA_VERSION, _MARKET_DATA_SEAL_SCHEMA_VERSION),
+            _SEAL_V6_FIELDS,
+        ),
+    ),
+    GovernedPaperExecutionEvidence: (((_EVIDENCE_SCHEMA_VERSION,), _EVIDENCE_V3_FIELDS),),
 }
 
 
@@ -889,6 +924,7 @@ class _SealProof:
     protective: bool = False
     portfolio: bool = False
     market_data: bool = False
+    kill_switch: bool = False
 
 
 def _closing(inputs: GovernedPaperDaySealInputs, cycle: GovernedPaperCycleAuthority, sleeve_id: str, end: int):  # noqa: ANN202
@@ -944,6 +980,7 @@ class _DayProtection:
     excursion: GovernedPaperCycleReservation | None
     portfolio_no_trade: bool
     market_data_integrity: bool
+    kill_switch_escalation: bool
 
 
 def _day_protection(  # noqa: C901 - one linear proof of the protective inputs
@@ -967,15 +1004,21 @@ def _day_protection(  # noqa: C901 - one linear proof of the protective inputs
         raise _fail("protection_inputs_malformed:portfolio_no_trade")
     if type(protection.market_data_integrity) is not bool:
         raise _fail("protection_inputs_malformed:market_data_integrity")
+    if type(protection.kill_switch_escalation) is not bool:
+        raise _fail("protection_inputs_malformed:kill_switch_escalation")
     if protection.market_data_integrity and not protection.portfolio_no_trade:
         raise _fail("market_data_integrity_needs_the_portfolio_lineage")
+    if protection.kill_switch_escalation and not protection.market_data_integrity:
+        raise _fail("kill_switch_escalation_needs_the_market_data_lineage")
     if prior is not None and (prior.schema_version in _PORTFOLIO_SEALS) is not protection.portfolio_no_trade:
         raise _fail("portfolio_no_trade_lineage_switched")
+    if prior is not None and (prior.schema_version in _MARKET_DATA_SEALS) is not protection.market_data_integrity:
+        raise _fail("market_data_integrity_lineage_switched")
     if (
         prior is not None
-        and (prior.schema_version == _MARKET_DATA_SEAL_SCHEMA_VERSION) is not protection.market_data_integrity
+        and (prior.schema_version == _KILL_SWITCH_SEAL_SCHEMA_VERSION) is not protection.kill_switch_escalation
     ):
-        raise _fail("market_data_integrity_lineage_switched")
+        raise _fail("kill_switch_escalation_lineage_switched")
     authority, authority_inputs = protection.authority, protection.authority_inputs
     if type(authority) is not GovernedPaperProtectiveAuthority:
         raise _fail("protective_authority_malformed")
@@ -1054,6 +1097,7 @@ def _day_protection(  # noqa: C901 - one linear proof of the protective inputs
         excursion=excursion,
         portfolio_no_trade=protection.portfolio_no_trade,
         market_data_integrity=protection.market_data_integrity,
+        kill_switch_escalation=protection.kill_switch_escalation,
     )
 
 
@@ -1225,6 +1269,7 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
     protective = protection is not None
     portfolio = protection is not None and protection.portfolio_no_trade
     market_data = protection is not None and protection.market_data_integrity
+    kill_switch = protection is not None and protection.kill_switch_escalation
     try:
         if not attested:
             raise _Blocked("closing_head_not_attested")
@@ -1239,10 +1284,10 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
         # The engine ran under the schedule the entry-safety refusals completed; a blocked day keeps the opening one.
         facts["schedule"] = replay.schedule
         facts["schedule_digest"] = historical_execution_admission_schedule_digest(replay.schedule)
-        return _SealProof(facts, (), protective, portfolio, market_data)
+        return _SealProof(facts, (), protective, portfolio, market_data, kill_switch)
     except _Blocked as blocked:
         facts.update(empty)
-        return _SealProof(facts, (_reason(blocked.code),), protective, portfolio, market_data)
+        return _SealProof(facts, (_reason(blocked.code),), protective, portfolio, market_data, kill_switch)
 
 
 @dataclass(frozen=True)
@@ -1268,8 +1313,9 @@ def _replay(
     compute keeps its BLOCKED day; only then do the entry-safety refusals complete the schedule the engine re-runs under.
     A protective lineage builds the economics under the authority's position-management policy and the day's OHLC
     archive, and the entry gate evaluates rule set v2 on the same protective context; a native portfolio lineage
-    evaluates rule set v3 on the decision portfolio of its information-time schedule v4, and a market-data integrity
-    lineage rule set v4, with the day's archive's market data on top.
+    evaluates rule set v3 on the decision portfolio of its information-time schedule v4, a market-data integrity
+    lineage rule set v4, with the day's archive's market data on top, and a kill-switch lineage rule set v5, with each
+    round's proven lower-bound ladder on top.
     """
 
     genesis = authority.genesis
@@ -1342,6 +1388,7 @@ def _replay(
                 protection=gate_protection,
                 portfolio=GovernedPaperEntrySafetyPortfolio(economics, trial),
                 market_data=protection.market_data_integrity,  # type: ignore[union-attr]
+                kill_switch=protection.kill_switch_escalation,  # type: ignore[union-attr]
             )
         return evaluations[refused]
 
@@ -1606,6 +1653,19 @@ def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the 
                 if item.status is HistoricalExecutionProtectiveObligationStatus.OUTSTANDING
             ),
         }
+        if protection.kill_switch_escalation:
+            # X1 for the ladder: re-derived from G, its prefix before E_k must be the previous seal's prefix at E_{k+1}.
+            ladder = replay.entry_safety.kill_switch_ladder
+            if ladder is None:  # pragma: no cover - rule set v5 always binds its ladder
+                raise _fail("kill_switch_ladder_missing")
+            ladder_open = governed_paper_kill_switch_prefix_digest(ladder, before_ns=start)
+            if prior is not None and ladder_open != prior.kill_switch_prefix_digest_close:
+                raise _fail("kill_switch_prefix_rewritten")
+            derived.update(
+                kill_switch_ladder_digest=ladder.ladder_digest,
+                kill_switch_prefix_digest_open=ladder_open,
+                kill_switch_prefix_digest_close=governed_paper_kill_switch_prefix_digest(ladder, before_ns=end),
+            )
     return {
         **derived,
         "decision_run_digest": replay.run_digest,
@@ -1639,7 +1699,9 @@ def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the 
 def _assemble_seal(proof: _SealProof) -> GovernedPaperDaySeal:
     status = GovernedPaperDaySealStatus.BLOCKED if proof.blocked else GovernedPaperDaySealStatus.SEALED
     seed = GovernedPaperDaySeal(
-        schema_version=_MARKET_DATA_SEAL_SCHEMA_VERSION
+        schema_version=_KILL_SWITCH_SEAL_SCHEMA_VERSION
+        if proof.kill_switch
+        else _MARKET_DATA_SEAL_SCHEMA_VERSION
         if proof.market_data
         else _PORTFOLIO_SEAL_SCHEMA_VERSION
         if proof.portfolio
@@ -1816,7 +1878,9 @@ def build_governed_paper_execution_evidence(inputs: GovernedPaperExecutionInputs
             "terminal_outstanding_protective_obligation_count": terminal.outstanding_protective_obligation_count,
         }
     seed = GovernedPaperExecutionEvidence(
-        schema_version=_MARKET_DATA_EVIDENCE_SCHEMA_VERSION
+        schema_version=_KILL_SWITCH_EVIDENCE_SCHEMA_VERSION
+        if terminal.schema_version == _KILL_SWITCH_SEAL_SCHEMA_VERSION
+        else _MARKET_DATA_EVIDENCE_SCHEMA_VERSION
         if terminal.schema_version == _MARKET_DATA_SEAL_SCHEMA_VERSION
         else _PORTFOLIO_EVIDENCE_SCHEMA_VERSION
         if terminal.schema_version == _PORTFOLIO_SEAL_SCHEMA_VERSION

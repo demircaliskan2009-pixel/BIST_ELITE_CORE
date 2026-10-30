@@ -222,6 +222,11 @@ the recording changes no ledger. One snapshot holds:
 
 Only admitted economic transitions earlier in the event order reach a snapshot: a rejected or unfilled intent leaves no
 state, and no later mark, fill, rate or admission is read. Each amount is rendered once from exact state.
+``simulate_historical_execution_governed_paper_derivation`` returns that portfolio together with the governed outcome of
+the same one re-run, the exact values behind every rendered NAV of its snapshots and the equal-instant phase
+(``HISTORICAL_EXECUTION_EQUAL_INSTANT_PHASES``) of every trade close, all in memory only: a consumer that compares a
+strict threshold or orders one nanosecond's events (the kill-switch ladder) reads the engine's own exact state, never a
+rendered amount or a timestamp alone.
 """
 
 from __future__ import annotations
@@ -342,6 +347,15 @@ _PRIORITY_DECISION = 2
 _PRIORITY_FILL = 3
 _PRIORITY_DAY_BOUNDARY = 4
 _PRIORITY_END = 5
+# The name of each equal-instant class, indexed by its priority: the phase a consumer orders one nanosecond's events by.
+HISTORICAL_EXECUTION_EQUAL_INSTANT_PHASES: tuple[str, ...] = (
+    "FUNDING",
+    "PROTECTIVE",
+    "DECISION",
+    "FILL",
+    "UTC_DAY_BOUNDARY",
+    "EVALUATION_END",
+)
 _CURRENT_PROTECTION = 0  # the owner of a wake event: whichever protection is open when it fires
 
 HISTORICAL_EXECUTION_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
@@ -1466,6 +1480,11 @@ class _Simulation:
         self.decision_snapshots: list[HistoricalExecutionDecisionPortfolioSnapshot] | None = None
         self.day_start: tuple[int, Fraction] | None = None  # (instant, exact equity) of the latest day-start valuation
         self.settlements: list[tuple[int, int, Fraction]] = []  # (liability, rate visibility, exact cashflow)
+        # The exact values behind each recorded snapshot, the priority of the event being applied and that of every
+        # trade close (S1_KILL_SWITCH_PROVEN_ESCALATION_CLOSURE_V1): read by a governed derivation only, never a ledger.
+        self.decision_exact_values: list[HistoricalExecutionDecisionExactValues] = []
+        self.event_priority = -1
+        self.trade_close_priorities: list[int] = []
 
     def _transformed_marks(self, marks: _MarkCursor) -> _MarkCursor:
         """Construction hook: the mark observations as the simulation reads them (identity; a stress run overrides)."""
@@ -1741,14 +1760,16 @@ class _Simulation:
                 candidate_reason = "" if candidate_nav is not None else "candidate_nav_unrepresentable"
         day = time_ns // _UTC_DAY_NS * _UTC_DAY_NS
         day_nav: str | None = None
+        day_exact = Fraction(0)
         if self.day_start is None or self.day_start[0] > day:
             reason = "partial_first_utc_day"
         elif self.day_start[0] < day:
             reason = "day_start_valued_after_the_decision"
         else:
-            day_nav = historical_execution_render_amount(
-                self.day_start[1] - sum((amount for liability, amount in unpublished if liability <= day), Fraction(0))
+            day_exact = self.day_start[1] - sum(
+                (amount for liability, amount in unpublished if liability <= day), Fraction(0)
             )
+            day_nav = historical_execution_render_amount(day_exact)
             reason = "" if day_nav is not None else "day_start_nav_unrepresentable"
         record = HistoricalExecutionDecisionPortfolioSnapshot(
             decision_sequence=decision.decision_sequence,
@@ -1770,6 +1791,13 @@ class _Simulation:
             snapshot_digest="",
         )
         self.decision_snapshots.append(_sealed(record, "snapshot_digest"))  # type: ignore[arg-type]
+        self.decision_exact_values.append(
+            HistoricalExecutionDecisionExactValues(
+                decision_sequence=decision.decision_sequence,
+                nav=None if nav is None else exact,
+                day_start_nav=None if day_nav is None else day_exact,
+            )
+        )
 
     # -- position management (PROTECTIVE_POSITION_LIFECYCLE_V1); every method below is inert without a policy --
 
@@ -2367,6 +2395,7 @@ class _Simulation:
         self.ledgers.trades.append(
             self._trade_record(trade, HistoricalExecutionTradeStatus.CLOSED, time_ns, None, None)
         )
+        self.trade_close_priorities.append(self.event_priority)
         self.trade = None
 
     def _liability(self, record: HistoricalPitRecord, interval: int) -> int:
@@ -2444,6 +2473,7 @@ class _Simulation:
         self._valuation(HistoricalExecutionValuationKind.INITIAL, start_ns, None)
         while events:
             time_ns, priority, index = heapq.heappop(events)
+            self.event_priority = priority
             if priority == _PRIORITY_FUNDING:
                 self._settle(self.funding[index], time_ns)
             elif priority == _PRIORITY_PROTECTIVE:
@@ -3148,6 +3178,37 @@ class HistoricalExecutionGovernedPaperDecisionPortfolio:
     profitability_proven: bool = False
 
 
+@dataclass(frozen=True)
+class HistoricalExecutionDecisionExactValues:
+    """The exact amounts behind one decision snapshot's rendered ``nav`` and ``day_start_nav``, in memory only.
+
+    Each is the exact engine value the snapshot renders once, and None exactly when the snapshot's is None. A rendered
+    amount rounds half-even at scale 18, so a consumer comparing a strict threshold reads these, never the text. Never
+    serialized, digested or an artifact.
+    """
+
+    decision_sequence: int
+    nav: Fraction | None
+    day_start_nav: Fraction | None
+
+
+@dataclass(frozen=True)
+class HistoricalExecutionGovernedPaperDerivation:
+    """ONE governed re-run under one information-time schedule v4, in memory only: never serialized or digested.
+
+    ``portfolio`` and ``outcome`` are byte-identical to ``simulate_historical_execution_governed_paper_decision_portfolio``
+    and ``simulate_historical_execution_governed_paper`` under the same inputs. ``exact_values`` holds one entry per
+    snapshot, in snapshot order. ``trade_close_phases`` holds one entry per CLOSED trade of the outcome, in the outcome's
+    order (the order the engine closed them): the equal-instant phase (``HISTORICAL_EXECUTION_EQUAL_INSTANT_PHASES``) of
+    the event that closed it. Both are empty when the re-run could not be computed.
+    """
+
+    portfolio: HistoricalExecutionGovernedPaperDecisionPortfolio
+    outcome: HistoricalExecutionGovernedPaperOutcome
+    exact_values: tuple[HistoricalExecutionDecisionExactValues, ...]
+    trade_close_phases: tuple[str, ...]
+
+
 _GOVERNED_V3_FIELDS = (
     "excursion_protections",
     "protective_obligations",
@@ -3523,8 +3584,14 @@ def _governed_run(
     schedule: HistoricalExecutionAdmissionSchedule,
     *,
     record_decision_portfolio: bool,
-) -> tuple[HistoricalExecutionGovernedPaperOutcome, tuple[HistoricalExecutionDecisionPortfolioSnapshot, ...]]:
-    """The one governed re-run: its outcome, and its decision snapshots when asked to record them."""
+) -> tuple[
+    HistoricalExecutionGovernedPaperOutcome,
+    tuple[HistoricalExecutionDecisionPortfolioSnapshot, ...],
+    tuple[HistoricalExecutionDecisionExactValues, ...],
+    tuple[str, ...],
+]:
+    """The one governed re-run: its outcome and, when asked to record them, its decision snapshots and the exact values
+    behind them; with the equal-instant phase of every trade close (all empty when the re-run cannot be computed)."""
 
     schedule = canonical_historical_execution_admission_schedule(schedule)
     if record_decision_portfolio and schedule.schema_version != _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION:
@@ -3568,7 +3635,7 @@ def _governed_run(
             reasons=(_reason(failure.code),),
             protective=protective,
         )
-        return failed, ()
+        return failed, (), (), ()
     outcome = _governed_outcome(
         result,
         schedule,
@@ -3578,7 +3645,15 @@ def _governed_run(
         reasons=(),
         protective=protective,
     )
-    return outcome, tuple(simulation.decision_snapshots or ())
+    # a close outside every event (none occurs) has no phase: its absence misaligns the closes, which then prove nothing
+    return (
+        outcome,
+        tuple(simulation.decision_snapshots or ()),
+        tuple(simulation.decision_exact_values),
+        tuple(
+            HISTORICAL_EXECUTION_EQUAL_INSTANT_PHASES[item] for item in simulation.trade_close_priorities if item >= 0
+        ),
+    )
 
 
 def simulate_historical_execution_governed_paper_decision_portfolio(
@@ -3595,7 +3670,35 @@ def simulate_historical_execution_governed_paper_decision_portfolio(
     the same inputs is the one ``outcome_digest`` binds. Pure.
     """
 
-    outcome, snapshots = _governed_run(result, expected_result_digest, schedule, record_decision_portfolio=True)
+    outcome, snapshots, _, _ = _governed_run(result, expected_result_digest, schedule, record_decision_portfolio=True)
+    return _decision_portfolio(outcome, snapshots)
+
+
+def simulate_historical_execution_governed_paper_derivation(
+    result: HistoricalExecutionEconomicsResult,
+    *,
+    expected_result_digest: str,
+    schedule: HistoricalExecutionAdmissionSchedule,
+) -> HistoricalExecutionGovernedPaperDerivation:
+    """The decision portfolio and the governed outcome of ONE re-run, with the exact values behind every snapshot's
+    rendered NAVs and the equal-instant phase of every trade close (``HistoricalExecutionGovernedPaperDerivation``).
+
+    The authorities, refusals and failure modes are exactly those of
+    ``simulate_historical_execution_governed_paper_decision_portfolio``, and both artifacts are byte-identical to their
+    own functions under the same inputs. A consumer comparing a strict threshold or ordering one nanosecond's events reads
+    the exact values and phases, never the rendered text or the timestamp alone. Pure.
+    """
+
+    outcome, snapshots, exact, phases = _governed_run(
+        result, expected_result_digest, schedule, record_decision_portfolio=True
+    )
+    return HistoricalExecutionGovernedPaperDerivation(_decision_portfolio(outcome, snapshots), outcome, exact, phases)
+
+
+def _decision_portfolio(
+    outcome: HistoricalExecutionGovernedPaperOutcome,
+    snapshots: tuple[HistoricalExecutionDecisionPortfolioSnapshot, ...],
+) -> HistoricalExecutionGovernedPaperDecisionPortfolio:
     seed = HistoricalExecutionGovernedPaperDecisionPortfolio(
         schema_version=HISTORICAL_EXECUTION_GOVERNED_PAPER_DECISION_PORTFOLIO_SCHEMA_VERSION,
         schedule=outcome.schedule,
@@ -4695,6 +4798,7 @@ def verify_historical_execution_economics(result: object) -> EdgeEvidenceVerific
 
 __all__ = [
     "HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION",
+    "HISTORICAL_EXECUTION_EQUAL_INSTANT_PHASES",
     "HISTORICAL_EXECUTION_GOVERNED_PAPER_DECISION_PORTFOLIO_SCHEMA_VERSION",
     "HISTORICAL_EXECUTION_GOVERNED_PAPER_NON_CLAIM_FLAGS",
     "HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION",
@@ -4715,6 +4819,7 @@ __all__ = [
     "historical_execution_admission_schedule_to_dict",
     "HistoricalExecutionAdmissionSchedule",
     "HistoricalExecutionAdmissionWindow",
+    "HistoricalExecutionDecisionExactValues",
     "HistoricalExecutionDecisionPortfolioSnapshot",
     "HistoricalExecutionEconomicsError",
     "HistoricalExecutionEconomicsResult",
@@ -4723,6 +4828,7 @@ __all__ = [
     "HistoricalExecutionFillOutcome",
     "HistoricalExecutionFundingCashflow",
     "HistoricalExecutionGovernedPaperDecisionPortfolio",
+    "HistoricalExecutionGovernedPaperDerivation",
     "HistoricalExecutionGovernedPaperOutcome",
     "HistoricalExecutionIntent",
     "HistoricalExecutionIntentAction",
@@ -4756,6 +4862,7 @@ __all__ = [
     "historical_execution_stress_scenario_digest",
     "simulate_historical_execution_governed_paper",
     "simulate_historical_execution_governed_paper_decision_portfolio",
+    "simulate_historical_execution_governed_paper_derivation",
     "simulate_historical_execution_stress",
     "verify_historical_execution_economics",
 ]
