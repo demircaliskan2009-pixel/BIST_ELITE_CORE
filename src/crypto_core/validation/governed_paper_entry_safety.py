@@ -171,6 +171,27 @@ The ladder at ``t`` reads only the portfolio the admissions before ``t`` produce
 sequential admission of rule set v3 stays the unique causal fixed point, and a refusal still reaches an entry only,
 never an exit or a protective close-only action. The evidence binds the ladder; every v1-v4 payload is unchanged.
 
+Family B regime, trend and activation (``S1_FAMILY_B_REGIME_TREND_ACTIVATION_GATE_CLOSURE_V1``, rule set v6). Rule
+sets v1-v5 hold for every evaluation without it. When the day seal opts in, on top of rule set v5, the evaluation derives
+the frozen regime evidence of its horizon (``governed_paper_regime_state``). It comes from the regime policy, its
+approval, the policy's MARK bar archive and the dataset's ORDER_BOOK series, never from a supplied regime state, and it
+follows methodology S1_COMPLETE_ENTRY_METHODOLOGY_DECISION_V1 r2 (CL1-1..CL1-13 and CL2-1..CL2-7). A decision at ``t``
+reads the evaluation whose knowledge instant ``g_m + 300 s`` is the latest at or before ``t``.
+
+* FB-TREND, FB-REGIME and FB-REGIME-COOLDOWN are measured on that evaluation and its frozen history. FB-REGIME passes only
+  when PRICE_CRISIS_V1 proves the absence of a price CRISIS, RANGE or HIGH_VOL is both the label and the confirmed
+  state, and the whole 649-evaluation proof window is definite.
+* NT-M03 fails on a pending price transition and is otherwise BLOCKED, because the funding, leverage and liquidity
+  dimensions are not produced.
+* Three Family B checks are appended after FB-STOP-TIGHTENING:
+  - FB-ACTIVATION (PRDV4 §1.5 row B). It never passes: no paper fill-rate or exchange-health proof exists.
+  - FB-REGIME-CELL (the §1.17 cell permission). It never passes: leverage and liquidity are not produced.
+  - SYSTEM-STATE (§1.29 SS-0 for the T1 Family B). It is always BLOCKED.
+* Only an approval the active table admits is used. The production table admits none, so in production every regime
+  check is BLOCKED; tests alone install a test-only table for TEST_ONLY_SYNTHETIC approvals.
+
+Every v1-v5 check outcome, payload and digest is unchanged, and a refusal still reaches an entry only.
+
 The evidence is digest-bound and paper-only. It proves no venue fact, edge, profitability, readiness or Stage-4
 completion. Exact arithmetic, no float, no ``decimal`` context, and no IO, clock, randomness, network or environment.
 """
@@ -223,6 +244,22 @@ from crypto_core.validation.governed_paper_kill_switch import (
     governed_paper_kill_switch_proven_at,
     governed_paper_kill_switch_unmeasured,
     governed_paper_kill_switch_unproven_at,
+)
+from crypto_core.validation.governed_paper_regime_state import (
+    GOVERNED_PAPER_REGIME_CHECK_IDS,
+    GOVERNED_PAPER_REGIME_CONTRACT_ID,
+    GOVERNED_PAPER_REGIME_EVIDENCE_SCHEMA,
+    GOVERNED_PAPER_REGIME_IMPLEMENTED_ITEMS,
+    GOVERNED_PAPER_REGIME_METHODOLOGY_ID,
+    GOVERNED_PAPER_REGIME_METHODOLOGY_REVISION,
+    GOVERNED_PAPER_REGIME_POLICY_SCHEMA,
+    GovernedPaperRegimeApproval,
+    GovernedPaperRegimeError,
+    GovernedPaperRegimeEvidence,
+    GovernedPaperRegimePolicy,
+    GovernedPaperRegimeReading,
+    GovernedPaperRegimeStatus,
+    derive_governed_paper_regime_evidence,
 )
 from crypto_core.validation.historical_decision_run import HistoricalDecisionRun
 from crypto_core.validation.historical_execution_economics import (
@@ -331,6 +368,7 @@ GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_RULE_SET_ID = "governed-paper-entry-safet
 GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET_ID = "governed-paper-entry-safety.v3"
 GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_ID = "governed-paper-entry-safety.v4"
 GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_ID = "governed-paper-entry-safety.v5"
+GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID = "governed-paper-entry-safety.v6"
 
 GOVERNED_PAPER_ENTRY_SAFETY_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
     ("paper_only", True),
@@ -473,6 +511,31 @@ class GovernedPaperEntrySafetyKillSwitch:
 
 
 @dataclass(frozen=True)
+class GovernedPaperEntrySafetyRegime:
+    """The regime facts of one decision at ``t`` (rule set v6), read from its evaluation's derived regime evidence.
+
+    ``reading`` holds the seven rule set v6 readings of the decision, and ``evidence_digest`` names the regime evidence
+    that derived them. Never accepted from a caller: the evaluation derives both.
+    """
+
+    reading: GovernedPaperRegimeReading
+    evidence_digest: str
+
+
+@dataclass(frozen=True)
+class GovernedPaperEntrySafetyRegimeContext:
+    """The regime context of one evaluation (rule set v6), supplied by the day seal from verified lineage inputs.
+
+    The policy, its approval and the policy's MARK bar archive. The regime evidence is derived from them and the
+    evaluation's own dataset, never accepted.
+    """
+
+    policy: GovernedPaperRegimePolicy
+    approval: GovernedPaperRegimeApproval
+    archive: HistoricalOhlcBarArchive
+
+
+@dataclass(frozen=True)
 class GovernedPaperEntrySafetyObservation:
     """The point-in-time facts one decision is evaluated on (derived by this module, never caller authority)."""
 
@@ -520,6 +583,8 @@ class GovernedPaperEntrySafetyObservation:
     market_data: GovernedPaperEntrySafetyMarketData | None = None
     # Rule set v5 only: the proven kill-switch facts of the decision (absent without them, as in rule sets v1-v4).
     kill_switch: GovernedPaperEntrySafetyKillSwitch | None = None
+    # Rule set v6 only: the regime facts of the decision (absent without them, as in rule sets v1-v5).
+    regime: GovernedPaperEntrySafetyRegime | None = None
 
 
 @dataclass(frozen=True)
@@ -608,8 +673,10 @@ class GovernedPaperEntrySafetyEvidence:
     stage4_complete: bool = False
     edge_proven: bool = False
     profitability_proven: bool = False
-    # Rule set v5 only: the proven lower-bound §1.19 ladder the evaluation read (never in a v1-v4 payload).
+    # Rule set v5 on: the proven lower-bound §1.19 ladder the evaluation read (never in a v1-v4 payload).
     kill_switch_ladder: GovernedPaperKillSwitchLadder | None = None
+    # Rule set v6 only: the derived regime evidence the evaluation read (never in a v1-v5 payload).
+    regime_evidence: GovernedPaperRegimeEvidence | None = None
 
 
 # --- helpers -----------------------------------------------------------------------------------------------------------
@@ -638,16 +705,24 @@ def _to_payload(artifact: object) -> dict[str, object]:
 
 
 def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, object]:
-    """The wire payload of one evaluation; a v1-v4 payload is exactly its accepted one and carries no ladder.
+    """The wire payload of one evaluation; a v1-v4 payload is exactly its accepted one and carries no ladder, and a
+    v1-v5 payload carries no regime evidence.
 
-    A v1-v4 evidence holding a ladder is never serialized (``ValueError``): a forged ladder never hides behind it.
+    A legacy evidence holding either is never serialized (``ValueError``): a forged fact never hides behind it.
     """
 
     payload = _to_payload(evidence)
-    if evidence.rule_set_id != GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_ID:
+    if evidence.rule_set_id not in (
+        GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID,
+    ):
         if evidence.kill_switch_ladder is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_kill_switch_ladder")
         del payload["kill_switch_ladder"]
+    if evidence.rule_set_id != GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID:
+        if evidence.regime_evidence is not None:
+            raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_regime_evidence")
+        del payload["regime_evidence"]
     return payload
 
 
@@ -1040,6 +1115,27 @@ def _kill_switch_cooldown(observation: _Observation) -> _Outcome:
     return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", reason, (facts.ladder_digest,))
 
 
+_REGIME_STATUS = {
+    GovernedPaperRegimeStatus.PASS: _Status.PASS,
+    GovernedPaperRegimeStatus.FAIL: _Status.FAIL,
+    GovernedPaperRegimeStatus.BLOCKED: _Status.BLOCKED_ON_MISSING_INPUT,
+}
+
+
+def _regime(check_id: str, legacy_reason: str) -> Callable[[_Observation], _Outcome]:
+    """One rule set v6 check read from the decision's regime facts; without them (rule sets v1-v5) exactly the accepted
+    missing-input outcome ``legacy_reason``."""
+
+    def evaluate(observation: _Observation) -> _Outcome:
+        facts = observation.regime
+        if facts is None:
+            return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", legacy_reason)
+        item = facts.reading.check(check_id)
+        return _Outcome(_REGIME_STATUS[item.status], item.observed, item.reason, (facts.evidence_digest,))
+
+    return evaluate
+
+
 _D, _R, _M, _E, _X, _T, _B = (
     _Family.DATA,
     _Family.RISK,
@@ -1140,7 +1236,7 @@ _CHECKS: tuple[_Check, ...] = (
         _M,
         "PRDV4 §1.21 NT-M03 regime transition in progress",
         "any_regime_dimension_in_its_hysteresis_window",
-        _missing("regime_hysteresis_state_not_produced"),
+        _regime("NT-M03", "regime_hysteresis_state_not_produced"),
     ),
     _Check(
         "NT-M04",
@@ -1219,21 +1315,21 @@ _CHECKS: tuple[_Check, ...] = (
         _B,
         "PRDV4 §1.9 trend filter",
         "funding_extreme_and_trend_strength_aligned_ts_gt_1.5",
-        _family_b(_missing("trend_strength_ema_atr_construction_not_defined_or_produced")),
+        _family_b(_regime("FB-TREND", "trend_strength_ema_atr_construction_not_defined_or_produced")),
     ),
     _Check(
         "FB-REGIME",
         _B,
         "PRDV4 §1.9 regime filter",
         "regime_not_range_or_high_vol_or_crisis",
-        _family_b(_missing("regime_state_not_produced")),
+        _family_b(_regime("FB-REGIME", "regime_state_not_produced")),
     ),
     _Check(
         "FB-REGIME-COOLDOWN",
         _B,
         "PRDV4 §1.9 regime filter transition cooldown",
         "trending_within_the_last_4h_suppresses_4h",
-        _family_b(_missing("trending_regime_history_not_produced")),
+        _family_b(_regime("FB-REGIME-COOLDOWN", "trending_regime_history_not_produced")),
     ),
     _Check(
         "FB-ANTITREND",
@@ -1264,10 +1360,39 @@ _CHECKS: tuple[_Check, ...] = (
         _family_b(_tightening),
     ),
 )
+# Rule set v6 only: evaluated after every check above, and only on a decision that carries regime facts.
+_REGIME_CHECKS: tuple[_Check, ...] = (
+    _Check(
+        "FB-ACTIVATION",
+        _B,
+        "PRDV4 §1.5 edge activation matrix row B",
+        "volatility_med_or_high_liquidity_deep_normal_or_thin_spread_stable_or_widening_execution_optimal_or_degraded",
+        _family_b(_regime("FB-ACTIVATION", "family_b_activation_not_produced")),
+    ),
+    _Check(
+        "FB-REGIME-CELL",
+        _B,
+        "PRDV4 §1.17 regime tensor permission (no explicit permission means NO TRADE)",
+        "the_cell_is_one_of_the_90_declared_family_b_cells",
+        _family_b(_regime("FB-REGIME-CELL", "family_b_regime_cell_not_produced")),
+    ),
+    _Check(
+        "SYSTEM-STATE",
+        _B,
+        "PRDV4 §1.29 global system state (Family B is T1, §1.16)",
+        "system_state_ss0_normal",
+        _family_b(_regime("SYSTEM-STATE", "system_state_not_produced")),
+    ),
+)
 
 
-def governed_paper_entry_safety_rule_set(
-    *, protective: bool = False, portfolio: bool = False, market_data: bool = False, kill_switch: bool = False
+def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
+    *,
+    protective: bool = False,
+    portfolio: bool = False,
+    market_data: bool = False,
+    kill_switch: bool = False,
+    regime: bool = False,
 ) -> dict[str, object]:
     """The rule set this module evaluates: every check, in order, with its PRDV4 clause and published threshold.
 
@@ -1278,7 +1403,9 @@ def governed_paper_entry_safety_rule_set(
     ``portfolio=True``) is rule set v4: rule set v3 with NT-D01, NT-D03, NT-D04 and NT-D05 measured on the archive's
     market data (``S1_MARKET_DATA_INTEGRITY_NATIVE_MEASUREMENT_CLOSURE_V1``). ``kill_switch=True`` (only with
     ``market_data=True``) is rule set v5: rule set v4 with NT-R01 and NT-T02 read on the proven lower-bound §1.19 ladder
-    (``S1_KILL_SWITCH_PROVEN_ESCALATION_CLOSURE_V1``).
+    (``S1_KILL_SWITCH_PROVEN_ESCALATION_CLOSURE_V1``). ``regime=True`` (only with ``kill_switch=True``) is rule set v6:
+    rule set v5 with the Family B regime, trend and activation readings of the derived regime evidence and the three
+    appended checks (``S1_FAMILY_B_REGIME_TREND_ACTIVATION_GATE_CLOSURE_V1``).
     """
 
     if portfolio and not protective:
@@ -1287,6 +1414,8 @@ def governed_paper_entry_safety_rule_set(
         raise _fail("market_data_rule_set_needs_the_portfolio_rule_set")
     if kill_switch and not market_data:
         raise _fail("kill_switch_rule_set_needs_the_market_data_rule_set")
+    if regime and not kill_switch:
+        raise _fail("regime_rule_set_needs_the_kill_switch_rule_set")
 
     rule_set: dict[str, object] = {
         "rule_set_id": GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID,
@@ -1393,6 +1522,47 @@ def governed_paper_entry_safety_rule_set(
                 "admission": "the_ladder_at_t_reads_only_the_admissions_before_t_the_sequential_fixed_point_is_unchanged",
             },
         )
+    if regime:
+        rule_set.update(
+            rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID,
+            contract_id=GOVERNED_PAPER_REGIME_CONTRACT_ID,
+            checks=[
+                *rule_set["checks"],  # type: ignore[misc]
+                *(
+                    {
+                        "check_id": item.check_id,
+                        "family": item.family.value,
+                        "clause": item.clause,
+                        "threshold": item.threshold,
+                    }
+                    for item in _REGIME_CHECKS
+                ),
+            ],
+            regime_rule={
+                "methodology": f"{GOVERNED_PAPER_REGIME_METHODOLOGY_ID}:{GOVERNED_PAPER_REGIME_METHODOLOGY_REVISION}",
+                "implemented_items": list(GOVERNED_PAPER_REGIME_IMPLEMENTED_ITEMS),
+                "excluded_items": ["CL1-14", "CL2-12", "CL2-13"],
+                "policy_schema": GOVERNED_PAPER_REGIME_POLICY_SCHEMA,
+                "evidence_schema": GOVERNED_PAPER_REGIME_EVIDENCE_SCHEMA,
+                "source": "the_regime_evidence_derived_from_the_policy_its_approval_the_policy_mark_bar_archive_and_"
+                "the_dataset_order_book_series_never_a_supplied_regime_state",
+                "approval": "only_an_approval_the_active_table_admits_the_production_table_admits_none",
+                "decision_reads": "the_frozen_evaluation_whose_knowledge_instant_close_plus_300s_is_the_latest_at_or_"
+                "before_t",
+                "FB-TREND": "short_fails_on_a_strong_up_long_on_a_strong_down_ts_the_entry_signal_is_the_funding_"
+                "extremity_unavailable_ts_is_blocked",
+                "FB-REGIME": "fails_on_the_overlay_crisis_or_trending_pass_needs_range_or_high_vol_label_and_confirmed_"
+                "state_proven_non_crisis_and_649_definite_labels",
+                "FB-REGIME-COOLDOWN": "fails_on_trending_in_the_96_evaluation_union_window_pass_needs_385_definite_"
+                "labels",
+                "NT-M03": "fails_on_a_pending_price_transition_otherwise_blocked_never_pass",
+                "FB-ACTIVATION": "fails_on_a_proven_forbidden_column_otherwise_blocked_never_pass_without_execution_"
+                "proof",
+                "FB-REGIME-CELL": "fails_on_a_price_state_outside_the_90_declared_cells_otherwise_blocked_never_pass",
+                "SYSTEM-STATE": "blocked_family_b_is_t1_and_needs_a_proven_ss0",
+                "regime_check_ids": list(GOVERNED_PAPER_REGIME_CHECK_IDS),
+            },
+        )
     return rule_set
 
 
@@ -1403,13 +1573,22 @@ def _render_threshold(value: Fraction) -> str:
     return rendered
 
 
-def governed_paper_entry_safety_rule_set_digest(
-    *, protective: bool = False, portfolio: bool = False, market_data: bool = False, kill_switch: bool = False
+def governed_paper_entry_safety_rule_set_digest(  # noqa: PLR0913
+    *,
+    protective: bool = False,
+    portfolio: bool = False,
+    market_data: bool = False,
+    kill_switch: bool = False,
+    regime: bool = False,
 ) -> str:
     return edge_sha256_text(
         edge_canonical_json(
             governed_paper_entry_safety_rule_set(
-                protective=protective, portfolio=portfolio, market_data=market_data, kill_switch=kill_switch
+                protective=protective,
+                portfolio=portfolio,
+                market_data=market_data,
+                kill_switch=kill_switch,
+                regime=regime,
             )
         )
     )
@@ -1434,6 +1613,12 @@ GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET = governed_paper_entry_safety_r
 )
 GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(
     protective=True, portfolio=True, market_data=True, kill_switch=True
+)
+GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET = governed_paper_entry_safety_rule_set(
+    protective=True, portfolio=True, market_data=True, kill_switch=True, regime=True
+)
+GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(
+    protective=True, portfolio=True, market_data=True, kill_switch=True, regime=True
 )
 
 
@@ -1478,6 +1663,7 @@ def _canonical_observation(observation: object) -> GovernedPaperEntrySafetyObser
     _canonical_portfolio_facts(observation)
     _canonical_market_data(observation)
     _canonical_kill_switch(observation)
+    _canonical_regime(observation)
     return observation
 
 
@@ -1758,6 +1944,39 @@ def _canonical_kill_switch(observation: GovernedPaperEntrySafetyObservation) -> 
         raise _fail("observation_malformed:kill_switch_unmeasured_trigger_ids")
 
 
+def _canonical_regime(observation: GovernedPaperEntrySafetyObservation) -> None:
+    """The rule set v6 facts are exact types and the reading of this very decision, and exist only on top of rule set
+    v5."""
+
+    facts = observation.regime
+    if facts is None:
+        return
+    if type(facts) is not GovernedPaperEntrySafetyRegime:
+        raise _fail("observation_malformed:regime")
+    if observation.kill_switch is None:
+        raise _fail("observation_malformed:regime_without_the_kill_switch_facts")
+    if not edge_is_hex64(facts.evidence_digest):
+        raise _fail("observation_malformed:regime_evidence_digest")
+    reading = facts.reading
+    if (
+        type(reading) is not GovernedPaperRegimeReading
+        or reading.decision_sequence != observation.decision_sequence
+        or reading.decision_time_ns != observation.decision_time_ns
+        or reading.target_direction != observation.target_direction
+        or type(reading.checks) is not tuple
+        or tuple(getattr(item, "check_id", None) for item in reading.checks) != GOVERNED_PAPER_REGIME_CHECK_IDS
+    ):
+        raise _fail("observation_malformed:regime_reading")
+    for item in reading.checks:
+        if (
+            type(item.status) is not GovernedPaperRegimeStatus
+            or type(item.observed) is not str
+            or type(item.reason) is not str
+            or item.reason == ""
+        ):
+            raise _fail("observation_malformed:regime_reading")
+
+
 def evaluate_governed_paper_entry_safety(
     observation: GovernedPaperEntrySafetyObservation,
 ) -> GovernedPaperEntrySafetyDecision:
@@ -1766,7 +1985,7 @@ def evaluate_governed_paper_entry_safety(
     observation = _canonical_observation(observation)
     checks: list[GovernedPaperEntrySafetyCheck] = []
     first: GovernedPaperEntrySafetyCheck | None = None
-    for item in _CHECKS:
+    for item in (*_CHECKS, *(_REGIME_CHECKS if observation.regime is not None else ())):
         outcome = item.evaluate(observation)
         check = GovernedPaperEntrySafetyCheck(
             check_id=item.check_id,
@@ -2423,6 +2642,7 @@ def build_governed_paper_entry_safety_evidence(
     portfolio: GovernedPaperEntrySafetyPortfolio | None = None,
     market_data: bool = False,
     kill_switch: bool = False,
+    regime: GovernedPaperEntrySafetyRegimeContext | None = None,
 ) -> GovernedPaperEntrySafetyEvidence:
     """Evaluate every entry decision of ``run`` over the archive ``dataset`` it was built from (see the module docstring).
 
@@ -2433,8 +2653,10 @@ def build_governed_paper_entry_safety_evidence(
     the one engine derives the decision portfolio. ``market_data=True`` (rule set v4, only with ``portfolio``) measures
     NT-D01, NT-D03, NT-D04 and NT-D05 on the archive's own market-data series and the protective context's OHLC
     archive as the kline feed candidate. ``kill_switch=True`` (rule set v5, only with ``market_data``) reads NT-R01 and
-    NT-T02 on the proven lower-bound §1.19 ladder of the same governed re-run. A malformed or foreign input raises
-    ``GovernedPaperEntrySafetyError``. Pure.
+    NT-T02 on the proven lower-bound §1.19 ladder of the same governed re-run. ``regime`` (rule set v6, only with
+    ``kill_switch``) is the verified regime context the day seal supplies: the evaluation derives its regime evidence over
+    ``[G, run end)`` from it and the archive, and reads every entry's regime facts from that evidence. A malformed or
+    foreign input raises ``GovernedPaperEntrySafetyError``. Pure.
     """
 
     if type(authority) is not GovernedPaperGenesisAuthority:
@@ -2449,6 +2671,10 @@ def build_governed_paper_entry_safety_evidence(
         raise _fail("kill_switch_flag_malformed")
     if kill_switch and not market_data:
         raise _fail("kill_switch_without_the_market_data_rule_set")
+    if regime is not None and type(regime) is not GovernedPaperEntrySafetyRegimeContext:
+        raise _fail("regime_context_malformed")
+    if regime is not None and not kill_switch:
+        raise _fail("regime_without_the_kill_switch_rule_set")
     genesis = authority.genesis
     protection = _canonical_protection(protection, instrument=genesis.instrument)
     if run.status is not EdgeEvidenceStatus.READY or run.gate_verdict is not EdgeGateVerdict.PASS:
@@ -2486,6 +2712,29 @@ def build_governed_paper_entry_safety_evidence(
         run.profile_id == registered.profile_id and run.profile_semantics_digest == registered.profile_semantics_digest
     )
     ladder = None if governed is None else governed.ladder
+    regime_evidence: GovernedPaperRegimeEvidence | None = None
+    readings: dict[int, GovernedPaperRegimeReading] = {}
+    if regime is not None:
+        entries = tuple(
+            (item.decision_sequence, item.decision_time_ns, item.resulting_direction)
+            for item in run.decisions
+            if item.resulting_direction in _ENTRY_DIRECTIONS
+        )
+        try:  # derived, never accepted: the policy, approval, bars and books are re-proven by the derivation
+            regime_evidence = derive_governed_paper_regime_evidence(
+                policy=regime.policy,
+                approval=regime.approval,
+                archive=regime.archive,
+                dataset=dataset,
+                instrument=genesis.instrument,
+                genesis_start_ns=genesis.genesis_start_ns,
+                horizon_ns=run.evaluation_end_ns,
+                decisions=entries,
+                latency_ns=policy.latency_ns,
+            )
+        except GovernedPaperRegimeError as exc:
+            raise _fail("regime_evidence_not_derivable") from exc
+        readings = {item.decision_sequence: item for item in regime_evidence.readings}
     decisions: list[GovernedPaperEntrySafetyDecision] = []
     for decision in run.decisions:
         if decision.resulting_direction not in _ENTRY_DIRECTIONS:
@@ -2522,12 +2771,17 @@ def build_governed_paper_entry_safety_evidence(
             ),
             market_data=None if market is None else market.facts_at(instant),
             kill_switch=None if ladder is None else governed_paper_entry_safety_kill_switch_facts(ladder, instant),
+            regime=None
+            if regime_evidence is None
+            else GovernedPaperEntrySafetyRegime(readings[decision.decision_sequence], regime_evidence.evidence_digest),
         )
         decisions.append(evaluate_governed_paper_entry_safety(observation))
     protective, measured = protection is not None, snapshots is not None
     seed = GovernedPaperEntrySafetyEvidence(
         schema_version=_SCHEMA_VERSION,
-        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_ID
+        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID
+        if regime is not None
+        else GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_ID
         if kill_switch
         else GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_ID
         if market_data
@@ -2537,7 +2791,11 @@ def build_governed_paper_entry_safety_evidence(
         if protective
         else GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID,
         rule_set_digest=governed_paper_entry_safety_rule_set_digest(
-            protective=protective, portfolio=measured, market_data=market_data, kill_switch=kill_switch
+            protective=protective,
+            portfolio=measured,
+            market_data=market_data,
+            kill_switch=kill_switch,
+            regime=regime is not None,
         ),
         genesis_id=genesis.genesis_id,
         genesis_digest=genesis.genesis_digest,
@@ -2554,6 +2812,7 @@ def build_governed_paper_entry_safety_evidence(
         ),
         evidence_digest="",
         kill_switch_ladder=ladder,
+        regime_evidence=regime_evidence,
     )
     return replace(seed, evidence_digest=edge_payload_digest(_evidence_payload(seed), _DIGEST_FIELD))
 

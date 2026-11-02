@@ -445,3 +445,27 @@ Proven kill-switch escalation (`S1_KILL_SWITCH_PROVEN_ESCALATION_CLOSURE_V1`, re
   NT-R01 stays blocked on H1-H6: an exchange-API health reading on the paper path, the CVaR and liquidity
   methodologies, the margin and DTL model, the KS-1 actions and the KS-2/KS-3 position mechanics. REAL_PAPER_EXECUTION
   stays BLOCKED. Every value in the tests is synthetic.
+
+Family B regime, trend and activation (`S1_FAMILY_B_REGIME_TREND_ACTIVATION_GATE_CLOSURE_V1`, recorded 2026-11-02):
+
+- `governed_paper_regime_state.py` implements methodology `S1_COMPLETE_ENTRY_METHODOLOGY_DECISION_V1` revision r2. The
+  human approved CL1-1..CL1-13 and CL2-1..CL2-11 for construction only and excluded CL1-14, CL2-12 and CL2-13; this
+  closure consumes CL1-1..CL1-13 and CL2-1..CL2-7. Every NEW value is an uncalibrated governance choice, a design
+  approval is not production permission, PRICE_CRISIS_V1 guarantees no crisis coverage, and T10 stays unmeasured;
+- a digest-bound policy (every r2 constant fixed) and its approval feed a frozen evaluation log, derived and never
+  accepted, from the policy's authenticated 300 s MARK bar archive and the dataset's depth-50 ORDER_BOOK series.
+  Evaluation m is computed once at its knowledge instant g_m + 300 s from the bars visible then and never revised; a
+  book sample at s reads only the tips visible at s and fresh within 10 s; a decision at t reads the latest evaluation
+  known at t, so its regime information is 300-600 s old, and one late bar blocks FB-REGIME for 649 evaluations (54 h);
+- entry gate rule set v6 (on top of v5) measures FB-TREND, FB-REGIME and FB-REGIME-COOLDOWN on that log, which can
+  PASS; NT-M03 FAILs on a pending price transition; FB-ACTIVATION, FB-REGIME-CELL and SYSTEM-STATE are appended. NT-M03
+  and the three appended checks never PASS: no funding, leverage or liquidity regime dimension, paper fill-rate or
+  exchange-health proof, or system-state engine exists. UNKNOWN never PASSes;
+- only an approval the active approval table admits is used. The production table admits none, so in production every
+  regime check is BLOCKED; tests alone install a test-only table for TEST_ONLY_SYNTHETIC approvals;
+- day seal v7 and lineage evidence v7 bind the policy, approval, archive, regime evidence and the log's prefix before
+  `E_k` and `E_k+1` (X1 for the regime), and the evidence refuses a rewritten or backfilled regime archive. Without a
+  regime context every v1-v6 artifact, rule sets v1-v5 and every accepted economic outcome stay byte-identical;
+- admission effect: none. Every S1 entry is still refused, first by NT-D01 on the accepted worlds and by NT-R01 after a
+  Data PASS. M1 (a qualified MARK and depth-50 source), D1, rights, C1-C9, CL2-8..CL2-11 readings and the kill-switch
+  H1-H6 stay open, and REAL_PAPER_EXECUTION stays BLOCKED. Every value in the tests is synthetic.
