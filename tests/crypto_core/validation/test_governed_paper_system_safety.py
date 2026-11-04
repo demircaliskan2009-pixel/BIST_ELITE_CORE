@@ -16,14 +16,16 @@ It proves:
   of each; a mark between the two stops triggers only the v2 stop; the DEC-9 reading tightens the ATR distance alone; a
   LONG open whose ATR stop is not positive is refused under v1 and protected by the initial stop under v2;
 * C. the §1.29 proven lower bound: the doctrine values; every signal reading; the entry thresholds at their exact
-  boundaries; the overrides; soundness and tightness against an exhaustive oracle; HALT and SS-0 never proven; the
-  obligations; malformed inputs; the evidence; purity;
+  boundaries; the critical overrides as cumulative minimums (a complete data loss is CRISIS whatever the SHS, never only
+  DEFENSIVE, and no override lowers a more severe state); soundness and tightness against an exhaustive independent
+  oracle; HALT and SS-0 never proven; the obligations; malformed inputs; the evidence; purity;
 * D. rule set v7 in the gate: every v1-v6 identity unchanged; SYSTEM-STATE, HZ-STOP, HZ-LIMITS and SCALE-1 at their
-  boundaries; the readings are the observation's own; no admission change; malformed facts refused;
+  boundaries; the readings are the observation's own; an authentic capture losing every data condition is CRISIS on the
+  public gate, decision by decision and on replay; no admission change; malformed facts refused;
 * E. world G's integrated lineage (seal v8, evidence v8) under the TEST-ONLY regime table: it changes only its version,
   its rule set and the bound system-state evidence; a policy v2 authority passes HZ-STOP and admits nothing; lineage
-  switches, relabelled versions and forged digests never verify; an audit replay on two UTC days reproduces every
-  sealed reading, and no reading is revised by a later seal;
+  switches, relabelled versions, forged digests and a system-state evidence of the superseded rule never verify; an
+  audit replay on two UTC days reproduces every sealed reading, and no reading is revised by a later seal;
 * F. legacy byte identity: world G's regime lineage (seal v7, evidence v7) equals its accepted-main pins.
 """
 
@@ -564,6 +566,13 @@ def test_the_rule_carries_exactly_the_prdv4_1_29_doctrine_values() -> None:
     }
     assert rule["states"] == ["SS-0:NORMAL", "SS-1:DEGRADED", "SS-2:DEFENSIVE", "SS-3:CRISIS", "SS-4:HALT"]
     assert rule["unmeasured"] == ["S3", "S6", "S7", "S9"]
+    # §1.29 Critical Override Rules: cumulative minimums; any severity of 1, S4's included, is at least CRISIS
+    assert (rule["critical_override"], rule["s4_complete_data_loss"], rule["precedence"]) == (
+        "any_proven_severity_of_1_s4_included_raises_the_bound_to_at_least_crisis",
+        "its_defensive_minimum_is_cumulative_with_the_crisis_override_and_always_met_by_it",
+        "every_rule_is_a_cumulative_minimum_the_most_severe_binds_and_none_lowers_the_shs_entry_state",
+    )
+    assert "defensive_only" not in edge_canonical_json(rule)
     assert (rule["rule_id"], GOVERNED_PAPER_SYSTEM_STATE_RULE_ID) == (
         "governed-paper-system-state-proven-lower-bound.v1",
     ) * 2
@@ -644,7 +653,12 @@ DEFENSIVE_AT_200MS = {
             "critical_override_s2_severity_1",
         ),
         ({"execution_statuses": execution(4)}, 3, "critical_override_s5_severity_1"),
-        ({"data_statuses": data(5)}, 2, "critical_override_s4_severity_1"),  # the DEFENSIVE minimum, never CRISIS
+        # §1.29: any single severity of 1 is CRISIS regardless of the SHS; S4's DEFENSIVE minimum is met by it
+        ({"data_statuses": data(5)}, 3, "critical_override_s4_severity_1"),
+        ({"data_statuses": data(4)}, 0, "no_state_above_ss0_proven"),
+        ({"data_statuses": data(5), "latency_ns": 500 * MS}, 3, "critical_override_s4_severity_1"),
+        # the SHS already DEFENSIVE (stress exactly 0.42): a complete data loss raises it to CRISIS, never keeps it
+        ({**DEFENSIVE_AT_200MS, "data_statuses": data(5)}, 3, "critical_override_s4_severity_1"),
         ({**DEFENSIVE_AT_200MS, "latency_ns": 500 * MS}, 3, "critical_override_s10_severity_1"),
     ],
 )
@@ -657,23 +671,25 @@ def test_the_bound_meets_each_entry_threshold_and_override_exactly(
     assert item.reading_digest == governed_paper_system_state_reading_digest(item)
 
 
-def oracle(severities: dict[str, Fraction], *, s4_specific: bool) -> int:
-    """An independent PRDV4 §1.29 state of exact severities: the SHS entry thresholds, then the critical overrides. With
-    ``s4_specific`` the complete-data-loss rule is read as the DEFENSIVE minimum, otherwise as any severity of 1."""
+def oracle(severities: dict[str, Fraction]) -> int:
+    """An independent PRDV4 §1.29 state of exact severities, written from the doctrine text alone. The SHS entry state
+    and each of the three Critical Override Rules is a minimum; they are cumulative and the MORE SEVERE state is used
+    (State Transition Protocol): any single s_i = 1 is CRISIS regardless of the SHS, KS-4 (s1 = 1) is HALT, and a
+    complete data loss (s4 = 1) is at least DEFENSIVE."""
 
     shs = 1 - sum(WEIGHTS[name] * value for name, value in severities.items())
-    state = next(
-        (level for level, bound in ((4, "0.15"), (3, "0.35"), (2, "0.60"), (1, "0.80")) if shs <= Fraction(bound)), 0
-    )
-    for name, value in severities.items():
-        if value == 1:
-            state = max(state, 2 if name == "S4" and s4_specific else 3)
-    return state
+    entries = ((4, "0.15"), (3, "0.35"), (2, "0.60"), (1, "0.80"))
+    minimums = [next((level for level, bound in entries if shs <= Fraction(bound)), 0)]
+    minimums += [3 for value in severities.values() if value == 1]
+    minimums += [4] if severities.get("S1") == 1 else []
+    minimums += [2] if severities.get("S4") == 1 else []
+    return max(minimums)
 
 
 def test_the_bound_is_sound_and_tight_under_every_completion_and_never_reaches_halt() -> None:
     latencies = (0, 100 * MS, 200 * MS, 499 * MS, 500 * MS)
     drawdowns = ((False, False), (True, False), (True, True))
+    lowest_shs = Fraction(1)
     for level, (ten, fifteen), failing_data, failing_execution, latency in itertools.product(
         range(4), drawdowns, range(6), range(5), latencies
     ):
@@ -699,15 +715,19 @@ def test_the_bound_is_sound_and_tight_under_every_completion_and_never_reaches_h
         assert all(Fraction(signal.lower_bound) <= measured[signal.signal_id] for signal in item.signals)
         stress = sum(WEIGHTS[name] * value for name, value in measured.items())
         assert Fraction(item.stress_lower_bound) <= stress and Fraction(item.shs_upper_bound) >= 1 - stress
-        # tight: the bound IS the state of the minimal completion under the weaker reading of the S4 override
-        assert item.state_lower_bound == oracle(measured, s4_specific=True)
-        # sound: the extreme completions of the unmeasured signals and higher measured severities, under both readings
-        # (the state is monotone in every severity, so the extremes bound every completion between them)
+        lowest_shs = min(lowest_shs, Fraction(item.shs_upper_bound))
+        # tight: the bound IS the doctrine state of the minimal completion (every unmeasured signal at 0)
+        assert item.state_lower_bound == oracle(measured)
+        # sound: the extreme completions of the unmeasured signals and higher measured severities (the state is
+        # monotone in every severity, so the extremes bound every completion between them)
         for completion in itertools.product((Fraction(0), Fraction(1)), repeat=4):
             completed = {**measured, **dict(zip(("S3", "S6", "S7", "S9"), completion, strict=True))}
             raised = {name: max(value, Fraction(1, 2)) for name, value in completed.items()}
-            for severities, specific in itertools.product((completed, raised), (True, False)):
-                assert oracle(severities, s4_specific=specific) >= item.state_lower_bound
+            for severities in (completed, raised):
+                assert oracle(severities) >= item.state_lower_bound
+    # every measured signal at its supported maximum (KS-3, trigger 11, 5/5, 4/4, 5 x the budget) is stress 0.55: the
+    # SHS alone never reaches the CRISIS entry on a supported input, so only an override proves CRISIS here
+    assert lowest_shs == Fraction(45, 100)
 
 
 def test_the_obligations_are_the_per_state_rules_of_the_bound_and_none_is_executed() -> None:
@@ -727,7 +747,12 @@ def test_the_obligations_are_the_per_state_rules_of_the_bound_and_none_is_execut
             ("all_pending_orders_cancelled", OB.BLOCKED_UNREPRESENTABLE),
         ],
     }
-    for changes, state in ((TWO_DATA_AT_100MS, 1), ({"data_statuses": data(5)}, 2), ({"latency_ns": 500 * MS}, 3)):
+    for changes, state in (
+        (TWO_DATA_AT_100MS, 1),
+        (DEFENSIVE_AT_200MS, 2),
+        ({"data_statuses": data(5)}, 3),
+        ({"latency_ns": 500 * MS}, 3),
+    ):
         item = reading(**changes)
         assert [(obligation.rule, obligation.status) for obligation in item.obligations] == expected[state]
         assert {obligation.state_id for obligation in item.obligations} == {f"SS-{state}"}
@@ -741,6 +766,108 @@ def test_the_obligations_are_the_per_state_rules_of_the_bound_and_none_is_execut
     ]
 
 
+CRISIS_OBLIGATIONS = [
+    ("no_new_entries", OB.ENFORCED_BY_ENTRY_REFUSAL),
+    ("intraday_positions_exited_by_15min_twap", OB.BLOCKED_UNREPRESENTABLE),
+    ("all_pending_orders_cancelled", OB.BLOCKED_UNREPRESENTABLE),
+]
+
+
+def test_a_complete_data_loss_alone_is_crisis_with_its_obligations_and_executes_nothing() -> None:
+    item = reading(data_statuses=data(5))
+    # S4 is the only severity of 1 and the SHS alone proves nothing above SS-0: the override binds regardless of it
+    assert [signal.signal_id for signal in item.signals if Fraction(signal.lower_bound) == 1] == ["S4"]
+    assert Fraction(item.shs_upper_bound) == Fraction(895, 1000)
+    assert (item.state_lower_bound, item.state_reason, governed_paper_system_state_id(item)) == (
+        3,
+        "critical_override_s4_severity_1",
+        "SS-3",
+    )
+    # the CRISIS inventory: the entry refusal is enforced by the refusal itself; the INTRADAY exit and the cancellation
+    # of every pending order are recorded with their mechanics BLOCKED (no TWAP exit, no cancellation on the paper path)
+    assert [(obligation.rule, obligation.status) for obligation in item.obligations] == CRISIS_OBLIGATIONS
+    assert {obligation.state_id for obligation in item.obligations} == {"SS-3"}
+    assert [obligation.reason for obligation in item.obligations[1:]] == [
+        "twap_exit_mechanics_are_undefined",
+        "the_paper_engine_has_no_order_cancellation",
+    ]
+    # nothing is executed and no entry is authorized: the evidence keeps every non-claim
+    evidence = build_governed_paper_system_state_evidence(instrument=lifet.INS, readings=(item,))
+    assert {name: getattr(evidence, name) for name, _ in GOVERNED_PAPER_SYSTEM_STATE_NON_CLAIM_FLAGS} == dict(
+        GOVERNED_PAPER_SYSTEM_STATE_NON_CLAIM_FLAGS
+    )
+    assert (evidence.actions_executed, evidence.entry_authorized) == (False, False)
+
+
+def test_only_five_proven_active_data_conditions_override_and_an_unknown_one_never_does() -> None:
+    for active in itertools.combinations(range(5), 4):  # every four of five
+        for other in (
+            "PASS",
+            "BLOCKED_ON_MISSING_INPUT",
+            "BLOCKED_PROTECTION_UNREPRESENTABLE",
+            "PROVEN_NOT_APPLICABLE",
+        ):
+            statuses = tuple((name, "FAIL" if index in active else other) for index, name in enumerate(DATA_IDS))
+            item = reading(data_statuses=statuses)
+            # an unknown (BLOCKED) condition is never active: four proven of five is 4/5 and overrides nothing
+            assert (lower(item, "S4"), item.state_lower_bound, item.state_reason, item.obligations) == (
+                Fraction(4, 5),
+                0,
+                "no_state_above_ss0_proven",
+                (),
+            )
+    unknown = reading(data_statuses=tuple((name, "BLOCKED_ON_MISSING_INPUT") for name in DATA_IDS))
+    assert (lower(unknown, "S4"), unknown.state_lower_bound) == (0, 0)
+
+
+@pytest.mark.parametrize(
+    ("severities", "state", "reason"),
+    [
+        # a complete data loss alone, the SHS NORMAL: CRISIS regardless of the SHS
+        ({"S4": Fraction(1)}, 3, "critical_override_s4_severity_1"),
+        # the SHS DEFENSIVE (stress exactly 0.40): raised to CRISIS, never kept at DEFENSIVE
+        (
+            {"S1": Fraction(3, 4), "S2": Fraction(2, 3), "S4": Fraction(1), "S5": Fraction(1, 2)},
+            3,
+            "critical_override_s4_severity_1",
+        ),
+        # with another severity of 1: CRISIS, the first in signal order naming the reason
+        ({"S2": Fraction(1), "S4": Fraction(1)}, 3, "critical_override_s2_severity_1"),
+        ({"S4": Fraction(1), "S10": Fraction(1)}, 3, "critical_override_s4_severity_1"),
+        ({"S4": Fraction(4, 5)}, 0, "no_state_above_ss0_proven"),
+        # the SHS already CRISIS or HALT (stress 0.655 and 0.88): unreachable on the paper path, which measures no S3,
+        # S6, S7 or S9 (its stress lower bound is at most 0.55), so only the precedence itself is exercised here: a
+        # more severe state is never lowered by an override and keeps its own reason
+        (
+            {
+                "S1": Fraction(3, 4),
+                "S4": Fraction(1),
+                **dict.fromkeys(("S2", "S3", "S6", "S7"), Fraction(9, 10)),
+            },
+            3,
+            "shs_upper_bound_at_or_below_the_crisis_entry",
+        ),
+        (
+            {
+                "S1": Fraction(3, 4),
+                "S4": Fraction(1),
+                **dict.fromkeys(("S2", "S3", "S5", "S6", "S7", "S8", "S9", "S10"), Fraction(9, 10)),
+            },
+            4,
+            "shs_upper_bound_at_or_below_the_halt_entry",
+        ),
+    ],
+)
+def test_the_overrides_are_cumulative_minimums_and_the_most_severe_binds(
+    severities: dict[str, Fraction], state: int, reason: str
+) -> None:
+    complete = {**{name: Fraction(0) for name in GOVERNED_PAPER_SYSTEM_STATE_SIGNAL_IDS}, **severities}
+    shs = 1 - sum(WEIGHTS[name] * value for name, value in complete.items())
+    critical = tuple(name for name in GOVERNED_PAPER_SYSTEM_STATE_SIGNAL_IDS if complete[name] == 1)
+    assert system_state._state_lower_bound(shs, critical) == (state, reason)  # noqa: SLF001 - the precedence alone
+    assert oracle(complete) == state
+
+
 @pytest.mark.parametrize(
     ("changes", "reason"),
     [
@@ -752,6 +879,12 @@ def test_the_obligations_are_the_per_state_rules_of_the_bound_and_none_is_execut
         ({"data_statuses": data(0)[:4]}, "inputs_malformed:data_statuses"),
         ({"data_statuses": data(0)[::-1]}, "inputs_malformed:data_statuses"),
         ({"data_statuses": (("NT-D01", "ACTIVE"), *data(0)[1:])}, "inputs_malformed:data_statuses"),
+        # a complete data loss is read only from exactly the five NT-D statuses, in order, as gate status texts
+        ({"data_statuses": tuple(("NT-D01", status) for _, status in data(5))}, "inputs_malformed:data_statuses"),
+        ({"data_statuses": (("NT-D01", S.FAIL), *data(5)[1:])}, "inputs_malformed:data_statuses"),
+        ({"data_statuses": (*data(5)[:4], ("NT-D05", "FAIL", "FAIL"))}, "inputs_malformed:data_statuses"),
+        ({"data_statuses": (*data(5), ("NT-D06", "FAIL"))}, "inputs_malformed:data_statuses"),
+        ({"data_statuses": list(data(5))}, "inputs_malformed:data_statuses"),
         ({"execution_statuses": list(execution(0))}, "inputs_malformed:execution_statuses"),
         ({"latency_ns": -1}, "inputs_malformed:latency_ns"),
         ({"latency_budget_ns": 0}, "inputs_malformed:latency_budget_ns"),
@@ -950,10 +1083,16 @@ def test_system_state_fails_on_a_proven_state_above_ss0_and_is_otherwise_blocked
             "SYSTEM-STATE:system_state_at_least_ss-3_proven_by_critical_override_s2_severity_1_family_b_t1_needs_ss0"
         ),
     )
-    # complete data loss: the DEFENSIVE minimum
+    # complete data loss: S4 = 1 is CRISIS regardless of the SHS (its DEFENSIVE minimum is met by it)
     lost = evaluate_governed_paper_entry_safety(lost_data())
     assert [est.check_of(lost, name).status for name in DATA_IDS] == [S.FAIL] * 5
-    assert outcome(lost, "SYSTEM-STATE")[0:2] == (S.FAIL, "lower_bound=SS-2;shs_upper_bound=0.895000000000000000")
+    assert outcome(lost, "SYSTEM-STATE") == (
+        S.FAIL,
+        "lower_bound=SS-3;shs_upper_bound=0.895000000000000000",
+        est.code(
+            "SYSTEM-STATE:system_state_at_least_ss-3_proven_by_critical_override_s4_severity_1_family_b_t1_needs_ss0"
+        ),
+    )
     other = decided(family_b_applicable=False)
     assert outcome(other, "SYSTEM-STATE") == (
         BLOCKED,
@@ -1055,11 +1194,11 @@ def test_scale_1_fails_on_a_proven_reduced_allocation_and_never_passes() -> None
         str(200 * MS + 1),
         est.code("SCALE-1:latency_above_2x_the_tier_budget_halves_the_position_size"),
     )
-    # KS-0 and an unhalved latency, yet a proven DEFENSIVE state: complete data loss
+    # KS-0 and an unhalved latency, yet a proven CRISIS state: complete data loss
     assert outcome(evaluate_governed_paper_entry_safety(lost_data()), "SCALE-1") == (
         S.FAIL,
-        "SS-2",
-        est.code("SCALE-1:system_state_at_least_ss-2_reduces_the_allocation"),
+        "SS-3",
+        est.code("SCALE-1:system_state_at_least_ss-3_reduces_the_allocation"),
     )
 
 
@@ -1085,6 +1224,114 @@ def test_scale_1_fails_on_a_proven_reduced_allocation_and_never_passes() -> None
 def test_malformed_system_safety_facts_are_refused(build: object, name: str) -> None:
     with pytest.raises(GovernedPaperEntrySafetyError, match=f"^{est.code(f'observation_malformed:{name}')}$"):
         evaluate_governed_paper_entry_safety(build())  # type: ignore[operator]
+
+
+def lost_capture_events() -> list[tuple[int, Fraction]]:
+    """The SYNTHETIC trades of an authentic capture that loses every trade-derived data condition at ``est.DECIDED``: a
+    gap of 60 s + 1 ns before the first target-window trade (NT-D01) and a target window holding 1% of the 30-day mean
+    5-minute volume (NT-D05)."""
+
+    events = est.thirty_day_events(Fraction(1, 100))
+    events[-6] = (events[-6][0] + 1, events[-6][1])
+    return events
+
+
+@functools.cache
+def lost_capture():  # noqa: ANN201
+    """The READY dataset of that authentic SYNTHETIC capture through the ingress, its one index value 25% below the
+    trades (NT-D04)."""
+
+    return est.capture_dataset(lost_capture_events(), indexes=((est.INDEXED, 30),))
+
+
+def captured(facts: object, *, sequence: int, at: int, **changes: object):  # noqa: ANN201
+    """A rule set v7 observation at ``at`` over market facts derived from an authentic capture: KS-0, the regime facts of
+    this very decision and a SYNTHETIC book update 30 s before ``est.DECIDED`` (stale, NT-D02; 19.6 s from the newest
+    trade, NT-D03)."""
+
+    return est.portfolio(
+        decision_sequence=sequence,
+        decision_time_ns=at,
+        day_start_ns=at // est.DAY_NS * est.DAY_NS,
+        genesis_start_ns=at - est.DAY_NS,
+        book_update_event_time_ns=est.DECIDED - 30 * SECOND,
+        market_data=facts,
+        kill_switch=kst.ks(),
+        regime=rst.regime_facts(
+            None,
+            decision_sequence=sequence,
+            decision_time_ns=at,
+            evaluation_index=regime.decision_evaluation_index(at),
+        ),
+        system_safety=True,
+        **changes,
+    )
+
+
+def test_an_authentic_capture_losing_every_data_condition_is_crisis_on_the_public_gate() -> None:
+    facts = est.facts_of(lost_capture())  # the public market-data derivation over the authenticated READY dataset
+    assert (facts.trade_gap_ns, facts.index_price, facts.volume_target) == (
+        60 * SECOND + 1,
+        est.d(30),
+        est.d(Fraction(1, 100)),
+    )
+    observation = captured(facts, sequence=7, at=est.DECIDED)
+    decision = evaluate_governed_paper_entry_safety(observation)
+    assert [est.check_of(decision, name).status for name in DATA_IDS] == [S.FAIL] * 5
+    derived = governed_paper_entry_safety_system_state_reading(observation)
+    assert (lower(derived, "S4"), derived.state_lower_bound, derived.state_reason) == (
+        1,
+        3,
+        "critical_override_s4_severity_1",
+    )
+    assert Fraction(derived.shs_upper_bound) > Fraction(80, 100)  # the SHS alone proves nothing: the override binds
+    assert outcome(decision, "SYSTEM-STATE") == (
+        S.FAIL,
+        f"lower_bound=SS-3;shs_upper_bound={derived.shs_upper_bound}",
+        est.code(
+            "SYSTEM-STATE:system_state_at_least_ss-3_proven_by_critical_override_s4_severity_1_family_b_t1_needs_ss0"
+        ),
+    )
+    assert est.check_of(decision, "SYSTEM-STATE").evidence_record_digests == (derived.reading_digest,)
+    assert outcome(decision, "SCALE-1") == (
+        S.FAIL,
+        "SS-3",
+        est.code("SCALE-1:system_state_at_least_ss-3_reduces_the_allocation"),
+    )
+    assert [(obligation.rule, obligation.status) for obligation in derived.obligations] == CRISIS_OBLIGATIONS
+    # with another severity of 1 (S10: five times the T1 budget) it stays CRISIS, never anything weaker
+    both = governed_paper_entry_safety_system_state_reading(
+        captured(facts, sequence=7, at=est.DECIDED, latency_ns=500 * MS)
+    )
+    assert (both.state_lower_bound, both.state_reason) == (3, "critical_override_s4_severity_1")
+    # no admission change under the production tables: the first refusal is NT-D01
+    assert (decision.entry_permitted, decision.first_failure_check_id) == (False, "NT-D01")
+
+
+def test_capture_decisions_read_their_own_instants_and_replay_exactly() -> None:
+    later = est.DECIDED + SECOND  # the next UTC second holds no index value: NT-D04 is unknown there, never inactive
+    observations = (
+        captured(est.facts_of(lost_capture()), sequence=7, at=est.DECIDED),
+        captured(est.facts_of(lost_capture(), at=later), sequence=8, at=later),
+    )
+    second = evaluate_governed_paper_entry_safety(observations[1])
+    assert [est.check_of(second, name).status for name in DATA_IDS] == [S.FAIL, S.FAIL, S.FAIL, BLOCKED, S.FAIL]
+    readings = tuple(governed_paper_entry_safety_system_state_reading(item) for item in observations)
+    # four proven of five overrides nothing, and the earlier CRISIS never persists into the next decision
+    assert [(lower(item, "S4"), item.state_lower_bound) for item in readings] == [(1, 3), (Fraction(4, 5), 0)]
+    assert outcome(second, "SYSTEM-STATE")[0] is BLOCKED
+    evidence = build_governed_paper_system_state_evidence(instrument=lifet.INS, readings=readings)
+    assert [item.state_lower_bound for item in evidence.readings] == [3, 0]
+    # a replay over an independently re-captured dataset re-derives every reading and the evidence exactly
+    again = est.capture_dataset(lost_capture_events(), indexes=((est.INDEXED, 30),))
+    replayed = tuple(
+        governed_paper_entry_safety_system_state_reading(captured(est.facts_of(again, at=at), sequence=sequence, at=at))
+        for sequence, at in ((7, est.DECIDED), (8, later))
+    )
+    assert replayed == readings
+    rebuilt = build_governed_paper_system_state_evidence(instrument=lifet.INS, readings=replayed)
+    assert rebuilt == evidence
+    assert rebuilt.evidence_digest == governed_paper_system_state_evidence_digest(evidence) == evidence.evidence_digest
 
 
 def test_a_legacy_evidence_never_carries_a_system_state_evidence() -> None:
@@ -1181,9 +1428,10 @@ def public_gate(day: int):  # noqa: ANN201
     return run, evidence
 
 
-# World G's sealed day-3 entry under rule set v7: its NT-D readings are BLOCKED (no trade or index series in its genesis
-# data contract), so no data condition is proven active; its kill-switch bound is KS-0 and its latency unhalved; its v1
-# policy does not represent the initial stop.
+# World G's sealed day-3 entry under rule set v7: its trade, index and volume NT-D readings are BLOCKED (no trade or index
+# series in its genesis data contract) and only NT-D02 (a two-day-old book) is proven active, so S4 is 1/5 and no state
+# above SS-0 is proven; its kill-switch bound is KS-0 and its latency unhalved; its v1 policy does not represent the
+# initial stop.
 WORLD_G_DAY_3 = {
     "SYSTEM-STATE": (
         BLOCKED,
@@ -1289,6 +1537,36 @@ def test_an_integrated_lineage_is_one_from_day_0_or_never_and_only_on_a_regime_l
         assert rst.verify(forged, legacy[1].seal_inputs).intact is False
     forged_digest = gpe.reseal_seal(days[1].seal, system_state_evidence_digest="0" * 64)
     assert rst.verify(forged_digest, days[1].seal_inputs).intact is False
+
+
+def test_the_lineage_binds_the_corrected_rule_and_a_superseded_or_relabelled_evidence_never_verifies() -> None:
+    days = safety_days(4)
+    _, evidence = public_gate(3)
+    system = evidence.system_state_evidence
+    assert system is not None and system.evidence_digest == days[3].seal.system_state_evidence_digest
+    assert (system.rule_id, system.rule_digest) == (
+        GOVERNED_PAPER_SYSTEM_STATE_RULE_ID,
+        GOVERNED_PAPER_SYSTEM_STATE_RULE_DIGEST,
+    )
+    # world G proves only NT-D02 active (S4 = 1/5, never a complete data loss): the correction changes no sealed state,
+    # only the rule every reading is bound to
+    assert system.readings and all(
+        (lower(item, "S4"), item.state_lower_bound) == (Fraction(1, 5), 0) for item in system.readings
+    )
+    # the superseded declaration (a complete data loss weakened to DEFENSIVE) is a different rule
+    superseded = {
+        key: value
+        for key, value in GOVERNED_PAPER_SYSTEM_STATE_RULE.items()
+        if key not in ("s4_complete_data_loss", "precedence")
+    }
+    superseded["critical_override"] = "a_proven_severity_of_1_raises_the_bound_to_crisis_s4_raises_it_to_defensive_only"
+    stale_digest = edge_sha256_text(edge_canonical_json(superseded))
+    assert stale_digest != GOVERNED_PAPER_SYSTEM_STATE_RULE_DIGEST
+    for changes in ({"rule_digest": stale_digest}, {"schema_version": "governed-paper-system-state-evidence.v0"}):
+        forged = replace(system, **changes)  # type: ignore[arg-type]
+        forged = replace(forged, evidence_digest=governed_paper_system_state_evidence_digest(forged))
+        sealed = gpe.reseal_seal(days[3].seal, system_state_evidence_digest=forged.evidence_digest)
+        assert rst.verify(sealed, days[3].seal_inputs).intact is False
 
 
 def test_a_policy_v2_lineage_passes_hz_stop_and_admits_nothing() -> None:

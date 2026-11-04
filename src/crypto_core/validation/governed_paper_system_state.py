@@ -30,9 +30,10 @@ doctrine values, never governed parameters, and no signal reading here is a new 
 The bound. The stress lower bound is ``sum(w_i x s_i)`` over the measured lower bounds, exactly (``Fraction``), and the
 SHS upper bound is ``1`` minus it. Escalation is immediate (§1.29 State Transition Protocol), so the state is at least
 the state whose entry threshold the SHS upper bound meets: HALT at or below 0.15, CRISIS at or below 0.35, DEFENSIVE at
-or below 0.60, DEGRADED at or below 0.80. The critical overrides read only proven severities: a proven ``s_i = 1``
-raises the bound to CRISIS, except S4, whose own rule (complete data loss, DEFENSIVE minimum) is the minimum both
-override readings agree on, so it raises the bound to DEFENSIVE only.
+or below 0.60, DEGRADED at or below 0.80. The critical overrides read only proven severities, and every §1.29 rule is a
+cumulative minimum: the most severe applicable one binds and none lowers another. Any proven ``s_i = 1``, S4's complete
+data loss included, raises the bound to at least CRISIS regardless of the SHS. S4's own rule (complete data loss,
+DEFENSIVE minimum) is cumulative with that CRISIS and always met by it; it never weakens it.
 
 Instants and persistence. The bound is read at the entry decision's own instant, at its DECISION phase, exactly where the
 gate reads every other fact. No state between decisions is claimed. No persistence is claimed either: a de-escalation
@@ -110,7 +111,7 @@ _STATE_ENTRY: tuple[tuple[int, Fraction], ...] = (
     (2, Fraction(60, 100)),
     (1, Fraction(80, 100)),
 )
-_CRISIS, _DEFENSIVE = 3, 2
+_CRISIS = 3  # §1.29: any single proven severity of 1 is at least CRISIS, regardless of the SHS
 _KILL_SWITCH_LEVELS = 4  # s1 = KS_level / 4; the ladder proves at most KS-3
 _DRAWDOWN_NORMALIZER = Fraction(15, 100)  # s2 = min(1, DD / 0.15)
 _T2_DRAWDOWN = Fraction(10, 100)  # §1.19 trigger 2: a drawdown from peak strictly beyond 10%
@@ -335,7 +336,9 @@ def governed_paper_system_state_rule() -> dict[str, object]:
         "weights": {name: _render(value) for name, value in _WEIGHTS.items()},
         "sources": dict(_SOURCES),
         "state_entry_shs_at_or_below": {_STATE_IDS[state]: _render(bound) for state, bound in _STATE_ENTRY},
-        "critical_override": "a_proven_severity_of_1_raises_the_bound_to_crisis_s4_raises_it_to_defensive_only",
+        "critical_override": "any_proven_severity_of_1_s4_included_raises_the_bound_to_at_least_crisis",
+        "s4_complete_data_loss": "its_defensive_minimum_is_cumulative_with_the_crisis_override_and_always_met_by_it",
+        "precedence": "every_rule_is_a_cumulative_minimum_the_most_severe_binds_and_none_lowers_the_shs_entry_state",
         "kill_switch_halt": "ks4_is_never_proven_so_halt_is_never_reached_through_it",
         "instant": "the_entry_decision_instant_at_its_decision_phase_no_state_between_decisions_is_claimed",
         "persistence": "none_claimed_the_bound_reads_only_the_signals_proven_at_its_instant",
@@ -369,6 +372,25 @@ def _signal(
     weight = _render(_WEIGHTS[signal_id])  # every PRDV4 weight is exact at scale 18
     record = GovernedPaperSystemStateSignal(signal_id, weight, measurement, _render_down(value), reason)
     return record, value
+
+
+def _state_lower_bound(shs: Fraction, critical_ids: tuple[str, ...]) -> tuple[int, str]:
+    """The §1.29 state that a proven SHS upper bound and the proven critical severities give together (pure).
+
+    Every rule is a minimum and the rules are cumulative, so the most severe one binds and none lowers another: the SHS
+    entry state, and CRISIS for any proven severity of 1 (``critical_ids``, in signal order; the first one names the
+    reason). S4's own DEFENSIVE minimum for a complete data loss is always met by the CRISIS that its severity of 1
+    already imposes, and KS-4's HALT is never proven here.
+    """
+
+    state, reason = 0, "no_state_above_ss0_proven"
+    for candidate, threshold in _STATE_ENTRY:
+        if shs <= threshold:
+            state, reason = candidate, f"shs_upper_bound_at_or_below_the_{_STATE_NAMES[candidate].lower()}_entry"
+            break
+    if critical_ids and state < _CRISIS:
+        state, reason = _CRISIS, f"critical_override_{critical_ids[0].lower()}_severity_1"
+    return state, reason
 
 
 def _active_count(statuses: object, ids: tuple[str, ...], name: str) -> int:
@@ -478,17 +500,10 @@ def derive_governed_paper_system_state_reading(  # noqa: PLR0913
     severities = {item[0].signal_id: item[1] for item in pairs}
     stress = sum((_WEIGHTS[name] * severities[name] for name in GOVERNED_PAPER_SYSTEM_STATE_SIGNAL_IDS), zero)
     shs = 1 - stress
-    state, reason = 0, "no_state_above_ss0_proven"
-    for candidate, threshold in _STATE_ENTRY:
-        if shs <= threshold:
-            state, reason = candidate, f"shs_upper_bound_at_or_below_the_{_STATE_NAMES[candidate].lower()}_entry"
-            break
-    for item in signals:
-        if item.measurement is not bound or severities[item.signal_id] != 1:
-            continue
-        override = _DEFENSIVE if item.signal_id == "S4" else _CRISIS
-        if override > state:
-            state, reason = override, f"critical_override_{item.signal_id.lower()}_severity_1"
+    critical = tuple(
+        item.signal_id for item in signals if item.measurement is bound and severities[item.signal_id] == 1
+    )
+    state, reason = _state_lower_bound(shs, critical)
     seed = GovernedPaperSystemStateReading(
         decision_sequence=decision_sequence,
         decision_time_ns=decision_time_ns,
