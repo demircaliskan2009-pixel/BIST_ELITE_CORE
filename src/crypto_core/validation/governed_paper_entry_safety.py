@@ -192,6 +192,30 @@ reads the evaluation whose knowledge instant ``g_m + 300 s`` is the latest at or
 
 Every v1-v5 check outcome, payload and digest is unchanged, and a refusal still reaches an entry only.
 
+Integrated risk and system safety (``S1_INTEGRATED_RISK_AND_SYSTEM_SAFETY_CLOSURE_V1``, rule set v7). Rule sets v1-v6 hold
+for every evaluation without it. When the day seal opts in, on top of rule set v6, every fact below is derived from the
+decision's own observation (``governed_paper_entry_safety_system_state_reading``), never supplied, and follows the
+human-approved structural interpretations CL2-7, CL2-9, CL2-10 and CL2-11 of S1_COMPLETE_ENTRY_METHODOLOGY_DECISION_V1 r2:
+
+* SYSTEM-STATE reads the PRDV4 §1.29 proven LOWER BOUND of the system state (``governed_paper_system_state``): from the
+  kill-switch level and drawdown proofs, the decision's own NT-D and NT-X outcomes and the governed latency, with CVaR,
+  liquidity, feature drift and margin utilization unmeasured. Family B is a T1 edge, so a proven state above SS-0 FAILs;
+  otherwise the check is BLOCKED, because SS-0 needs an upper bound of every signal and is never proven;
+* HZ-STOP (CL2-10) PASSes when the protective policy is a policy v2, whose engine applies the PRDV4 §1.27/§8.3 INTRADAY
+  initial stop (1.5% from the opening fill price) beside the §1.9 ATR stop with the nearer binding, the protective window
+  covers the horizon and the DEC-7 ATR_4h reading at ``t`` exists. A v1 policy is BLOCKED_PROTECTION_UNREPRESENTABLE;
+* HZ-LIMITS (CL2-9) applies the §1.27 INTRADAY limits on NT-R04's own single-position measurement: the current share, then
+  an entry candidate's share, FAILs strictly above 8% (the stricter of 8% and NT-R04's 25% binds). On the
+  single-instrument paper portfolio the total exposure is that one position and at most one position is open, so the 40%
+  and 8-position limits never bind first. The 20 trades per day has no defined reading, so the check never passes;
+* SCALE-1 (CL2-11, fail-closed) refuses an entry whose allocation is proven reduced: a kill-switch lower bound of KS-1 or
+  more (§9.2), a governed latency strictly above twice the tier budget (§1.16) or a proven state above SS-0 (§1.29). The
+  §1.6 health, §1.7, §1.11, §1.15, §1.17, §1.26 and §1.28 multipliers have no reading, so it never passes.
+
+The four checks read only the decision's own facts, so the sequential admission is unchanged, and every v1-v6 check
+outcome, payload and digest stays byte-identical. Every S1 entry is still refused, first by NT-D01 on the accepted worlds
+and by NT-R01 after a Data PASS.
+
 The evidence is digest-bound and paper-only. It proves no venue fact, edge, profitability, readiness or Stage-4
 completion. Exact arithmetic, no float, no ``decimal`` context, and no IO, clock, randomness, network or environment.
 """
@@ -261,6 +285,16 @@ from crypto_core.validation.governed_paper_regime_state import (
     GovernedPaperRegimeStatus,
     derive_governed_paper_regime_evidence,
 )
+from crypto_core.validation.governed_paper_system_state import (
+    GOVERNED_PAPER_SYSTEM_STATE_CONTRACT_ID,
+    GOVERNED_PAPER_SYSTEM_STATE_RULE_DIGEST,
+    GOVERNED_PAPER_SYSTEM_STATE_RULE_ID,
+    GovernedPaperSystemStateEvidence,
+    GovernedPaperSystemStateReading,
+    build_governed_paper_system_state_evidence,
+    derive_governed_paper_system_state_reading,
+    governed_paper_system_state_id,
+)
 from crypto_core.validation.historical_decision_run import HistoricalDecisionRun
 from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP,
@@ -291,9 +325,11 @@ from crypto_core.validation.historical_pit_dataset import (
     verify_historical_pit_dataset,
 )
 from crypto_core.validation.historical_position_management_policy import (
+    INITIAL_STOP_FRACTION,
     MAX_HOLD_NS,
     TIGHTENING_DEC9_READING_V1,
     HistoricalPositionManagementPolicy,
+    historical_position_management_initial_stop_fraction,
     verify_historical_position_management_policy,
 )
 from crypto_core.validation.strategy_executable_profiles import (
@@ -332,6 +368,14 @@ _WINDOW_NS = 5 * 60 * _NS_PER_SECOND  # NT-D05: UTC 5-minute windows (the NT-D01
 _BASELINE_WINDOWS = 30 * 24 * 12  # NT-D05: the 8640 completed windows of the 30 days before the target window
 _VOLUME_FLOOR = Fraction(5, 100)  # NT-D05: target volume strictly below 5% of the 30-day mean
 _INDEX_SLOT_NS = _NS_PER_SECOND  # index_one_per_utc_second.v1: at most one index value per UTC second
+# Rule set v7: PRDV4 §1.27 INTRADAY per-horizon limits (CL2-9) and the §1.16 position-size halving (SCALE-1).
+_HORIZON_POSITION_CAP = Fraction(8, 100)  # max single position 8% of NAV; the stricter of it and NT-R04's 25% binds
+_HORIZON_EXPOSURE_CAP = Fraction(40, 100)  # max total exposure 40% of NAV
+_HORIZON_CONCURRENT_POSITIONS = 8  # max concurrent positions
+_HORIZON_TURNOVER_TRADES = 20  # max turnover per day: 20 trades
+_SIZE_HALVING_LATENCY_MULTIPLE = 2  # §1.16 L > 2 x L_tier: reduce position size by 50%
+_DATA_CHECK_IDS: tuple[str, ...] = tuple(f"NT-D0{index}" for index in range(1, 6))
+_EXECUTION_CHECK_IDS: tuple[str, ...] = tuple(f"NT-X0{index}" for index in range(1, 5))
 _IMMUTABLE = "immutable_after_finalization"
 # The registry 1.0 semantics of the two market series, exactly as their only producer (authenticated_pit_ingress)
 # implements and enforces them on the bound EF-3 series record, field by field and by exact type. A public dataset can
@@ -369,6 +413,7 @@ GOVERNED_PAPER_ENTRY_SAFETY_PORTFOLIO_RULE_SET_ID = "governed-paper-entry-safety
 GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_ID = "governed-paper-entry-safety.v4"
 GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_ID = "governed-paper-entry-safety.v5"
 GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID = "governed-paper-entry-safety.v6"
+GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID = "governed-paper-entry-safety.v7"
 
 GOVERNED_PAPER_ENTRY_SAFETY_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
     ("paper_only", True),
@@ -564,6 +609,8 @@ class GovernedPaperEntrySafetyObservation:
     atr_reason: str = ""
     atr_window_digest: str | None = None
     stop_tightening_method_id: str | None = None
+    # Whether the protective policy is a policy v2 with the §1.27/§8.3 INTRADAY initial stop (read by rule set v7 only).
+    initial_stop_represented: bool = False
     # Rule set v3 only: the governed decision portfolio of the decision (absent without one, as in rule sets v1/v2).
     portfolio_present: bool = False
     portfolio_snapshot_digest: str | None = None
@@ -585,6 +632,9 @@ class GovernedPaperEntrySafetyObservation:
     kill_switch: GovernedPaperEntrySafetyKillSwitch | None = None
     # Rule set v6 only: the regime facts of the decision (absent without them, as in rule sets v1-v5).
     regime: GovernedPaperEntrySafetyRegime | None = None
+    # Rule set v7 only: the system-safety checks are evaluated on this decision (never in rule sets v1-v6). Their facts
+    # are derived from the observation itself (``governed_paper_entry_safety_system_state_reading``), never supplied.
+    system_safety: bool = False
 
 
 @dataclass(frozen=True)
@@ -675,8 +725,10 @@ class GovernedPaperEntrySafetyEvidence:
     profitability_proven: bool = False
     # Rule set v5 on: the proven lower-bound §1.19 ladder the evaluation read (never in a v1-v4 payload).
     kill_switch_ladder: GovernedPaperKillSwitchLadder | None = None
-    # Rule set v6 only: the derived regime evidence the evaluation read (never in a v1-v5 payload).
+    # Rule set v6 on: the derived regime evidence the evaluation read (never in a v1-v5 payload).
     regime_evidence: GovernedPaperRegimeEvidence | None = None
+    # Rule set v7 only: the derived §1.29 system-state lower bounds of its entries (never in a v1-v6 payload).
+    system_state_evidence: GovernedPaperSystemStateEvidence | None = None
 
 
 # --- helpers -----------------------------------------------------------------------------------------------------------
@@ -705,24 +757,32 @@ def _to_payload(artifact: object) -> dict[str, object]:
 
 
 def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, object]:
-    """The wire payload of one evaluation; a v1-v4 payload is exactly its accepted one and carries no ladder, and a
-    v1-v5 payload carries no regime evidence.
+    """The wire payload of one evaluation; a v1-v4 payload is exactly its accepted one and carries no ladder, a v1-v5
+    payload carries no regime evidence, and a v1-v6 payload carries no system-state evidence.
 
-    A legacy evidence holding either is never serialized (``ValueError``): a forged fact never hides behind it.
+    A legacy evidence holding any of them is never serialized (``ValueError``): a forged fact never hides behind it.
     """
 
     payload = _to_payload(evidence)
     if evidence.rule_set_id not in (
         GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID,
     ):
         if evidence.kill_switch_ladder is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_kill_switch_ladder")
         del payload["kill_switch_ladder"]
-    if evidence.rule_set_id != GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID:
+    if evidence.rule_set_id not in (
+        GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID,
+    ):
         if evidence.regime_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_regime_evidence")
         del payload["regime_evidence"]
+    if evidence.rule_set_id != GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID:
+        if evidence.system_state_evidence is not None:
+            raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_system_state_evidence")
+        del payload["system_state_evidence"]
     return payload
 
 
@@ -1136,6 +1196,157 @@ def _regime(check_id: str, legacy_reason: str) -> Callable[[_Observation], _Outc
     return evaluate
 
 
+# --- rule set v7: the §1.29 system state, the §1.27 INTRADAY stop and limits, and SCALE-1 --------------------------------
+
+
+def governed_paper_entry_safety_system_state_reading(
+    observation: GovernedPaperEntrySafetyObservation,
+) -> GovernedPaperSystemStateReading:
+    """The §1.29 proven lower bound of one rule set v7 decision, derived from its own observation (pure).
+
+    S1 and S2 read the decision's kill-switch facts: its proven level, and the drawdown triggers 2 and 11 proven at the
+    decision (a trigger outside ``unproven_trigger_ids`` is proven TRUE there; neither is ever not applicable). S4 and S5
+    read the statuses of this very observation's NT-D and NT-X checks, evaluated by the same functions the gate records.
+    S10 reads the governed latency against its tier budget, and S8 the single-instrument fact.
+    """
+
+    facts = observation.kill_switch
+    if facts is None:
+        raise _fail("observation_malformed:system_safety_without_the_kill_switch_facts")
+    by_id = {item.check_id: item for item in _CHECKS}
+    return derive_governed_paper_system_state_reading(
+        decision_sequence=observation.decision_sequence,
+        decision_time_ns=observation.decision_time_ns,
+        kill_switch_level=facts.level,
+        drawdown_beyond_10pct_proven="T2" not in facts.unproven_trigger_ids,
+        drawdown_beyond_15pct_proven="T11" not in facts.unproven_trigger_ids,
+        data_statuses=tuple((name, by_id[name].evaluate(observation).status.value) for name in _DATA_CHECK_IDS),
+        execution_statuses=tuple(
+            (name, by_id[name].evaluate(observation).status.value) for name in _EXECUTION_CHECK_IDS
+        ),
+        latency_ns=observation.latency_ns,
+        latency_budget_ns=_TIER_LATENCY_BUDGET_NS.get(observation.latency_tier_id),
+        single_instrument_portfolio=observation.single_instrument_portfolio,
+    )
+
+
+def _system_state(observation: _Observation) -> _Outcome:
+    """SYSTEM-STATE (rule set v7): FAIL on a proven state above SS-0 (Family B is T1), otherwise BLOCKED; never PASS."""
+
+    reading = governed_paper_entry_safety_system_state_reading(observation)
+    state = governed_paper_system_state_id(reading)
+    observed = f"lower_bound={state};shs_upper_bound={reading.shs_upper_bound}"
+    evidence = (reading.reading_digest,)
+    if reading.state_lower_bound >= 1:
+        reason = f"system_state_at_least_{state.lower()}_proven_by_{reading.state_reason}_family_b_t1_needs_ss0"
+        return _Outcome(_Status.FAIL, observed, reason, evidence)
+    unmeasured = "_".join(reading.unmeasured_signal_ids).lower()
+    reason = f"ss0_unprovable_signals_{unmeasured}_have_no_reading_and_no_signal_has_an_upper_bound"
+    return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, observed, reason, evidence)
+
+
+def _system_state_check(observation: _Observation) -> _Outcome:
+    """SYSTEM-STATE: the §1.29 lower bound under rule set v7, exactly the accepted rule set v6 reading otherwise."""
+
+    if observation.system_safety:
+        return _system_state(observation)
+    return _regime("SYSTEM-STATE", "system_state_not_produced")(observation)
+
+
+def _initial_stop(observation: _Observation) -> _Outcome:
+    """HZ-STOP (rule set v7, CL2-10): PASS only when the engine applies the §1.27/§8.3 initial stop beside the §1.9 stop."""
+
+    if not observation.protection_present:
+        return _Outcome(
+            _Status.BLOCKED_PROTECTION_UNREPRESENTABLE,
+            "",
+            "intraday_initial_stop_not_representable_on_the_selected_path",
+        )
+    if not observation.protective_window_covers or observation.protective_authority_digest is None:
+        return _Outcome(_Status.BLOCKED_PROTECTION_UNREPRESENTABLE, "", _HORIZON_NOT_COVERED)
+    if not observation.initial_stop_represented:
+        reason = "intraday_initial_stop_not_represented_by_the_position_management_policy"
+        return _Outcome(_Status.BLOCKED_PROTECTION_UNREPRESENTABLE, "", reason)
+    if not observation.atr_available or observation.atr_value is None or observation.atr_window_digest is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", f"atr_4h_unavailable:{observation.atr_reason}")
+    evidence = (observation.protective_authority_digest, observation.atr_window_digest)
+    reason = "nearer_of_the_1_5pct_initial_stop_and_the_atr_4h_stop_enforced_by_the_engine"
+    return _Outcome(_Status.PASS, _render_threshold(INITIAL_STOP_FRACTION), reason, evidence)
+
+
+def _horizon_limits(observation: _Observation) -> _Outcome:
+    """HZ-LIMITS (rule set v7, CL2-9): the §1.27 INTRADAY limits; FAIL on a proven breach, otherwise BLOCKED.
+
+    The single position is NT-R04's own measurement (the current share at the fresh mark, then an entry candidate's share
+    at the mark net of its own taker fee) against the stricter INTRADAY 8%. On the single-instrument paper portfolio the
+    total exposure is that one position (so 40% never binds before 8%) and at most one position is open (so 8 concurrent
+    never binds). The 20 trades per day has no defined reading of a trade or of the day, so the check never passes.
+    """
+
+    measured = _measured_portfolio(observation, "portfolio_position_not_measured_at_the_decision_instant")
+    if isinstance(measured, _Outcome):
+        return measured
+    evidence = measured.evidence
+    nav_text, mark_text = observation.portfolio_nav, observation.portfolio_mark_price
+    if nav_text is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", _nav_unavailable(observation), evidence)
+    nav = Fraction(nav_text)
+    if nav <= 0:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "nav_not_positive", evidence)
+    share = Fraction(0) if mark_text is None else abs(measured.quantity) * Fraction(mark_text) / nav
+    observed = historical_execution_render_amount(share)
+    if observed is None:
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "position_share_unrepresentable", evidence)
+    if share > _HORIZON_POSITION_CAP:
+        return _Outcome(_Status.FAIL, observed, "single_position_above_the_intraday_8pct_of_nav", evidence)
+    if measured.entry:
+        candidate_text = observation.candidate_nav
+        if candidate_text is None or mark_text is None:
+            reason = f"candidate_nav_unavailable:{observation.candidate_nav_reason}"
+            return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", reason, evidence)
+        candidate_nav = Fraction(candidate_text)
+        if candidate_nav <= 0:
+            return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "candidate_nav_not_positive", evidence)
+        share = abs(measured.candidate) * Fraction(mark_text) / candidate_nav
+        observed = historical_execution_render_amount(share)
+        if observed is None:
+            return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "candidate_share_unrepresentable", evidence)
+        if share > _HORIZON_POSITION_CAP:
+            return _Outcome(_Status.FAIL, observed, "candidate_position_above_the_intraday_8pct_of_nav", evidence)
+    reason = "intraday_turnover_of_20_trades_per_day_has_no_defined_reading"
+    return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, observed, reason, evidence)
+
+
+def _scale(observation: _Observation) -> _Outcome:
+    """SCALE-1 (rule set v7, CL2-11): FAIL on any allocation multiplier proven below 1, otherwise BLOCKED; never PASS.
+
+    The reserved entry size is fixed, so no reduced allocation is representable: an entry is admissible only when every
+    multiplier is proven 1. The proven ones read here are the §9.2 kill-switch multiplier (0.5 at KS-1, 0 from KS-2),
+    the §1.16 halving of the position size above twice the tier latency budget and the §1.29 allocation of a state above
+    SS-0. The §1.6 health multiplier needs an edge health score of at least 0.70, which nothing produces.
+    """
+
+    facts = observation.kill_switch
+    if facts is None:  # pragma: no cover - rule set v7 always carries the kill-switch facts
+        return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", "kill_switch_lower_bound_not_produced")
+    if facts.level >= 1:
+        reason = f"kill_switch_lower_bound_ks_{facts.level}_allocation_multiplier_below_1"
+        return _Outcome(_Status.FAIL, str(facts.level), reason, (facts.ladder_digest,))
+    budget = _TIER_LATENCY_BUDGET_NS.get(observation.latency_tier_id)
+    if budget is not None and observation.latency_ns > _SIZE_HALVING_LATENCY_MULTIPLE * budget:
+        reason = "latency_above_2x_the_tier_budget_halves_the_position_size"
+        return _Outcome(_Status.FAIL, str(observation.latency_ns), reason)
+    reading = governed_paper_entry_safety_system_state_reading(observation)
+    if reading.state_lower_bound >= 1:
+        state = governed_paper_system_state_id(reading)
+        reason = f"system_state_at_least_{state.lower()}_reduces_the_allocation"
+        return _Outcome(_Status.FAIL, state, reason, (reading.reading_digest,))
+    reason = (
+        "allocation_multipliers_unproven_edge_health_meta_layer_crowding_capacity_regime_dimensions_margin_and_kelly"
+    )
+    return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", reason, (facts.ladder_digest, reading.reading_digest))
+
+
 _D, _R, _M, _E, _X, _T, _B = (
     _Family.DATA,
     _Family.RISK,
@@ -1381,7 +1592,31 @@ _REGIME_CHECKS: tuple[_Check, ...] = (
         _B,
         "PRDV4 §1.29 global system state (Family B is T1, §1.16)",
         "system_state_ss0_normal",
-        _family_b(_regime("SYSTEM-STATE", "system_state_not_produced")),
+        _family_b(_system_state_check),
+    ),
+)
+# Rule set v7 only: evaluated after every check above, and only on a decision that carries the system-safety flag.
+_SYSTEM_SAFETY_CHECKS: tuple[_Check, ...] = (
+    _Check(
+        "HZ-STOP",
+        _B,
+        "PRDV4 §1.27/§8.3 INTRADAY initial stop (CL2-10: the nearer stop binds)",
+        "stop_loss_1.5pct_from_entry_the_nearer_of_the_initial_and_atr_stops_binds",
+        _family_b(_initial_stop),
+    ),
+    _Check(
+        "HZ-LIMITS",
+        _B,
+        "PRDV4 §1.27 INTRADAY per-horizon position limits (CL2-9)",
+        "single_position_gt_8pct_or_total_exposure_gt_40pct_of_nav_or_more_than_8_positions_or_more_than_20_trades_per_day",
+        _family_b(_horizon_limits),
+    ),
+    _Check(
+        "SCALE-1",
+        _B,
+        "PRDV4 §1.5-§1.7, §1.11, §1.15-§1.19, §1.26, §1.28, §1.29 and §9 allocation multipliers (CL2-11: fail-closed)",
+        "every_allocation_multiplier_proven_1",
+        _family_b(_scale),
     ),
 )
 
@@ -1393,6 +1628,7 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
     market_data: bool = False,
     kill_switch: bool = False,
     regime: bool = False,
+    system_safety: bool = False,
 ) -> dict[str, object]:
     """The rule set this module evaluates: every check, in order, with its PRDV4 clause and published threshold.
 
@@ -1405,7 +1641,9 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
     ``market_data=True``) is rule set v5: rule set v4 with NT-R01 and NT-T02 read on the proven lower-bound §1.19 ladder
     (``S1_KILL_SWITCH_PROVEN_ESCALATION_CLOSURE_V1``). ``regime=True`` (only with ``kill_switch=True``) is rule set v6:
     rule set v5 with the Family B regime, trend and activation readings of the derived regime evidence and the three
-    appended checks (``S1_FAMILY_B_REGIME_TREND_ACTIVATION_GATE_CLOSURE_V1``).
+    appended checks (``S1_FAMILY_B_REGIME_TREND_ACTIVATION_GATE_CLOSURE_V1``). ``system_safety=True`` (only with
+    ``regime=True``) is rule set v7: rule set v6 with SYSTEM-STATE read on the §1.29 proven lower bound and HZ-STOP,
+    HZ-LIMITS and SCALE-1 appended (``S1_INTEGRATED_RISK_AND_SYSTEM_SAFETY_CLOSURE_V1``).
     """
 
     if portfolio and not protective:
@@ -1416,6 +1654,8 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
         raise _fail("kill_switch_rule_set_needs_the_market_data_rule_set")
     if regime and not kill_switch:
         raise _fail("regime_rule_set_needs_the_kill_switch_rule_set")
+    if system_safety and not regime:
+        raise _fail("system_safety_rule_set_needs_the_regime_rule_set")
 
     rule_set: dict[str, object] = {
         "rule_set_id": GOVERNED_PAPER_ENTRY_SAFETY_RULE_SET_ID,
@@ -1563,6 +1803,49 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
                 "regime_check_ids": list(GOVERNED_PAPER_REGIME_CHECK_IDS),
             },
         )
+    if system_safety:
+        rule_set.update(
+            rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID,
+            contract_id=GOVERNED_PAPER_SYSTEM_STATE_CONTRACT_ID,
+            checks=[
+                *rule_set["checks"],  # type: ignore[misc]
+                *(
+                    {
+                        "check_id": item.check_id,
+                        "family": item.family.value,
+                        "clause": item.clause,
+                        "threshold": item.threshold,
+                    }
+                    for item in _SYSTEM_SAFETY_CHECKS
+                ),
+            ],
+            system_safety_rule={
+                "methodology": f"{GOVERNED_PAPER_REGIME_METHODOLOGY_ID}:{GOVERNED_PAPER_REGIME_METHODOLOGY_REVISION}",
+                "implemented_items": ["CL2-7", "CL2-9", "CL2-10", "CL2-11"],
+                "unread_items": ["CL2-8"],
+                "excluded_items": ["CL1-14", "CL2-12", "CL2-13"],
+                "system_state_rule_id": GOVERNED_PAPER_SYSTEM_STATE_RULE_ID,
+                "system_state_rule_digest": GOVERNED_PAPER_SYSTEM_STATE_RULE_DIGEST,
+                "SYSTEM-STATE": "fails_on_a_proven_state_above_ss0_family_b_is_t1_otherwise_blocked_never_pass",
+                "HZ-STOP": "pass_when_the_horizon_is_covered_the_policy_v2_applies_the_1_5pct_initial_stop_beside_the_"
+                "atr_stop_the_nearer_binding_and_the_dec7_atr_4h_reading_at_t_is_available",
+                "HZ-LIMITS": "fails_when_the_nt_r04_single_position_or_entry_candidate_share_is_strictly_above_8pct_"
+                "otherwise_blocked_the_20_trades_per_day_has_no_defined_reading_never_pass",
+                "HZ-LIMITS_implied": "on_the_single_instrument_paper_portfolio_the_total_exposure_is_the_one_position_"
+                "and_at_most_one_position_is_open",
+                "SCALE-1": "fails_on_a_kill_switch_lower_bound_of_ks_1_or_more_a_latency_above_twice_the_tier_budget_"
+                "or_a_proven_state_above_ss0_otherwise_blocked_never_pass",
+                "SCALE-1_unproven": "edge_health_alpha_meta_layer_weights_crowding_capacity_tiers_leverage_and_"
+                "liquidity_impacts_margin_and_dtl_bands_and_kelly",
+                "single_position_cap": _render_threshold(_HORIZON_POSITION_CAP),
+                "total_exposure_cap": _render_threshold(_HORIZON_EXPOSURE_CAP),
+                "concurrent_positions_cap": _HORIZON_CONCURRENT_POSITIONS,
+                "turnover_trades_per_day_cap": _HORIZON_TURNOVER_TRADES,
+                "initial_stop_fraction": _render_threshold(INITIAL_STOP_FRACTION),
+                "size_halving_latency_multiple": _SIZE_HALVING_LATENCY_MULTIPLE,
+                "admission": "the_new_checks_read_only_the_decisions_own_facts_the_sequential_fixed_point_is_unchanged",
+            },
+        )
     return rule_set
 
 
@@ -1580,6 +1863,7 @@ def governed_paper_entry_safety_rule_set_digest(  # noqa: PLR0913
     market_data: bool = False,
     kill_switch: bool = False,
     regime: bool = False,
+    system_safety: bool = False,
 ) -> str:
     return edge_sha256_text(
         edge_canonical_json(
@@ -1589,6 +1873,7 @@ def governed_paper_entry_safety_rule_set_digest(  # noqa: PLR0913
                 market_data=market_data,
                 kill_switch=kill_switch,
                 regime=regime,
+                system_safety=system_safety,
             )
         )
     )
@@ -1619,6 +1904,12 @@ GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET = governed_paper_entry_safety_rule_s
 )
 GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(
     protective=True, portfolio=True, market_data=True, kill_switch=True, regime=True
+)
+GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET = governed_paper_entry_safety_rule_set(
+    protective=True, portfolio=True, market_data=True, kill_switch=True, regime=True, system_safety=True
+)
+GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(
+    protective=True, portfolio=True, market_data=True, kill_switch=True, regime=True, system_safety=True
 )
 
 
@@ -1664,6 +1955,15 @@ def _canonical_observation(observation: object) -> GovernedPaperEntrySafetyObser
     _canonical_market_data(observation)
     _canonical_kill_switch(observation)
     _canonical_regime(observation)
+    if type(observation.system_safety) is not bool:
+        raise _fail("observation_malformed:system_safety")
+    if observation.system_safety:
+        if observation.regime is None or not observation.portfolio_present:
+            raise _fail("observation_malformed:system_safety_without_the_regime_facts")
+        # a drawdown beyond 15% is beyond 10%: the ladder proves trigger 11 only together with trigger 2
+        unproven = observation.kill_switch.unproven_trigger_ids  # type: ignore[union-attr]
+        if "T11" not in unproven and "T2" in unproven:
+            raise _fail("observation_malformed:kill_switch_drawdown_proofs_inconsistent")
     return observation
 
 
@@ -1776,7 +2076,7 @@ def _canonical_candidate_facts(
 def _canonical_protection_facts(observation: GovernedPaperEntrySafetyObservation) -> None:
     """The protective facts are exact types, consistent, and absent (their defaults) without a protective context."""
 
-    for name in ("protection_present", "protective_window_covers", "atr_available"):
+    for name in ("protection_present", "protective_window_covers", "atr_available", "initial_stop_represented"):
         if type(getattr(observation, name)) is not bool:
             raise _fail(f"observation_malformed:{name}")
     for name in ("protective_authority_digest", "atr_window_digest"):
@@ -1803,6 +2103,7 @@ def _canonical_protection_facts(observation: GovernedPaperEntrySafetyObservation
         or observation.protective_authority_digest is not None
         or observation.atr_available
         or method is not None
+        or observation.initial_stop_represented
     ):
         raise _fail("observation_malformed:protective_facts_without_a_protective_context")
     if observation.protection_present and method is None:
@@ -1985,7 +2286,11 @@ def evaluate_governed_paper_entry_safety(
     observation = _canonical_observation(observation)
     checks: list[GovernedPaperEntrySafetyCheck] = []
     first: GovernedPaperEntrySafetyCheck | None = None
-    for item in (*_CHECKS, *(_REGIME_CHECKS if observation.regime is not None else ())):
+    for item in (
+        *_CHECKS,
+        *(_REGIME_CHECKS if observation.regime is not None else ()),
+        *(_SYSTEM_SAFETY_CHECKS if observation.system_safety else ()),
+    ):
         outcome = item.evaluate(observation)
         check = GovernedPaperEntrySafetyCheck(
             check_id=item.check_id,
@@ -2083,6 +2388,7 @@ def _protection_facts(
         "atr_reason": reading.reason,
         "atr_window_digest": reading.window_digest,
         "stop_tightening_method_id": policy.stop_tightening_method_id,
+        "initial_stop_represented": historical_position_management_initial_stop_fraction(policy) is not None,
     }
 
 
@@ -2643,6 +2949,7 @@ def build_governed_paper_entry_safety_evidence(
     market_data: bool = False,
     kill_switch: bool = False,
     regime: GovernedPaperEntrySafetyRegimeContext | None = None,
+    system_safety: bool = False,
 ) -> GovernedPaperEntrySafetyEvidence:
     """Evaluate every entry decision of ``run`` over the archive ``dataset`` it was built from (see the module docstring).
 
@@ -2655,8 +2962,10 @@ def build_governed_paper_entry_safety_evidence(
     archive as the kline feed candidate. ``kill_switch=True`` (rule set v5, only with ``market_data``) reads NT-R01 and
     NT-T02 on the proven lower-bound §1.19 ladder of the same governed re-run. ``regime`` (rule set v6, only with
     ``kill_switch``) is the verified regime context the day seal supplies: the evaluation derives its regime evidence over
-    ``[G, run end)`` from it and the archive, and reads every entry's regime facts from that evidence. A malformed or
-    foreign input raises ``GovernedPaperEntrySafetyError``. Pure.
+    ``[G, run end)`` from it and the archive, and reads every entry's regime facts from that evidence.
+    ``system_safety=True`` (rule set v7, only with ``regime``) evaluates SYSTEM-STATE on the §1.29 proven lower bound and
+    appends HZ-STOP, HZ-LIMITS and SCALE-1; the evidence binds the derived system-state readings of every entry. A
+    malformed or foreign input raises ``GovernedPaperEntrySafetyError``. Pure.
     """
 
     if type(authority) is not GovernedPaperGenesisAuthority:
@@ -2675,6 +2984,10 @@ def build_governed_paper_entry_safety_evidence(
         raise _fail("regime_context_malformed")
     if regime is not None and not kill_switch:
         raise _fail("regime_without_the_kill_switch_rule_set")
+    if type(system_safety) is not bool:
+        raise _fail("system_safety_flag_malformed")
+    if system_safety and regime is None:
+        raise _fail("system_safety_without_the_regime_rule_set")
     genesis = authority.genesis
     protection = _canonical_protection(protection, instrument=genesis.instrument)
     if run.status is not EdgeEvidenceStatus.READY or run.gate_verdict is not EdgeGateVerdict.PASS:
@@ -2736,6 +3049,7 @@ def build_governed_paper_entry_safety_evidence(
             raise _fail("regime_evidence_not_derivable") from exc
         readings = {item.decision_sequence: item for item in regime_evidence.readings}
     decisions: list[GovernedPaperEntrySafetyDecision] = []
+    system_states: list[GovernedPaperSystemStateReading] = []
     for decision in run.decisions:
         if decision.resulting_direction not in _ENTRY_DIRECTIONS:
             continue
@@ -2774,12 +3088,17 @@ def build_governed_paper_entry_safety_evidence(
             regime=None
             if regime_evidence is None
             else GovernedPaperEntrySafetyRegime(readings[decision.decision_sequence], regime_evidence.evidence_digest),
+            system_safety=system_safety,
         )
         decisions.append(evaluate_governed_paper_entry_safety(observation))
+        if system_safety:  # the same derivation the decision's SYSTEM-STATE and SCALE-1 read
+            system_states.append(governed_paper_entry_safety_system_state_reading(observation))
     protective, measured = protection is not None, snapshots is not None
     seed = GovernedPaperEntrySafetyEvidence(
         schema_version=_SCHEMA_VERSION,
-        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID
+        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID
+        if system_safety
+        else GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID
         if regime is not None
         else GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_ID
         if kill_switch
@@ -2796,6 +3115,7 @@ def build_governed_paper_entry_safety_evidence(
             market_data=market_data,
             kill_switch=kill_switch,
             regime=regime is not None,
+            system_safety=system_safety,
         ),
         genesis_id=genesis.genesis_id,
         genesis_digest=genesis.genesis_digest,
@@ -2813,6 +3133,11 @@ def build_governed_paper_entry_safety_evidence(
         evidence_digest="",
         kill_switch_ladder=ladder,
         regime_evidence=regime_evidence,
+        system_state_evidence=build_governed_paper_system_state_evidence(
+            instrument=genesis.instrument, readings=system_states
+        )
+        if system_safety
+        else None,
     )
     return replace(seed, evidence_digest=edge_payload_digest(_evidence_payload(seed), _DIGEST_FIELD))
 

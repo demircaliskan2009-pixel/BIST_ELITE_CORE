@@ -469,3 +469,36 @@ Family B regime, trend and activation (`S1_FAMILY_B_REGIME_TREND_ACTIVATION_GATE
 - admission effect: none. Every S1 entry is still refused, first by NT-D01 on the accepted worlds and by NT-R01 after a
   Data PASS. M1 (a qualified MARK and depth-50 source), D1, rights, C1-C9, CL2-8..CL2-11 readings and the kill-switch
   H1-H6 stay open, and REAL_PAPER_EXECUTION stays BLOCKED. Every value in the tests is synthetic.
+
+Integrated risk and system safety (`S1_INTEGRATED_RISK_AND_SYSTEM_SAFETY_CLOSURE_V1`, recorded 2026-11-04):
+
+- it consumes the remaining structural interpretations of methodology r2 that need no external fact: CL2-7 (R29: Family
+  B is T1 and needs a proven SS-0), CL2-9 (the §1.27 INTRADAY limits apply to S1), CL2-10 (the §1.27/§8.3 stop applies
+  and the nearer stop binds) and CL2-11 (SCALE-1 fail-closed). CL2-8 (the funding-dimension interval) needs D1 and
+  stays unread; CL1-14, CL2-12 and CL2-13 stay excluded. A design approval is not production permission;
+- the one engine applies a position-management policy v2 (`historical-position-management.v2`): beside the §1.9
+  `1.5 x ATR_4h` stop it applies the PRDV4 §1.27/§8.3 INTRADAY initial stop of 1.5% from the opening fill price, and at
+  every milestone the nearer stop binds; the DEC-9 reading, where applied, tightens the ATR distance alone, and a LONG
+  stop is always positive. The trigger, the close-only standing obligation and the fill model are unchanged, and every
+  v1 policy, payload and economics result stays byte-identical;
+- `governed_paper_system_state.py` is the ONE §1.29 system-state authority of the governed paper path: at each entry
+  decision it derives only a proven LOWER BOUND of the state from the kill-switch level and drawdown proofs (S1, S2), the
+  decision's own NT-D and NT-X outcomes (S4, S5) and the governed latency (S10), with the PRDV4 weights, entry thresholds
+  and critical overrides. CVaR (S3), liquidity (S6), feature drift (S7) and margin utilization (S9: no paper wallet model,
+  no D1 margin facts, NAV never substituted) have no reading, so SS-0 is never proven; no persistence and no state
+  between decisions are claimed. Its per-state actions are recorded as obligations: entry refusals are enforced by the
+  refusal itself, a reduced allocation is refused through SCALE-1, and every position, order or engine action (stop
+  tightening, TWAP reduction or exit, cancellation, flattening, engine disable) is BLOCKED_UNREPRESENTABLE, never
+  executed;
+- entry gate rule set v7 (on top of v6) reads SYSTEM-STATE on that bound (FAIL above SS-0, otherwise BLOCKED) and appends
+  HZ-STOP (PASSes only under a policy v2), HZ-LIMITS (NT-R04's single-position measurement against the stricter INTRADAY
+  8%; the total-exposure and concurrency limits cannot bind first on the single-instrument portfolio; the 20 trades per
+  day has no defined reading, so it never passes) and SCALE-1 (FAILs on a kill-switch lower bound of KS-1 or more, a
+  latency above twice the tier budget or a proven state above SS-0; the §1.6 health, §1.7, §1.11, §1.15, §1.17, §1.26
+  and §1.28 multipliers have no reading, so it never passes). Day seal v8 and lineage evidence v8 bind the system-state
+  evidence; every v1-v7 artifact and rule sets v1-v6 stay byte-identical;
+- admission effect: none. Every S1 entry is still refused, first by NT-D01 on the accepted worlds and by NT-R01 after a
+  Data PASS. HZ-STOP is the only new PASS-capable check. The §1.27 turnover reading, the §1.12 M2 depth-sizing and
+  §1.11 M2 readings, NT-R03, the CVaR, liquidity and drift methodologies, the paper wallet and margin model, BOOT-1 and the
+  EHS, the KS-1..KS-3 and system-state position mechanics, M1, D1, rights and C1-C9 stay open, and
+  REAL_PAPER_EXECUTION stays BLOCKED. Every value in the tests is synthetic.
