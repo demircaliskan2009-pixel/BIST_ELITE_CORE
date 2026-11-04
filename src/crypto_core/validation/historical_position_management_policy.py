@@ -40,6 +40,23 @@ Method authority. Every method id this module implements carries its authority:
 A policy that does not apply the time-decay stop is never §1.9-complete. Under either choice the paper entry gate keeps
 FB-STOP-TIGHTENING blocked (``governed_paper_entry_safety``).
 
+Policy v2 (``S1_INTEGRATED_RISK_AND_SYSTEM_SAFETY_CLOSURE_V1``; ``build_historical_position_management_policy_v2``) adds
+the PRDV4 §1.27 / §8.3 INTRADAY initial stop to the same policy, as the human-approved interpretation CL2-10 of
+``S1_COMPLETE_ENTRY_METHODOLOGY_DECISION_V1`` r2 reads it: the §1.27/§8.3 stop applies to the Family B INTRADAY horizon
+and the nearer stop binds.
+
+* The initial stop is ``1.5%`` from the excursion's opening fill price (PRDV4 doctrine: §1.27 "stop-loss from entry",
+  INTRADAY 1.5%; §8.3 "initial stop (per-horizon)", INTRA 1.5%), on the same basis as the §1.9 stop.
+* The two stops are separate: at every milestone the effective distance is the lesser of the ATR distance and the
+  initial distance, and the stop in force is the one that lies nearer the basis. The DEC-9 reading, where a policy applies
+  it, tightens the §1.9 ATR distance alone; the initial distance never moves. Both distances are non-increasing, so the
+  stop never loosens.
+* The trigger, the close-only standing obligation and the fill model are the v1 rules. The ATR stays mandatory: an entry
+  without a DEC-7 reading is refused exactly as under v1. The effective distance never exceeds 1.5% of the basis, so the
+  stop in force of a LONG excursion is always positive and the v1 refusal of a non-positive LONG stop never applies.
+
+A v1 policy, payload, digest and rule set stay byte-identical: a v1 payload never carries a v2 field.
+
 ``HistoricalPositionManagementApproval`` binds the exact policy digest, the rule-set digest, the instrument, the
 authenticated StrategySpec digest and the adopted OHLC source declaration digest. Matching is decided by the consumer
 (the economics result). Deterministic and pure: no IO, clock, randomness, network or environment. It proves no edge,
@@ -71,6 +88,8 @@ from crypto_core.validation.historical_execution_economics_policy import (
 from crypto_core.validation.historical_ohlc_bar_archive import WILDER_ATR_METHOD_ID, HistoricalOhlcPriceSemantics
 
 _SCHEMA_VERSION = "historical-position-management-policy.v1"
+# Policy v2: the v1 policy with the PRDV4 §1.27/§8.3 INTRADAY initial stop (CL2-10, the nearer stop binds).
+_SCHEMA_VERSION_V2 = "historical-position-management-policy.v2"
 _PREFIX = "historical_position_management_policy"
 _DIGEST_FIELD = "policy_digest"
 _HOUR_NS = 3_600_000_000_000
@@ -84,6 +103,10 @@ EVENT_PRIORITY_RULE_V1 = "funding_then_protective_then_decision_then_fill_then_v
 RE_ENTRY_RULE_V1 = "fresh_entry_admission_after_a_protective_close_v1"
 TIGHTENING_DEC9_READING_V1 = "PRDV4_1_9_TIGHTEN_GEOMETRIC_0_8_PER_COMPLETE_8H_FROM_FIRST_OPEN_FILL_V1"
 TIGHTENING_NOT_APPLIED_PENDING_DEC9 = "TIGHTENING_NOT_APPLIED_PENDING_DEC9"
+# Policy v2 only: the §1.27/§8.3 INTRADAY initial stop and the CL2-10 binding rule.
+INITIAL_STOP_RULE_V1 = "PRDV4_1_27_8_3_INTRADAY_INITIAL_STOP_1_5PCT_FROM_OPENING_FILL_PRICE_V1"
+STOP_BINDING_RULE_V1 = "CL2_10_THE_NEARER_OF_THE_INITIAL_STOP_AND_THE_ATR_STOP_BINDS_V1"
+INITIAL_STOP_HORIZON = "INTRADAY"  # PRDV4 §1.27: Funding (B) is an INTRADAY edge family
 
 # PRDV4 §1.9 doctrine values: published, never governed parameters.
 MAX_HOLD_NS = 24 * _HOUR_NS
@@ -92,6 +115,8 @@ ATR_INTERVAL_NS = 4 * _HOUR_NS
 ATR_PERIOD = 14
 TIGHTENING_PERIOD_NS = 8 * _HOUR_NS
 TIGHTENING_FACTOR = Fraction(4, 5)
+# PRDV4 §1.27 INTRADAY "stop-loss from entry" and §8.3 "initial stop (per-horizon)" INTRA: 1.5% (policy v2 only).
+INITIAL_STOP_FRACTION = Fraction(3, 200)
 
 
 class PositionManagementMethodAuthority(str, Enum):
@@ -148,6 +173,38 @@ POSITION_MANAGEMENT_RULE_SET: dict[str, object] = {
 POSITION_MANAGEMENT_RULE_SET_DIGEST = edge_sha256_text(edge_canonical_json(POSITION_MANAGEMENT_RULE_SET))
 POSITION_MANAGEMENT_RULE_SET_ID = str(POSITION_MANAGEMENT_RULE_SET["rule_set_id"])
 
+# Policy v2: every v1 method keeps its authority; the 1.5% value is PRDV4 doctrine and the binding rule is the human's
+# construction approval CL2-10 (S1_COMPLETE_ENTRY_METHODOLOGY_DECISION_V1 r2). The v1 table above is never extended, so
+# the v1 rule set and its digest stay byte-identical.
+POSITION_MANAGEMENT_V2_METHOD_AUTHORITY: dict[str, PositionManagementMethodAuthority] = {
+    **POSITION_MANAGEMENT_METHOD_AUTHORITY,
+    INITIAL_STOP_RULE_V1: PositionManagementMethodAuthority.PRDV4_DOCTRINE,
+    STOP_BINDING_RULE_V1: PositionManagementMethodAuthority.HUMAN_AUTHORIZED,
+}
+POSITION_MANAGEMENT_V2_RULE_SET: dict[str, object] = {
+    **POSITION_MANAGEMENT_RULE_SET,
+    "rule_set_id": "historical-position-management.v2",
+    "contract_id": "S1_INTEGRATED_RISK_AND_SYSTEM_SAFETY_CLOSURE_V1",
+    "authorities": [
+        "PRDV4 §1.9",
+        "DEC-1 protective close-only authority",
+        "DEC-7 Wilder ATR(14)",
+        "PRDV4 §1.27 INTRADAY stop-loss from entry",
+        "PRDV4 §8.3 initial stop per horizon",
+        "CL2-10 S1_COMPLETE_ENTRY_METHODOLOGY_DECISION_V1 r2: the nearer stop binds",
+    ],
+    "initial_stop_rule_id": INITIAL_STOP_RULE_V1,
+    "initial_stop_horizon": INITIAL_STOP_HORIZON,
+    "initial_stop_fraction": _render(INITIAL_STOP_FRACTION),
+    "initial_stop_basis": "executed_price_of_the_opening_fill",
+    "stop_binding_rule_id": STOP_BINDING_RULE_V1,
+    "stop_binding": "at_every_milestone_the_effective_distance_is_the_lesser_of_the_atr_distance_and_the_initial_distance",
+    "stop_binding_tightening": "the_dec9_reading_tightens_the_atr_distance_alone_and_the_initial_distance_never_moves",
+    "method_authority": {key: value.value for key, value in sorted(POSITION_MANAGEMENT_V2_METHOD_AUTHORITY.items())},
+}
+POSITION_MANAGEMENT_V2_RULE_SET_DIGEST = edge_sha256_text(edge_canonical_json(POSITION_MANAGEMENT_V2_RULE_SET))
+POSITION_MANAGEMENT_V2_RULE_SET_ID = str(POSITION_MANAGEMENT_V2_RULE_SET["rule_set_id"])
+
 
 class HistoricalPositionManagementPolicyError(EdgeArtifactError):
     """Malformed input or a value outside the code-defined rule set: a policy is never represented over it."""
@@ -180,6 +237,14 @@ class HistoricalPositionManagementPolicy:
     event_priority_rule_id: str
     re_entry_rule_id: str
     policy_digest: str
+    # Policy v2 only (the §1.27/§8.3 INTRADAY initial stop, CL2-10): empty on v1, and a v1 payload never carries them.
+    initial_stop_rule_id: str = ""
+    initial_stop_horizon: str = ""
+    initial_stop_fraction: str = ""
+    stop_binding_rule_id: str = ""
+
+
+_V2_FIELDS = ("initial_stop_rule_id", "initial_stop_horizon", "initial_stop_fraction", "stop_binding_rule_id")
 
 
 @dataclass(frozen=True)
@@ -250,6 +315,22 @@ def _to_payload(artifact: object) -> dict[str, object]:
     return {item.name: _serialize(getattr(artifact, item.name)) for item in fields(artifact)}  # type: ignore[arg-type]
 
 
+def _policy_payload(policy: object) -> dict[str, object]:
+    """The wire payload of one policy: a v1 policy carries exactly its accepted v1 fields.
+
+    A v1 policy that holds a non-empty v2 field is never serialized (``ValueError``): a v2 rule never hides behind a v1
+    payload.
+    """
+
+    payload = _to_payload(policy)
+    if getattr(policy, "schema_version", None) != _SCHEMA_VERSION_V2:
+        for name in _V2_FIELDS:
+            if payload[name] != "":
+                raise ValueError(_reason(f"legacy_schema_carries_an_extension_field:{name}"))
+            del payload[name]
+    return payload
+
+
 _CODE_DEFINED: dict[str, object] = {
     "schema_version": _SCHEMA_VERSION,
     "rule_set_id": POSITION_MANAGEMENT_RULE_SET_ID,
@@ -268,6 +349,17 @@ _CODE_DEFINED: dict[str, object] = {
     "event_priority_rule_id": EVENT_PRIORITY_RULE_V1,
     "re_entry_rule_id": RE_ENTRY_RULE_V1,
 }
+# Policy v2: the v1 code-defined values with its own schema and rule set, and the initial stop's code-defined values.
+_CODE_DEFINED_V2: dict[str, object] = {
+    **_CODE_DEFINED,
+    "schema_version": _SCHEMA_VERSION_V2,
+    "rule_set_id": POSITION_MANAGEMENT_V2_RULE_SET_ID,
+    "rule_set_digest": POSITION_MANAGEMENT_V2_RULE_SET_DIGEST,
+    "initial_stop_rule_id": INITIAL_STOP_RULE_V1,
+    "initial_stop_horizon": INITIAL_STOP_HORIZON,
+    "initial_stop_fraction": _render(INITIAL_STOP_FRACTION),
+    "stop_binding_rule_id": STOP_BINDING_RULE_V1,
+}
 
 
 def _assemble_policy(
@@ -278,8 +370,9 @@ def _assemble_policy(
     atr_bar_price_semantics: object,
     atr_max_bar_age_ns: object,
     stop_tightening_method_id: object,
+    initial_stop: bool = False,
 ) -> HistoricalPositionManagementPolicy:
-    """The one policy assembly path, shared by the builder and the verifier."""
+    """The one policy assembly path, shared by the builders and the verifier (``initial_stop`` selects policy v2)."""
 
     if type(atr_bar_price_semantics) is not HistoricalOhlcPriceSemantics:
         raise _fail("atr_bar_price_semantics_invalid")
@@ -295,9 +388,9 @@ def _assemble_policy(
         atr_max_bar_age_ns=atr_max_bar_age_ns,  # type: ignore[arg-type]
         stop_tightening_method_id=stop_tightening_method_id,
         policy_digest="",
-        **_CODE_DEFINED,  # type: ignore[arg-type]
+        **(_CODE_DEFINED_V2 if initial_stop else _CODE_DEFINED),  # type: ignore[arg-type]
     )
-    return replace(seed, policy_digest=edge_payload_digest(_to_payload(seed), _DIGEST_FIELD))
+    return replace(seed, policy_digest=edge_payload_digest(_policy_payload(seed), _DIGEST_FIELD))
 
 
 def build_historical_position_management_policy(
@@ -324,16 +417,42 @@ def build_historical_position_management_policy(
     )
 
 
-def historical_position_management_policy_to_dict(policy: HistoricalPositionManagementPolicy) -> dict[str, object]:
-    """Canonical JSON-ready mapping of a policy, including its self-digest."""
+def build_historical_position_management_policy_v2(
+    *,
+    policy_id: str,
+    policy_version: str,
+    instrument: str,
+    atr_bar_price_semantics: HistoricalOhlcPriceSemantics,
+    atr_max_bar_age_ns: int,
+    stop_tightening_method_id: str,
+) -> HistoricalPositionManagementPolicy:
+    """Build one policy v2: the v1 policy with the PRDV4 §1.27/§8.3 INTRADAY initial stop, the nearer stop binding.
 
-    return _to_payload(policy)
+    The governed inputs are exactly the v1 builder's, with no default; the initial stop's rule identities and its 1.5%
+    value are code-defined. A malformed or unsupported governed input raises ``HistoricalPositionManagementPolicyError``.
+    """
+
+    return _assemble_policy(
+        policy_id=policy_id,
+        policy_version=policy_version,
+        instrument=instrument,
+        atr_bar_price_semantics=atr_bar_price_semantics,
+        atr_max_bar_age_ns=atr_max_bar_age_ns,
+        stop_tightening_method_id=stop_tightening_method_id,
+        initial_stop=True,
+    )
+
+
+def historical_position_management_policy_to_dict(policy: HistoricalPositionManagementPolicy) -> dict[str, object]:
+    """Canonical JSON-ready mapping of a policy, including its self-digest (a v1 policy carries no v2 field)."""
+
+    return _policy_payload(policy)
 
 
 def historical_position_management_policy_digest(policy: HistoricalPositionManagementPolicy) -> str:
     """Recompute the canonical policy digest, excluding only ``policy_digest``."""
 
-    return edge_payload_digest(_to_payload(policy), _DIGEST_FIELD)
+    return edge_payload_digest(_policy_payload(policy), _DIGEST_FIELD)
 
 
 def _as_str(value: object) -> str:
@@ -376,9 +495,20 @@ _POLICY_CONVERTERS: dict[str, Callable[[object], object]] = {
 
 
 def historical_position_management_policy_from_payload(payload: object) -> HistoricalPositionManagementPolicy:
-    """Strictly reconstruct a policy from its serialized payload (exact fields and types; no proof)."""
+    """Strictly reconstruct a policy from its serialized payload (exact fields and types; no proof).
 
-    return _parse_exact(HistoricalPositionManagementPolicy, payload, _POLICY_CONVERTERS)  # type: ignore[return-value]
+    A payload of schema v2 carries exactly every field; any other carries exactly the v1 fields, and its v2 fields are
+    empty. Matching the schema to its rules is the verifier's reassembly.
+    """
+
+    if type(payload) is dict and payload.get("schema_version") == _SCHEMA_VERSION_V2:
+        return _parse_exact(HistoricalPositionManagementPolicy, payload, _POLICY_CONVERTERS)  # type: ignore[return-value]
+    names = [item.name for item in fields(HistoricalPositionManagementPolicy) if item.name not in _V2_FIELDS]
+    if type(payload) is not dict or set(payload) != set(names):
+        raise _fail("payload_fields_malformed")
+    return HistoricalPositionManagementPolicy(
+        **{name: _POLICY_CONVERTERS.get(name, _as_str)(payload[name]) for name in names}
+    )  # type: ignore[arg-type]
 
 
 def historical_position_management_policy_payload_is_well_formed(payload: object) -> bool:
@@ -399,16 +529,17 @@ def _reassemble_policy(policy: object) -> HistoricalPositionManagementPolicy:
         atr_bar_price_semantics=policy.atr_bar_price_semantics,  # type: ignore[attr-defined]
         atr_max_bar_age_ns=policy.atr_max_bar_age_ns,  # type: ignore[attr-defined]
         stop_tightening_method_id=policy.stop_tightening_method_id,  # type: ignore[attr-defined]
+        initial_stop=policy.schema_version == _SCHEMA_VERSION_V2,  # type: ignore[attr-defined]
     )
 
 
 def verify_historical_position_management_policy(policy: object) -> EdgeEvidenceVerification:
-    """Re-prove a policy: strict parse, digest recomputation and reassembly from its governed inputs. Total."""
+    """Re-prove a policy (v1 or v2): strict parse, digest recomputation and reassembly from its governed inputs. Total."""
 
     return verify_edge_artifact_total(
         policy,
         cls=HistoricalPositionManagementPolicy,
-        to_payload=_to_payload,
+        to_payload=_policy_payload,
         parse_payload=historical_position_management_policy_from_payload,
         reassemble=_reassemble_policy,
         self_digest_field=_DIGEST_FIELD,
@@ -420,6 +551,12 @@ def historical_position_management_tightening_applied(policy: HistoricalPosition
     """Whether the policy applies the DEC-9 time-decay reading (never §1.9-complete otherwise)."""
 
     return policy.stop_tightening_method_id == TIGHTENING_DEC9_READING_V1
+
+
+def historical_position_management_initial_stop_fraction(policy: HistoricalPositionManagementPolicy) -> Fraction | None:
+    """The §1.27/§8.3 INTRADAY initial stop of a verified policy v2 (1.5% of the basis), or None for a v1 policy."""
+
+    return INITIAL_STOP_FRACTION if policy.schema_version == _SCHEMA_VERSION_V2 else None
 
 
 def historical_position_management_methods_requiring_human_approval(
@@ -434,12 +571,17 @@ def historical_position_management_methods_requiring_human_approval(
         policy.stop_trigger_rule_id,
         policy.stop_tightening_method_id,
         policy.protective_execution_rule_id,
+        *(
+            (policy.initial_stop_rule_id, policy.stop_binding_rule_id)
+            if policy.schema_version == _SCHEMA_VERSION_V2
+            else ()
+        ),
     )
     return tuple(
         sorted(
             method
             for method in applied
-            if POSITION_MANAGEMENT_METHOD_AUTHORITY.get(method)
+            if POSITION_MANAGEMENT_V2_METHOD_AUTHORITY.get(method)
             is PositionManagementMethodAuthority.HUMAN_APPROVAL_REQUIRED
         )
     )
@@ -508,15 +650,23 @@ __all__ = [
     "ATR_INTERVAL_NS",
     "ATR_PERIOD",
     "EVENT_PRIORITY_RULE_V1",
+    "INITIAL_STOP_FRACTION",
+    "INITIAL_STOP_HORIZON",
+    "INITIAL_STOP_RULE_V1",
     "MAX_HOLD_NS",
     "MAX_HOLD_RULE_V1",
     "POSITION_MANAGEMENT_METHOD_AUTHORITY",
     "POSITION_MANAGEMENT_RULE_SET",
     "POSITION_MANAGEMENT_RULE_SET_DIGEST",
     "POSITION_MANAGEMENT_RULE_SET_ID",
+    "POSITION_MANAGEMENT_V2_METHOD_AUTHORITY",
+    "POSITION_MANAGEMENT_V2_RULE_SET",
+    "POSITION_MANAGEMENT_V2_RULE_SET_DIGEST",
+    "POSITION_MANAGEMENT_V2_RULE_SET_ID",
     "PROTECTIVE_EXECUTION_RULE_V1",
     "RE_ENTRY_RULE_V1",
     "STOP_ATR_MULTIPLE",
+    "STOP_BINDING_RULE_V1",
     "STOP_RULE_V1",
     "STOP_TRIGGER_RULE_V1",
     "TIGHTENING_DEC9_READING_V1",
@@ -528,9 +678,11 @@ __all__ = [
     "HistoricalPositionManagementPolicyError",
     "PositionManagementMethodAuthority",
     "build_historical_position_management_policy",
+    "build_historical_position_management_policy_v2",
     "canonical_historical_position_management_approval",
     "historical_position_management_approval_from_payload",
     "historical_position_management_approval_mismatches",
+    "historical_position_management_initial_stop_fraction",
     "historical_position_management_methods_requiring_human_approval",
     "historical_position_management_policy_digest",
     "historical_position_management_policy_from_payload",

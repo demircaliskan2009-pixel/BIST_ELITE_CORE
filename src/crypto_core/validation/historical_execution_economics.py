@@ -148,7 +148,10 @@ v1 ones. Under the policy:
   Later fills of the same excursion never move the anchor, the basis or the stop. Under the DEC-9 reading the distance
   becomes ``d0 x 0.8^k`` after each complete 8 h period (k = 1, 2), so the stop never loosens. No human has approved
   that reading: a ``HUMAN_GOVERNANCE`` approval of a policy that applies it needs governance, so it runs only under a
-  ``TEST_ONLY_SYNTHETIC`` position-management approval;
+  ``TEST_ONLY_SYNTHETIC`` position-management approval. A policy v2 adds the PRDV4 §1.27/§8.3 INTRADAY initial stop
+  (CL2-10): at every milestone the effective distance is the lesser of the ATR distance and 1.5% of the basis, so the
+  nearer stop binds, the DEC-9 reading tightens the ATR distance alone, and a LONG stop is always positive. A v1 policy
+  keeps exactly the ATR distance, and every v1 result stays byte-identical;
 * triggers: the deadline itself, and a PIT-visible fresh mark at or beyond the stop in force (LONG: at or below, SHORT:
   at or above). The stop is evaluated at the opening fill, at every later mark visibility and at every tightening
   milestone. A trigger opens one close-only obligation per excursion; a later deadline is appended to an obligation
@@ -312,6 +315,7 @@ from crypto_core.validation.historical_position_management_policy import (
     canonical_historical_position_management_approval,
     historical_position_management_approval_from_payload,
     historical_position_management_approval_mismatches,
+    historical_position_management_initial_stop_fraction,
     historical_position_management_methods_requiring_human_approval,
     historical_position_management_policy_from_payload,
     historical_position_management_policy_payload_is_well_formed,
@@ -1263,11 +1267,22 @@ class _Ledgers:
 
 @dataclass(frozen=True)
 class _PositionManagement:
-    """The verified position-management authorities one simulation applies."""
+    """The verified position-management authorities one simulation applies.
+
+    ``initial_stop`` is the §1.27/§8.3 INTRADAY initial stop fraction of a policy v2 (None for a v1 policy).
+    """
 
     policy: HistoricalPositionManagementPolicy
     archive: HistoricalOhlcBarArchive
     tightening: bool
+    initial_stop: Fraction | None = None
+
+    def stop_distance(self, atr_distance: Fraction, basis: Fraction) -> Fraction:
+        """The effective stop distance: the ATR distance (v1), or the lesser of it and the initial distance (v2)."""
+
+        if self.initial_stop is None:
+            return atr_distance
+        return min(atr_distance, self.initial_stop * basis)
 
 
 @dataclass
@@ -1899,7 +1914,7 @@ class _Simulation:
             reading = self.entry_readings.get(intent.record.intent_id)
             if reading is None or reading.value is None:
                 raise _EconomicFailure("position_management_open_without_atr")
-            if signed > 0 and price - STOP_ATR_MULTIPLE * reading.value <= 0:
+            if signed > 0 and price - self.pm.stop_distance(STOP_ATR_MULTIPLE * reading.value, price) <= 0:
                 return "position_management_stop_price_not_positive"
         return None
 
@@ -1913,12 +1928,17 @@ class _Simulation:
         sign = _sign(transition.signed)
         distance = STOP_ATR_MULTIPLE * reading.value
         milestones = (0, 1, 2) if pm.tightening else (0,)
+        # The DEC-9 reading tightens the §1.9 ATR distance alone; a policy v2's initial distance never moves, and the
+        # nearer stop binds at every milestone (CL2-10). A v1 policy keeps exactly the ATR distance.
+        effective = tuple(
+            pm.stop_distance(distance * TIGHTENING_FACTOR**milestone, transition.price) for milestone in milestones
+        )
         levels = tuple(
             (
                 milestone,
                 _wire_int(time_ns + milestone * TIGHTENING_PERIOD_NS, "stop_effective_from_ns"),
-                distance * TIGHTENING_FACTOR**milestone,
-                transition.price - sign * distance * TIGHTENING_FACTOR**milestone,
+                effective[milestone],
+                transition.price - sign * effective[milestone],
             )
             for milestone in milestones
         )
@@ -4044,7 +4064,12 @@ def _position_management_authority(
         codes.append(_reason("ohlc_archive_digest_mismatch"))
     if codes:
         return codes, None
-    return [], _PositionManagement(policy, archive, historical_position_management_tightening_applied(policy))
+    return [], _PositionManagement(
+        policy,
+        archive,
+        historical_position_management_tightening_applied(policy),
+        historical_position_management_initial_stop_fraction(policy),
+    )
 
 
 def _position_management_reasons(
