@@ -13,9 +13,11 @@
 
 > **PENDING DOCTRINE PROPOSAL — UNAPPROVED.** Passages tagged **[UNAPPROVED PROPOSAL Dn]** are proposed amendments
 > from the unsigned decision record `S1_UNIFIED_DOCTRINE_AND_PAPER_GOVERNANCE_CLOSURE_V1`
-> (`docs/crypto_core/s1_unified_doctrine_governance_proposal.md`). A tagged passage has no force and authorizes
-> nothing. Until the human approves its exact text in that record and an authorized standard merge adopts it, read
-> this document as if the passage were absent; the untagged text stays binding as written.
+> (`docs/crypto_core/s1_unified_doctrine_governance_proposal.md`, section 0). A tagged passage has no force and
+> authorizes nothing, whatever the state of that record. Only a separate adoption change that installs the
+> human-signed exact text, untagged, through an authorized and verified standard merge can adopt an amendment; a
+> tagged passage never becomes doctrine itself. Read this document as if every tagged passage were absent; the
+> untagged text stays binding as written.
 
 ---
 
