@@ -33,7 +33,7 @@ This document defines a **multi-market algorithmic trading system** operating ac
 
 ### §0.3 — Hard Invariants
 
-Six invariants govern all system behavior. No subsystem, edge, strategy, or operational decision may violate these.
+Six invariants govern all system behavior. No subsystem, edge, strategy, or operational decision may violate these. The single exception is the scoped INV-002/INV-006 cold-start exception below the table, which authorizes nothing by itself.
 
 | ID | Invariant | Enforcement | Violation Response |
 |----|-----------|-------------|-------------------|
@@ -43,6 +43,17 @@ Six invariants govern all system behavior. No subsystem, edge, strategy, or oper
 | INV-004 | **No Hidden State** — all state is persisted, auditable, and recoverable | Every state transition logged to JSONL with full context; crash recovery replays from persisted state | State reconstruction from audit log |
 | INV-005 | **AI-Safe** — AI MUST NOT generate orders, modify risk parameters, or execute trades | AI subsystem has read-only access to market data and trade history; no write path to order engine | Integration rejected at compile time |
 | INV-006 | **Capital Preservation** — no trade is preferable to a bad trade | All ambiguous signals resolve to NO TRADE; all unknown states resolve to HOLD | Default action = HOLD |
+
+**Scoped cold-start exception (INV-002 and INV-006 only).** This exception authorizes
+nothing by itself. It applies only while a separately human-approved PAPER_INCUBATION_V1 record (§1.21) is ACTIVE
+for one governed paper lineage and one edge. Under such a record, a reading on the record's closed list (§1.21) that
+is undefined only because the lineage's or the edge's own governed-paper history is shorter than the reading's
+window resolves to `COLD_START_EXCEPTED` instead of HOLD. `COLD_START_EXCEPTED` is never PASS. It admits a governed
+paper entry only on the separate incubation basis of §1.21; ordinary admission is unchanged. A condition proven to
+fail is FAIL and dominates any exception. The exception never applies to shadow, live or capital, or to any
+market-data, data-integrity, risk, margin, liquidation, regime, exchange-health (latency, API availability,
+maintenance), position-limit or protective reading. Every other missing, invalid, ambiguous or unknown input still
+resolves to HOLD.
 
 ### §0.4 — BIST Module Reference
 
@@ -226,6 +237,13 @@ Computed over rolling $T = 60$ second window.
 Depth trust adjustment when $CTR > 5.0$:
 
 $$\alpha_{CTR} = \frac{1.0}{1 + 0.2 \times (CTR - 5.0)}$$
+
+A CTR reading counts only when $N_{cancels}$ and $N_{trades}$ come from a source
+qualified under a human-approved `CTR_SOURCE_QUALIFICATION_V1`: authenticated per-order events or venue-published
+cancellation counts, complete over the whole window, sequenced and point-in-time. Counts inferred from L2 book
+changes or from a model never qualify. Without a qualified reading, or with $N_{trades} = 0$, CTR is unknown: no
+order passes the depth cap of §1.12 Mechanism 2 and §7.2, and an order at or above 2% of the unadjusted visible
+depth at 5 bps is refused, because $\alpha_{CTR} \leq 1$ can only lower that cap.
 
 #### A.5 — Hidden Liquidity / Iceberg Detection
 
@@ -556,7 +574,27 @@ $$w_i = \frac{\max(EHS_i \times \text{Sharpe}_{30d,i},\ 0)}{\sum_{j \in E_{activ
 - If all numerators = 0 → equal weight: $w_i = \frac{1}{|E_{active}|}$
 - Floor per active edge: $w_i \geq 0.05$ (minimum 5%)
 - Cap per edge: $w_i \leq 0.40$ (maximum 40%)
-- After floor/cap: renormalize to sum to 1.0
+
+#### Bounded Allocation
+
+The floor, the cap and the renormalization form one joint step; they are never applied
+one after another. Let $t$ be the share vector after the numerator rule, the equal-weight rule and BOOST,
+renormalized to sum to 1.0 (BOOST keeps its place before renormalization), and let $n = |E_{active}|$.
+
+- $3 \leq n \leq 5$: $w$ is the unique minimizer of $\sum_i (w_i - t_i)^2$ subject to $\sum_i w_i = 1$ and
+  $0.05 \leq w_i \leq 0.40$; equivalently $w_i = \min(0.40, \max(0.05, t_i + \lambda))$ for the $\lambda$ at which the
+  weights sum to 1.0.
+- $n \in \{1, 2\}$: a sum of 1.0 is infeasible under the cap, so $w_i = \min(0.40, \max(0.05, t_i))$ and the residual
+  $1 - \sum_i w_i$ stays unallocated; it is never redistributed.
+- $n = 0$: no allocation.
+- Only an edge whose membership in $E_{active}$ is proven is allocated. An unknown activation, EHS or Sharpe is never
+  membership, and no unknown input is ever defaulted: an unknown input, a BOOST condition included, leaves the weights
+  unproven unless they are identical under every value it could take.
+- Edge-selection ties are broken by the higher EHS, then by the ascending edge identifier.
+- Weights are exact rational values; a decimal rendering truncates at two or more places and never crosses the floor
+  or the cap.
+- DE-WEIGHT, the correlation halving and the combined-drawdown reduction act after this step on the edge's
+  allocation; the floor never undoes them, and no step raises a weight above 0.40.
 
 #### Dynamic Boost/De-weight Rules
 
@@ -1076,7 +1114,7 @@ Unified 5-level escalation ladder consolidating all risk circuit breakers.
 | KS-1 | CAUTION | Any 1 standard trigger | Reduce new entries by 50%, tighten stops by 25% | Auto after 1h if trigger clears |
 | KS-2 | DE-RISK | Any 2 simultaneous triggers | No new entries, reduce positions to 50% | Auto after 4h if all triggers clear |
 | KS-3 | EMERGENCY | Any 3 triggers OR any critical trigger | Close all positions (orderly, 30-min TWAP) | Manual approval + 24h cool-down |
-| KS-4 | HALT | System integrity threat | Immediate market orders to flatten, cancel all open orders, disable all engines | Manual-only restart with full audit |
+| KS-4 | HALT | System integrity threat | Immediate market orders to flatten, cancel all open orders, disable all engines; the flatten acts only on a position re-derived by an independent verifier and on a book authenticated independently of the threatened component, never on the executor's own state; an unfilled remainder stays an open close-only obligation that neither disabling the engines nor the restart discharges | Manual-only restart with full audit |
 
 #### Standard Triggers
 
@@ -1113,6 +1151,11 @@ Unified 5-level escalation ladder consolidating all risk circuit breakers.
 2. Method: TWAP over 30 minutes with 2% ADV participation cap
 3. If market impact > 1% during closure → pause 5 minutes, reassess
 4. If exchange unavailable → queue orders, retry every 30 seconds
+5. If the closure cannot complete within 30 minutes under the participation cap and the
+   impact pauses, or the cap cannot be proven because its volume measure, window or source is not approved, the
+   remainder becomes a typed unfulfilled protective obligation. Closing continues under the same caps until the
+   position is proven closed; no child order is sent while the cap is unproven; no cap is exceeded, no fill is
+   assumed and no higher level is inferred.
 
 ---
 
@@ -1257,7 +1300,37 @@ requirement of §1.13 or §1.20: every global requirement above stays binding as
 - Evaluation order: Data → Risk → Regime → Edge → Execution → Temporal
 - First failing check → REJECT with reason code (e.g., "NT-R02: daily loss limit −2.3%")
 - All rejections logged: timestamp, condition ID, measured value, threshold, asset
-- NO OVERRIDE mechanism — these are absolute, non-negotiable gates
+- NO OVERRIDE mechanism — these are absolute, non-negotiable gates, with a single
+  exception: the PAPER_INCUBATION_V1 Exception Record below. It is not an override: it applies only while a covered
+  own-history reading is undefined, and never to a condition proven to fail.
+
+#### PAPER_INCUBATION_V1 Exception Record
+
+Scope: governed paper entries of one lineage admitted under the LIMITED_S1_PAPER_V1
+route (§1.20), for one edge, and only while one human-approved PAPER_INCUBATION_V1 record for that lineage and edge
+is ACTIVE. The record is a separate authorization; this section grants none. It grants nothing for shadow, live,
+capital, §1.13 Stages 4–5 or §1.22 promotion, and it relaxes no other requirement of this document.
+
+- Covered readings (closed list): the edge's own Sharpe_30d and Sharpe_90d with DECAY_ALERT (§1.6); the lineage's
+  last-10 and last-20 governed-paper order fill rates on the exchange (NT-X02; §1.5 Execution Conditions); and the
+  edge's §1.28 Kelly estimate while the edge has no closed governed-paper trade. No other reading is ever covered:
+  not calibration (§1.24), exchange health, CTR or depth, CVaR, margin, liquidation, data integrity, any other risk
+  limit, or any protective obligation.
+- A reading is covered only while its window holds fewer of the lineage's or the edge's own governed-paper
+  observations than it needs. The counts come from the sealed lineage and are recomputed by an independent verifier;
+  offline, simulated or replayed observations never count. A reading whose window has filled is an ordinary reading
+  from then on.
+- A covered reading resolves to `COLD_START_EXCEPTED`, never PASS, and only when every non-history component of its
+  check passes. A reading that fails under every completion of its missing history is FAIL. Any other undefined input
+  is BLOCKED.
+- An entry is admitted on the incubation basis only when at least one check is `COLD_START_EXCEPTED` and every other
+  check is PASS or proven not applicable. Each such entry is one attempt; exits and protective actions are never
+  attempts.
+- The record binds the lineage, the edge, a preregistered gated-strategy validation, an approved attempt bound and an
+  approved duration bound. It ends at the earliest of its duration bound, the lineage's bootstrap horizon end and its
+  attempt bound, or on revocation or failed verification. The end is final: every covered reading still undefined
+  resolves to HOLD, no permission survives it, and no lineage–edge pair is incubated twice.
+- Never defaulted: the record, its approval, its covered list, the attempt bound and the duration bound.
 
 ---
 
@@ -1763,9 +1836,9 @@ Sum = 1.0. SHS ∈ [0, 1] where 1 = perfectly healthy, 0 = maximum stress.
 
 **DEFENSIVE (SS-2)**: No new entries across all horizons. Existing positions: tighten trailing stops to 50% of normal width. Begin reducing MICRO and INTRADAY positions (TWAP). SWING positions held with tight stops. Monitoring → 5 seconds.
 
-**CRISIS (SS-3)**: Exit ALL MICRO positions immediately (market orders). Exit INTRADAY positions via 15-min TWAP. SWING positions: close unless DTL > 15% and EHS > 0.70. Cancel ALL pending orders. Monitoring → 1 second.
+**CRISIS (SS-3)**: Exit ALL MICRO positions immediately (market orders). Exit INTRADAY positions via 15-min TWAP. SWING positions: close unless DTL > 15% and EHS > 0.70. Cancel ALL pending orders. Monitoring → 1 second. For MICRO and INTRADAY positions the earlier of these per-horizon deadlines and the SS-3 row of the state table binds; this item leaves the SWING rule as written. Where the §1.19 KS-3 closure also applies, the earlier deadline and every participation and impact constraint of both apply, and an unfinished remainder is handled as in §1.19 Position Closure Protocol item 5.
 
-**HALT (SS-4)**: Flatten ALL positions via market orders (no TWAP — urgency overrides impact). Cancel ALL orders. Disable ALL engines (data, edge, execution, risk recalculation stops). Persist full state snapshot. Require manual restart with audit sign-off.
+**HALT (SS-4)**: Flatten ALL positions via market orders (no TWAP — urgency overrides impact). Cancel ALL orders. Disable ALL engines (data, edge, execution, risk recalculation stops). Persist full state snapshot. Require manual restart with audit sign-off. The flatten follows the §1.19 KS-4 rule: it acts only on a verifier-re-derived position and an independently authenticated book, and an unfilled remainder stays an open close-only obligation.
 
 #### System State Integration
 
@@ -1854,16 +1927,16 @@ Full enumeration of system invariants with enforcement and violation response.
 | ID | Statement | Enforcement | Violation Response |
 |----|-----------|-------------|-------------------|
 | INV-001 | Identical input stream produces identical output sequence | All signal logic is pure functions; PRNG seeded deterministically; no floating-point non-determinism | System halt + audit reconstruction |
-| INV-002 | Missing or invalid data produces HOLD with explicit reason | Every data consumer validates before use; NT-D conditions gate orders | Reject with reason code |
+| INV-002 | Missing or invalid data produces HOLD with explicit reason | Every data consumer validates before use; NT-D conditions gate orders; sole scoped exception: §0.3 | Reject with reason code |
 | INV-003 | Risk limits override strategy signals unconditionally | Risk engine evaluates AFTER signal, BEFORE order submission | Signal discarded |
 | INV-004 | All state is persisted, auditable, and recoverable | JSONL logging of every transition; crash recovery from persisted state | Reconstruct from audit log |
 | INV-005 | AI MUST NOT generate orders, modify risk parameters, or execute | AI has read-only access; no write path to order engine | Integration rejected |
-| INV-006 | No trade is preferable to a bad trade | Ambiguous signals → NO TRADE; unknown states → HOLD | Default = HOLD |
+| INV-006 | No trade is preferable to a bad trade | Ambiguous signals → NO TRADE; unknown states → HOLD; sole scoped exception: §0.3 | Default = HOLD |
 | INV-EDGE-001 | No edge without microstructure justification | Edge validation pipeline (§1.13) Stage 1 requires justification field | Edge rejected at validation |
 | INV-EDGE-002 | No edge without invalidation conditions | EdgeDefinition requires non-empty `invalidation_conditions` | Edge rejected at definition |
 | INV-EDGE-003 | No edge without crowding detection | Edge must declare applicable crowding mechanisms from §1.11 | Edge rejected at definition |
 | INV-EDGE-004 | No edge without validation pipeline completion | Edge must pass all 5 stages of §1.13 | Edge blocked from live |
-| INV-EXEC-001 | All orders pass NT conditions before submission | Order generation path checks all 23 NT conditions (§1.21) | Order rejected with NT code |
+| INV-EXEC-001 | All orders pass NT conditions before submission; a governed paper entry on the §1.21 incubation basis may instead carry `COLD_START_EXCEPTED`, never PASS, on covered own-history readings (§0.3) | Order generation path checks all 23 NT conditions (§1.21) | Order rejected with NT code |
 | INV-RISK-001 | System state engine (§1.29) is the single source of truth | All operational decisions reference SHS state | Override logged as violation |
 
 ---
@@ -2119,7 +2192,7 @@ Full §1.19 implementation:
 
 ### §8.6 — Unknown State Handling
 
-Any data gap, unrecognizable state, or unclassifiable condition → HOLD (INV-002). No trade proceeds when the system cannot fully characterize the market state.
+Any data gap, unrecognizable state, or unclassifiable condition → HOLD (INV-002). No trade proceeds when the system cannot fully characterize the market state. The sole scoped exception is §0.3: a covered own-history reading under an ACTIVE PAPER_INCUBATION_V1 record (§1.21) is `COLD_START_EXCEPTED`, never PASS, and it never excuses a data gap in the market state, an unrecognizable state or an unclassifiable condition.
 
 ---
 
