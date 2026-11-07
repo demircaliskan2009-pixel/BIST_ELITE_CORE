@@ -216,6 +216,31 @@ The four checks read only the decision's own facts, so the sequential admission 
 outcome, payload and digest stays byte-identical. Every S1 entry is still refused, first by NT-D01 on the accepted worlds
 and by NT-R01 after a Data PASS.
 
+Approved sizing chain (``S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1``, rule set v8). Rule sets v1-v7 hold for every
+evaluation without it. When the day seal opts in, on top of rule set v7, the evaluation derives the sizing evidence of
+its horizon (``governed_paper_sizing_chain``) from the genesis envelope, the run, the archive, the schedule v5 under
+evaluation, the same engine re-run whose snapshots and exact NAVs rule set v3 reads, and the verified CTR source context
+(none in production). It follows the human-approved doctrine D9, D15, A9' and items 2.1-2.3 and 3.1-3.2 of the approved
+companion (§4.1-§4.7 and §5); every pending item (A_max, T_max, W_INC, item 1.7, HD-07, items 5.1-5.2, FCD-13, X-H1,
+X-M1-C) stays unread.
+
+* ENVELOPE-FIT (§4.6), inserted before SCALE-1: the genesis sleeve's eligibility and weight at ``t`` against the usage
+  ``abs(q_pre) x mark(t) + u x L_k`` and the exact publication-visible NAV. No EHS, Sharpe_30d, activation proof or edge
+  state machine is produced, so every allocation is BLOCKED: the check FAILs only on a usage above 40% of the NAV and is
+  otherwise BLOCKED. No incubation basis exists, so it is never ``COLD_START_EXCEPTED``;
+* SCALE-1 under A9' (§4.7): every rule set v7 FAIL, with its reason, first; then FAIL on any other multiplier proven below
+  1 or an ENVELOPE_FIT FAIL; PASS only on an ENVELOPE_FIT PASS with every state-triggered multiplier proven 1 and the
+  Kelly fit proven, which no reading here can prove; BLOCKED otherwise, naming every unproven term;
+* CTR-DEPTH (§5, appended): FAILs on an order quantity at or above 2% of the exact visible depth within 5 bps on its
+  side, PASSes only below 2% of the CTR-adjusted depth with a qualified, covered CTR reading, and is otherwise BLOCKED.
+  The production approval table admits no qualification, so it never passes there.
+
+The schedule v5 carries the fill-time bounds the engine enforces at every exposure-increasing fill: the exposure
+envelopes (none while every allocation is BLOCKED) and the depth caps (none without a qualified source), so an entry
+whose decision-time checks passed would still be refused at its fill unless both bounds are proven there. The bounds and
+readings are facts of the inputs and of each decision's own snapshot, so the sequential admission keeps its unique fixed
+point, and every v1-v7 check outcome, payload and digest stays byte-identical. Every S1 entry is still refused.
+
 The evidence is digest-bound and paper-only. It proves no venue fact, edge, profitability, readiness or Stage-4
 completion. Exact arithmetic, no float, no ``decimal`` context, and no IO, clock, randomness, network or environment.
 """
@@ -254,6 +279,11 @@ from crypto_core.validation.edge_source_packet_evidence import (
     edge_source_packet_evidence_payload_is_well_formed,
     verify_edge_source_packet_evidence,
 )
+from crypto_core.validation.governed_paper_allocation_envelope import (
+    GovernedPaperAllocationError,
+    GovernedPaperEnvelopeFitStatus,
+)
+from crypto_core.validation.governed_paper_ctr_qualification import GovernedPaperCtrDepthStatus, GovernedPaperCtrError
 from crypto_core.validation.governed_paper_execution_authority import GovernedPaperGenesisAuthority
 from crypto_core.validation.governed_paper_kill_switch import (
     GOVERNED_PAPER_KILL_SWITCH_DECISION_PHASE,
@@ -285,6 +315,17 @@ from crypto_core.validation.governed_paper_regime_state import (
     GovernedPaperRegimeStatus,
     derive_governed_paper_regime_evidence,
 )
+from crypto_core.validation.governed_paper_sizing_chain import (
+    GOVERNED_PAPER_SIZING_CHAIN_CONTRACT_ID,
+    GOVERNED_PAPER_SIZING_RULE_DIGEST,
+    GOVERNED_PAPER_SIZING_RULE_ID,
+    GovernedPaperSizingContext,
+    GovernedPaperSizingError,
+    GovernedPaperSizingEvidence,
+    GovernedPaperSizingReading,
+    derive_governed_paper_sizing_evidence,
+    governed_paper_sizing_reading_digest,
+)
 from crypto_core.validation.governed_paper_system_state import (
     GOVERNED_PAPER_SYSTEM_STATE_CONTRACT_ID,
     GOVERNED_PAPER_SYSTEM_STATE_RULE_DIGEST,
@@ -298,7 +339,9 @@ from crypto_core.validation.governed_paper_system_state import (
 from crypto_core.validation.historical_decision_run import HistoricalDecisionRun
 from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP,
+    HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HistoricalExecutionAdmissionSchedule,
+    HistoricalExecutionDecisionExactValues,
     HistoricalExecutionDecisionPortfolioSnapshot,
     HistoricalExecutionEconomicsError,
     HistoricalExecutionEconomicsResult,
@@ -414,6 +457,7 @@ GOVERNED_PAPER_ENTRY_SAFETY_MARKET_DATA_RULE_SET_ID = "governed-paper-entry-safe
 GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_ID = "governed-paper-entry-safety.v5"
 GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID = "governed-paper-entry-safety.v6"
 GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID = "governed-paper-entry-safety.v7"
+GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID = "governed-paper-entry-safety.v8"
 
 GOVERNED_PAPER_ENTRY_SAFETY_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
     ("paper_only", True),
@@ -581,6 +625,18 @@ class GovernedPaperEntrySafetyRegimeContext:
 
 
 @dataclass(frozen=True)
+class GovernedPaperEntrySafetySizing:
+    """The sizing facts of one decision at ``t`` (rule set v8), read from its evaluation's derived sizing evidence.
+
+    ``reading`` holds the decision's ENVELOPE_FIT and CTR depth-cap readings and their facts, and ``evidence_digest``
+    names the sizing evidence that derived them. Never accepted from a caller: the evaluation derives both.
+    """
+
+    reading: GovernedPaperSizingReading
+    evidence_digest: str
+
+
+@dataclass(frozen=True)
 class GovernedPaperEntrySafetyObservation:
     """The point-in-time facts one decision is evaluated on (derived by this module, never caller authority)."""
 
@@ -635,6 +691,8 @@ class GovernedPaperEntrySafetyObservation:
     # Rule set v7 only: the system-safety checks are evaluated on this decision (never in rule sets v1-v6). Their facts
     # are derived from the observation itself (``governed_paper_entry_safety_system_state_reading``), never supplied.
     system_safety: bool = False
+    # Rule set v8 only: the sizing facts of the decision (absent without them, as in rule sets v1-v7).
+    sizing: GovernedPaperEntrySafetySizing | None = None
 
 
 @dataclass(frozen=True)
@@ -727,8 +785,10 @@ class GovernedPaperEntrySafetyEvidence:
     kill_switch_ladder: GovernedPaperKillSwitchLadder | None = None
     # Rule set v6 on: the derived regime evidence the evaluation read (never in a v1-v5 payload).
     regime_evidence: GovernedPaperRegimeEvidence | None = None
-    # Rule set v7 only: the derived §1.29 system-state lower bounds of its entries (never in a v1-v6 payload).
+    # Rule set v7 on: the derived §1.29 system-state lower bounds of its entries (never in a v1-v6 payload).
     system_state_evidence: GovernedPaperSystemStateEvidence | None = None
+    # Rule set v8 only: the derived sizing evidence of its entries (never in a v1-v7 payload).
+    sizing_evidence: GovernedPaperSizingEvidence | None = None
 
 
 # --- helpers -----------------------------------------------------------------------------------------------------------
@@ -768,6 +828,7 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
         GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID,
     ):
         if evidence.kill_switch_ladder is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_kill_switch_ladder")
@@ -775,14 +836,22 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
     if evidence.rule_set_id not in (
         GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID,
     ):
         if evidence.regime_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_regime_evidence")
         del payload["regime_evidence"]
-    if evidence.rule_set_id != GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID:
+    if evidence.rule_set_id not in (
+        GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID,
+    ):
         if evidence.system_state_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_system_state_evidence")
         del payload["system_state_evidence"]
+    if evidence.rule_set_id != GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID:
+        if evidence.sizing_evidence is not None:
+            raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_sizing_evidence")
+        del payload["sizing_evidence"]
     return payload
 
 
@@ -1347,6 +1416,138 @@ def _scale(observation: _Observation) -> _Outcome:
     return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", reason, (facts.ladder_digest, reading.reading_digest))
 
 
+# --- rule set v8: ENVELOPE_FIT, SCALE-1 under A9' and the CTR depth cap ---------------------------------------------------
+
+_SIZING_STATUS = {
+    "PASS": _Status.PASS,
+    "FAIL": _Status.FAIL,
+    "BLOCKED": _Status.BLOCKED_ON_MISSING_INPUT,
+}
+_PROVEN_ONE, _PROVEN_BELOW_ONE, _UNPROVEN = "PROVEN_ONE", "PROVEN_BELOW_ONE", "UNPROVEN"
+
+
+def _sizing_facts(observation: _Observation) -> GovernedPaperEntrySafetySizing:
+    facts = observation.sizing
+    if facts is None:  # pragma: no cover - the rule set v8 checks are evaluated only on a decision with sizing facts
+        raise _fail("observation_malformed:sizing_check_without_sizing_facts")
+    return facts
+
+
+def _envelope_fit(observation: _Observation) -> _Outcome:
+    """ENVELOPE-FIT (rule set v8, §4.6) at the decision instant, read from the decision's derived sizing reading."""
+
+    reading = _sizing_facts(observation).reading
+    return _Outcome(
+        _SIZING_STATUS[reading.envelope_status.value],
+        reading.envelope_observed,
+        reading.envelope_reason,
+        (reading.reading_digest,),
+    )
+
+
+def _ctr_depth(observation: _Observation) -> _Outcome:
+    """CTR-DEPTH (rule set v8, §5) at the decision instant, read from the decision's derived sizing reading."""
+
+    reading = _sizing_facts(observation).reading
+    return _Outcome(
+        _SIZING_STATUS[reading.depth_status.value],
+        reading.depth_observed,
+        reading.depth_reason,
+        (reading.reading_digest,),
+    )
+
+
+def governed_paper_entry_safety_a9_multipliers(
+    observation: GovernedPaperEntrySafetyObservation,
+) -> tuple[tuple[str, str, str], ...]:
+    """The SCALE-1 state-triggered multiplier inventory of one rule set v8 decision under A9' (§4.7), in order.
+
+    Each entry is ``(term, status, reason)`` with status PROVEN_ONE, PROVEN_BELOW_ONE or UNPROVEN, derived from the
+    decision's own facts. The meta-layer weight is not a term: A9' replaces it by ENVELOPE_FIT. Pure.
+    """
+
+    facts = observation.kill_switch
+    if facts is None or observation.sizing is None:
+        raise _fail("observation_malformed:a9_multipliers_need_the_rule_set_v8_facts")
+    budget = _TIER_LATENCY_BUDGET_NS.get(observation.latency_tier_id)
+    reading = governed_paper_entry_safety_system_state_reading(observation)
+    if facts.level >= 1:
+        kill_switch = (_PROVEN_BELOW_ONE, f"kill_switch_lower_bound_ks_{facts.level}")
+    else:
+        kill_switch = (_UNPROVEN, "kill_switch_level_ks_0_never_proven")
+    if budget is None:
+        latency = (_UNPROVEN, "latency_tier_budget_unknown")
+    elif observation.latency_ns > _SIZE_HALVING_LATENCY_MULTIPLE * budget:
+        latency = (_PROVEN_BELOW_ONE, "latency_above_2x_the_tier_budget")
+    else:
+        latency = (_PROVEN_ONE, "latency_within_2x_the_tier_budget")
+    if reading.state_lower_bound >= 1:
+        state = (_PROVEN_BELOW_ONE, f"system_state_at_least_{governed_paper_system_state_id(reading).lower()}")
+    else:
+        state = (_UNPROVEN, "system_state_ss0_never_proven")
+    if "T11" not in facts.unproven_trigger_ids:
+        drawdown = (_PROVEN_BELOW_ONE, "combined_drawdown_beyond_15pct_proven")
+    else:
+        drawdown = (_UNPROVEN, "combined_drawdown_absence_unproven")
+    if observation.single_instrument_portfolio:
+        correlation = (_PROVEN_ONE, "single_sleeve_paper_portfolio_has_no_second_edge")
+    else:
+        correlation = (_UNPROVEN, "edge_return_correlation_not_measured")
+    return (
+        ("edge_health_alpha_1_6", _UNPROVEN, "edge_health_score_not_produced"),
+        ("de_weight_1_7", _UNPROVEN, "decay_alert_not_produced"),
+        ("correlation_halving_1_7", *correlation),
+        ("combined_drawdown_reduction_1_7", *drawdown),
+        ("kill_switch_9_2", *kill_switch),
+        ("latency_1_16", *latency),
+        ("system_state_1_29", *state),
+        ("crowding_1_11", _UNPROVEN, "crowding_not_produced"),
+        ("capacity_tier_1_15", _UNPROVEN, "edge_capacity_not_produced"),
+        (
+            "regime_dimensions_and_leverage_1_17_0_2",
+            _UNPROVEN,
+            "funding_leverage_and_liquidity_dimensions_not_produced",
+        ),
+        ("calibration_1_24", _UNPROVEN, "ewma_execution_calibration_pending_hd_07"),
+        ("margin_and_dtl_1_26", _UNPROVEN, "margin_and_dtl_bands_not_modeled"),
+        ("kelly_fit_1_28", _UNPROVEN, "kelly_fit_pending_items_5_1_and_5_2"),
+    )
+
+
+def _scale_a9(observation: _Observation) -> _Outcome:
+    """SCALE-1 under A9' (rule set v8, §4.7): ENVELOPE_FIT replaces the meta-layer term; every other term is kept.
+
+    FAIL on any multiplier proven below 1 (the rule set v7 readings first, with their accepted reasons) or on an
+    ENVELOPE_FIT FAIL; PASS only on an ENVELOPE_FIT PASS with every multiplier proven 1 and the Kelly fit proven, which
+    no reading here can prove; BLOCKED otherwise. A proven multiplier below 1 refuses the entry: the fixed unit is never
+    downsized.
+    """
+
+    v7 = _scale(observation)
+    if v7.status is _Status.FAIL:  # the accepted rule set v7 FAIL dominates, with its reason
+        return v7
+    sizing = _sizing_facts(observation).reading
+    terms = governed_paper_entry_safety_a9_multipliers(observation)
+    evidence = (*v7.evidence, sizing.reading_digest)
+    below = [term for term in terms if term[1] == _PROVEN_BELOW_ONE]
+    if below:
+        name, _, why = below[0]
+        return _Outcome(_Status.FAIL, name, f"{why}_reduces_the_allocation", evidence)
+    if sizing.envelope_status is GovernedPaperEnvelopeFitStatus.FAIL:
+        return _Outcome(
+            _Status.FAIL, "ENVELOPE_FIT=FAIL", f"envelope_fit_fail_under_a9_prime:{sizing.envelope_reason}", evidence
+        )
+    unproven = [term[0] for term in terms if term[1] != _PROVEN_ONE]
+    if sizing.envelope_status is GovernedPaperEnvelopeFitStatus.PASS and not unproven:  # pragma: no cover - unreachable
+        return _Outcome(_Status.PASS, "ENVELOPE_FIT=PASS", "a9_prime_every_term_proven", evidence)
+    names = [
+        *(["envelope_fit"] if sizing.envelope_status is not GovernedPaperEnvelopeFitStatus.PASS else []),
+        *unproven,
+    ]
+    reason = f"a9_prime_unproven_{'_'.join(names)}"
+    return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, f"ENVELOPE_FIT={sizing.envelope_status.value}", reason, evidence)
+
+
 _D, _R, _M, _E, _X, _T, _B = (
     _Family.DATA,
     _Family.RISK,
@@ -1619,6 +1820,35 @@ _SYSTEM_SAFETY_CHECKS: tuple[_Check, ...] = (
         _family_b(_scale),
     ),
 )
+# Rule set v8 only: evaluated after every rule set v6 check, in place of the rule set v7 tail, and only on a decision that
+# carries sizing facts. HZ-STOP and HZ-LIMITS are rule set v7's own checks; SCALE-1 is read under A9'.
+_SIZING_CHAIN_CHECKS: tuple[_Check, ...] = (
+    _SYSTEM_SAFETY_CHECKS[0],
+    _SYSTEM_SAFETY_CHECKS[1],
+    _Check(
+        "ENVELOPE-FIT",
+        _B,
+        "PRDV4 §1.7 ALLOCATION_ENVELOPE_V1 ENVELOPE_FIT (D9; approved companion §4.6)",
+        "member_usage_le_weight_times_nav_non_member_usage_zero_any_eligibility_usage_le_0_40_nav",
+        _family_b(_envelope_fit),
+    ),
+    _Check(
+        "SCALE-1",
+        _B,
+        "PRDV4 §1.6, §1.7, §1.11, §1.15-§1.17, §1.24, §1.26, §1.28, §1.29 and §9.2 allocation multipliers under A9' "
+        "(amends CL2-11; FCD-07; approved companion §4.7)",
+        "envelope_fit_pass_every_state_triggered_multiplier_proven_1_and_the_kelly_fit_proven",
+        _family_b(_scale_a9),
+    ),
+    _Check(
+        "CTR-DEPTH",
+        _B,
+        "PRDV4 §1.12 Mechanism 2 and §7.2 depth cap with the §1.2 A.4 CTR adjustment (D15; CTR_SOURCE_QUALIFICATION_V1; "
+        "approved companion §5)",
+        "order_quantity_lt_0.02_alpha_ctr_visible_depth_within_5bps_of_mid",
+        _family_b(_ctr_depth),
+    ),
+)
 
 
 def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
@@ -1629,6 +1859,7 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
     kill_switch: bool = False,
     regime: bool = False,
     system_safety: bool = False,
+    sizing_chain: bool = False,
 ) -> dict[str, object]:
     """The rule set this module evaluates: every check, in order, with its PRDV4 clause and published threshold.
 
@@ -1643,9 +1874,13 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
     rule set v5 with the Family B regime, trend and activation readings of the derived regime evidence and the three
     appended checks (``S1_FAMILY_B_REGIME_TREND_ACTIVATION_GATE_CLOSURE_V1``). ``system_safety=True`` (only with
     ``regime=True``) is rule set v7: rule set v6 with SYSTEM-STATE read on the §1.29 proven lower bound and HZ-STOP,
-    HZ-LIMITS and SCALE-1 appended (``S1_INTEGRATED_RISK_AND_SYSTEM_SAFETY_CLOSURE_V1``).
+    HZ-LIMITS and SCALE-1 appended (``S1_INTEGRATED_RISK_AND_SYSTEM_SAFETY_CLOSURE_V1``). ``sizing_chain=True`` (only
+    with ``system_safety=True``) is rule set v8: rule set v7 with ENVELOPE-FIT inserted before SCALE-1, SCALE-1 read under
+    A9' and CTR-DEPTH appended (``S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1``).
     """
 
+    if sizing_chain and not system_safety:
+        raise _fail("sizing_chain_rule_set_needs_the_system_safety_rule_set")
     if portfolio and not protective:
         raise _fail("portfolio_rule_set_needs_the_protective_rule_set")
     if market_data and not portfolio:
@@ -1846,6 +2081,53 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
                 "admission": "the_new_checks_read_only_the_decisions_own_facts_the_sequential_fixed_point_is_unchanged",
             },
         )
+    if sizing_chain:
+        regime_checks = [
+            {"check_id": item.check_id, "family": item.family.value, "clause": item.clause, "threshold": item.threshold}
+            for item in (*_CHECKS, *_REGIME_CHECKS, *_SIZING_CHAIN_CHECKS)
+        ]
+        rule_set.update(
+            rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID,
+            contract_id=GOVERNED_PAPER_SIZING_CHAIN_CONTRACT_ID,
+            checks=regime_checks,
+            sizing_chain_rule={
+                "approved_doctrine": "PRDV4 §1.7 D9, §1.2 A.4 D15; s1_approved_doctrine_adoption_v1 §4.1-§4.7 and §5",
+                "approved_items": ["D9", "D15", "2.1", "2.2", "2.3", "3.1", "3.2", "FCD-07"],
+                "sizing_rule_id": GOVERNED_PAPER_SIZING_RULE_ID,
+                "sizing_rule_digest": GOVERNED_PAPER_SIZING_RULE_DIGEST,
+                "source": "the_sizing_evidence_derived_from_the_genesis_envelope_the_decision_run_the_archive_the_"
+                "schedule_v5_the_one_engine_re_run_snapshots_and_exact_navs_and_the_verified_ctr_source_never_accepted",
+                "ENVELOPE-FIT": "pass_member_usage_le_weight_times_nav_fail_member_above_non_member_positive_or_any_"
+                "usage_above_0_40_nav_otherwise_blocked",
+                "ENVELOPE-FIT_fill": "the_engine_refuses_an_exposure_increasing_fill_outside_every_proven_envelope_or_"
+                "strictly_above_its_fraction_of_the_publication_visible_candidate_equity",
+                "SCALE-1": "a9_prime_envelope_fit_replaces_the_meta_layer_term_rule_set_v7_fails_first_then_any_"
+                "multiplier_proven_below_1_or_envelope_fit_fail_pass_never_without_every_term_and_the_kelly_fit",
+                "SCALE-1_terms": [
+                    "edge_health_alpha_1_6",
+                    "de_weight_1_7",
+                    "correlation_halving_1_7",
+                    "combined_drawdown_reduction_1_7",
+                    "kill_switch_9_2",
+                    "latency_1_16",
+                    "system_state_1_29",
+                    "crowding_1_11",
+                    "capacity_tier_1_15",
+                    "regime_dimensions_and_leverage_1_17_0_2",
+                    "calibration_1_24",
+                    "margin_and_dtl_1_26",
+                    "kelly_fit_1_28",
+                ],
+                "CTR-DEPTH": "fail_q_ge_0_02_d_on_an_exact_depth_pass_q_lt_0_02_alpha_d_with_a_qualified_covered_"
+                "reading_otherwise_blocked",
+                "CTR-DEPTH_fill": "the_engine_refuses_an_exposure_increasing_fill_against_a_book_and_side_without_a_"
+                "proven_cap_or_at_or_above_it",
+                "incubation": "cold_start_excepted_unavailable_item_1_7_pending",
+                "fixed_unit": "a_proven_multiplier_below_1_refuses_the_entry_the_fixed_unit_is_never_resized",
+                "admission": "the_readings_are_facts_of_the_inputs_and_of_each_decisions_own_snapshot_the_sequential_"
+                "fixed_point_is_unchanged",
+            },
+        )
     return rule_set
 
 
@@ -1864,6 +2146,7 @@ def governed_paper_entry_safety_rule_set_digest(  # noqa: PLR0913
     kill_switch: bool = False,
     regime: bool = False,
     system_safety: bool = False,
+    sizing_chain: bool = False,
 ) -> str:
     return edge_sha256_text(
         edge_canonical_json(
@@ -1874,6 +2157,7 @@ def governed_paper_entry_safety_rule_set_digest(  # noqa: PLR0913
                 kill_switch=kill_switch,
                 regime=regime,
                 system_safety=system_safety,
+                sizing_chain=sizing_chain,
             )
         )
     )
@@ -1910,6 +2194,24 @@ GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET = governed_paper_entry_safety
 )
 GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(
     protective=True, portfolio=True, market_data=True, kill_switch=True, regime=True, system_safety=True
+)
+GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET = governed_paper_entry_safety_rule_set(
+    protective=True,
+    portfolio=True,
+    market_data=True,
+    kill_switch=True,
+    regime=True,
+    system_safety=True,
+    sizing_chain=True,
+)
+GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(
+    protective=True,
+    portfolio=True,
+    market_data=True,
+    kill_switch=True,
+    regime=True,
+    system_safety=True,
+    sizing_chain=True,
 )
 
 
@@ -1964,7 +2266,41 @@ def _canonical_observation(observation: object) -> GovernedPaperEntrySafetyObser
         unproven = observation.kill_switch.unproven_trigger_ids  # type: ignore[union-attr]
         if "T11" not in unproven and "T2" in unproven:
             raise _fail("observation_malformed:kill_switch_drawdown_proofs_inconsistent")
+    _canonical_sizing(observation)
     return observation
+
+
+def _canonical_sizing(observation: GovernedPaperEntrySafetyObservation) -> None:
+    """The rule set v8 facts are exact types and the authentic reading of this very decision, and exist only on top of
+    rule set v7."""
+
+    facts = observation.sizing
+    if facts is None:
+        return
+    if type(facts) is not GovernedPaperEntrySafetySizing:
+        raise _fail("observation_malformed:sizing")
+    if not observation.system_safety:
+        raise _fail("observation_malformed:sizing_without_the_system_safety_facts")
+    if not edge_is_hex64(facts.evidence_digest):
+        raise _fail("observation_malformed:sizing_evidence_digest")
+    reading = facts.reading
+    if (
+        type(reading) is not GovernedPaperSizingReading
+        or reading.decision_sequence != observation.decision_sequence
+        or reading.decision_time_ns != observation.decision_time_ns
+        or reading.target_direction != observation.target_direction
+        or type(reading.envelope_status) is not GovernedPaperEnvelopeFitStatus
+        or type(reading.depth_status) is not GovernedPaperCtrDepthStatus
+        or any(type(text) is not str for text in (reading.envelope_observed, reading.depth_observed))
+        or any(type(text) is not str or text == "" for text in (reading.envelope_reason, reading.depth_reason))
+    ):
+        raise _fail("observation_malformed:sizing_reading")
+    try:
+        recomputed = governed_paper_sizing_reading_digest(reading)
+    except (TypeError, ValueError) as exc:
+        raise _fail("observation_malformed:sizing_reading") from exc
+    if recomputed != reading.reading_digest:
+        raise _fail("observation_malformed:sizing_reading_digest")
 
 
 _PORTFOLIO_FACTS = (
@@ -2286,11 +2622,12 @@ def evaluate_governed_paper_entry_safety(
     observation = _canonical_observation(observation)
     checks: list[GovernedPaperEntrySafetyCheck] = []
     first: GovernedPaperEntrySafetyCheck | None = None
-    for item in (
-        *_CHECKS,
-        *(_REGIME_CHECKS if observation.regime is not None else ()),
-        *(_SYSTEM_SAFETY_CHECKS if observation.system_safety else ()),
-    ):
+    tail: tuple[_Check, ...] = ()
+    if observation.sizing is not None:
+        tail = _SIZING_CHAIN_CHECKS
+    elif observation.system_safety:
+        tail = _SYSTEM_SAFETY_CHECKS
+    for item in (*_CHECKS, *(_REGIME_CHECKS if observation.regime is not None else ()), *tail):
         outcome = item.evaluate(observation)
         check = GovernedPaperEntrySafetyCheck(
             check_id=item.check_id,
@@ -2852,6 +3189,7 @@ class _GovernedRun:
 
     snapshots: dict[int, HistoricalExecutionDecisionPortfolioSnapshot]
     ladder: GovernedPaperKillSwitchLadder | None
+    exact: dict[int, HistoricalExecutionDecisionExactValues]
 
 
 def _governed_run(
@@ -2887,6 +3225,7 @@ def _governed_run(
     ):
         raise _fail("portfolio_economics_not_of_this_evaluation")
     derived_ladder: GovernedPaperKillSwitchLadder | None = None
+    exact: dict[int, HistoricalExecutionDecisionExactValues] = {}
     try:  # derived, never accepted: the engine re-proves the economics and re-runs it under the schedule
         if ladder is None:
             derived = simulate_historical_execution_governed_paper_decision_portfolio(
@@ -2902,11 +3241,12 @@ def _governed_run(
                 single_instrument_portfolio=single,
             )
             derived, derived_ladder = derivation.portfolio, derivation.ladder
+            exact = {item.decision_sequence: item for item in derivation.exact_values}
     except HistoricalExecutionEconomicsError as exc:
         raise _fail("portfolio_not_derivable") from exc
     except GovernedPaperKillSwitchError as exc:
         raise _fail("kill_switch_ladder_not_derivable") from exc
-    return _GovernedRun({item.decision_sequence: item for item in derived.snapshots}, derived_ladder)
+    return _GovernedRun({item.decision_sequence: item for item in derived.snapshots}, derived_ladder, exact)
 
 
 def governed_paper_entry_safety_entry_sequences(run: HistoricalDecisionRun) -> tuple[int, ...]:
@@ -2950,6 +3290,7 @@ def build_governed_paper_entry_safety_evidence(
     kill_switch: bool = False,
     regime: GovernedPaperEntrySafetyRegimeContext | None = None,
     system_safety: bool = False,
+    sizing: GovernedPaperSizingContext | None = None,
 ) -> GovernedPaperEntrySafetyEvidence:
     """Evaluate every entry decision of ``run`` over the archive ``dataset`` it was built from (see the module docstring).
 
@@ -2964,8 +3305,11 @@ def build_governed_paper_entry_safety_evidence(
     ``kill_switch``) is the verified regime context the day seal supplies: the evaluation derives its regime evidence over
     ``[G, run end)`` from it and the archive, and reads every entry's regime facts from that evidence.
     ``system_safety=True`` (rule set v7, only with ``regime``) evaluates SYSTEM-STATE on the §1.29 proven lower bound and
-    appends HZ-STOP, HZ-LIMITS and SCALE-1; the evidence binds the derived system-state readings of every entry. A
-    malformed or foreign input raises ``GovernedPaperEntrySafetyError``. Pure.
+    appends HZ-STOP, HZ-LIMITS and SCALE-1; the evidence binds the derived system-state readings of every entry.
+    ``sizing`` (rule set v8, only with ``system_safety``) is the verified sizing context the day seal supplies: the
+    schedule under evaluation must be the schedule v5 carrying exactly the derived fill-time bounds, the evaluation derives
+    every entry's ENVELOPE_FIT and CTR depth-cap readings from the same engine re-run, reads SCALE-1 under A9' and binds
+    the sizing evidence. A malformed or foreign input raises ``GovernedPaperEntrySafetyError``. Pure.
     """
 
     if type(authority) is not GovernedPaperGenesisAuthority:
@@ -2988,6 +3332,10 @@ def build_governed_paper_entry_safety_evidence(
         raise _fail("system_safety_flag_malformed")
     if system_safety and regime is None:
         raise _fail("system_safety_without_the_regime_rule_set")
+    if sizing is not None and type(sizing) is not GovernedPaperSizingContext:
+        raise _fail("sizing_context_malformed")
+    if sizing is not None and not system_safety:
+        raise _fail("sizing_without_the_system_safety_rule_set")
     genesis = authority.genesis
     protection = _canonical_protection(protection, instrument=genesis.instrument)
     if run.status is not EdgeEvidenceStatus.READY or run.gate_verdict is not EdgeGateVerdict.PASS:
@@ -3013,6 +3361,10 @@ def build_governed_paper_entry_safety_evidence(
     snapshots = None if governed is None else governed.snapshots
     if market_data and snapshots is None:
         raise _fail("market_data_without_a_governed_portfolio")
+    if governed is not None and (
+        portfolio.schedule.schema_version == HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION  # type: ignore[union-attr]
+    ) is not (sizing is not None):
+        raise _fail("sizing_schedule_and_rule_set_mismatch")
     observations = historical_execution_visible_observations(dataset, policy=policy, instrument=genesis.instrument)
     # the archive is verified just above and the kline feed candidate in ``_canonical_protection``
     market = (
@@ -3048,6 +3400,22 @@ def build_governed_paper_entry_safety_evidence(
         except GovernedPaperRegimeError as exc:
             raise _fail("regime_evidence_not_derivable") from exc
         readings = {item.decision_sequence: item for item in regime_evidence.readings}
+    sizing_evidence: GovernedPaperSizingEvidence | None = None
+    sizing_readings: dict[int, GovernedPaperSizingReading] = {}
+    if sizing is not None:
+        try:  # derived, never accepted: the bounds, readings and CTR source are re-proven by the derivation
+            sizing_evidence = derive_governed_paper_sizing_evidence(
+                authority=authority,
+                run=run,
+                dataset=dataset,
+                schedule=portfolio.schedule,  # type: ignore[union-attr]
+                snapshots=snapshots,  # type: ignore[arg-type]
+                exact_values=governed.exact,  # type: ignore[union-attr]
+                context=sizing,
+            )
+        except (GovernedPaperSizingError, GovernedPaperCtrError, GovernedPaperAllocationError) as exc:
+            raise _fail("sizing_evidence_not_derivable") from exc
+        sizing_readings = {item.decision_sequence: item for item in sizing_evidence.readings}
     decisions: list[GovernedPaperEntrySafetyDecision] = []
     system_states: list[GovernedPaperSystemStateReading] = []
     for decision in run.decisions:
@@ -3089,6 +3457,11 @@ def build_governed_paper_entry_safety_evidence(
             if regime_evidence is None
             else GovernedPaperEntrySafetyRegime(readings[decision.decision_sequence], regime_evidence.evidence_digest),
             system_safety=system_safety,
+            sizing=None
+            if sizing_evidence is None
+            else GovernedPaperEntrySafetySizing(
+                sizing_readings[decision.decision_sequence], sizing_evidence.evidence_digest
+            ),
         )
         decisions.append(evaluate_governed_paper_entry_safety(observation))
         if system_safety:  # the same derivation the decision's SYSTEM-STATE and SCALE-1 read
@@ -3096,7 +3469,9 @@ def build_governed_paper_entry_safety_evidence(
     protective, measured = protection is not None, snapshots is not None
     seed = GovernedPaperEntrySafetyEvidence(
         schema_version=_SCHEMA_VERSION,
-        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID
+        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID
+        if sizing is not None
+        else GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID
         if system_safety
         else GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID
         if regime is not None
@@ -3116,6 +3491,7 @@ def build_governed_paper_entry_safety_evidence(
             kill_switch=kill_switch,
             regime=regime is not None,
             system_safety=system_safety,
+            sizing_chain=sizing is not None,
         ),
         genesis_id=genesis.genesis_id,
         genesis_digest=genesis.genesis_digest,
@@ -3138,6 +3514,7 @@ def build_governed_paper_entry_safety_evidence(
         )
         if system_safety
         else None,
+        sizing_evidence=sizing_evidence,
     )
     return replace(seed, evidence_digest=edge_payload_digest(_evidence_payload(seed), _DIGEST_FIELD))
 

@@ -295,11 +295,14 @@ GOVERNED_PAPER_KILL_SWITCH_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
 @dataclass(frozen=True)
 class GovernedPaperKillSwitchDerivation:
     """A ladder with the decision portfolio and the governed outcome it reads, all three derived from ONE engine re-run
-    and never accepted. In memory only: the ladder binds the other two by their digests."""
+    and never accepted. In memory only: the ladder binds the other two by their digests. ``exact_values`` are that same
+    re-run's exact amounts behind every snapshot's rendered NAVs (one per snapshot, in snapshot order), for a consumer
+    that compares a strict threshold on the same re-run (never serialized or digested)."""
 
     ladder: GovernedPaperKillSwitchLadder
     portfolio: HistoricalExecutionGovernedPaperDecisionPortfolio
     outcome: HistoricalExecutionGovernedPaperOutcome
+    exact_values: tuple[HistoricalExecutionDecisionExactValues, ...] = ()
 
 
 # --- helpers -----------------------------------------------------------------------------------------------------------
@@ -801,11 +804,12 @@ def derive_governed_paper_kill_switch_ladder(
     """The proven lower-bound ladder of one governed evaluation (see the module docstring), with the decision portfolio
     and the governed outcome it reads. Pure.
 
-    ``schedule`` is the information-time schedule v4 under evaluation. ``single_instrument_portfolio`` is the genesis
-    envelope's fact the entry gate derives (NT-M04's proof). The policy and the archive must be the economics' own, by
-    their recomputed digests. The engine itself re-proves the economics, by re-deriving every ledger from its frozen
-    trace, and then re-runs it ONCE under ``schedule``. The decision portfolio, the governed outcome and the exact values
-    every reading compares come from that one re-run; none is ever accepted.
+    ``schedule`` is the information-time schedule (v4, or v5 with its fill-time sizing bounds) under evaluation.
+    ``single_instrument_portfolio`` is the genesis envelope's fact the entry gate derives (NT-M04's proof). The policy and
+    the archive must be the economics' own, by their recomputed digests. The engine itself re-proves the economics, by
+    re-deriving every ledger from its frozen trace, and then re-runs it ONCE under ``schedule``. The decision portfolio,
+    the governed outcome and the exact values every reading compares come from that one re-run; none is ever accepted,
+    and the derivation returns those exact values in memory for a consumer of the same re-run.
 
     A malformed policy, archive or flag, or a policy or archive foreign to the economics, raises
     ``GovernedPaperKillSwitchError``. The engine's own refusal of the economics or the schedule raises
@@ -909,7 +913,9 @@ def derive_governed_paper_kill_switch_ladder(
         ladder_digest="",
     )
     ladder = replace(seed, ladder_digest=edge_payload_digest(_to_payload(seed), _DIGEST_FIELD))
-    return GovernedPaperKillSwitchDerivation(ladder=ladder, portfolio=portfolio, outcome=outcome)
+    return GovernedPaperKillSwitchDerivation(
+        ladder=ladder, portfolio=portfolio, outcome=outcome, exact_values=tuple(derivation.exact_values)
+    )
 
 
 # --- reading a ladder ------------------------------------------------------------------------------------------------------

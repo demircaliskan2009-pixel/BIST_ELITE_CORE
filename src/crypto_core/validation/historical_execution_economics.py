@@ -200,6 +200,22 @@ before its publication, two archives that differ only in that rate produce the s
 (a booked amount outside the representation domain fails the whole run closed, like every ledger amount). Schedules v2
 and v3 keep the accepted admission on the booked equity, unchanged.
 
+Fill-time sizing bounds (``S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1``, schedule v5). Schedule v5 is the information-time
+schedule v4 with two neutral declared bounds, each an exact rational (canonical ``str(Fraction)`` text, never a rounded
+decimal); the engine never learns which governance derived them. After every earlier rule admitted it, an
+exposure-increasing fill is
+
+* refused (``governed_paper_exposure_envelope_unproven_at_fill``) when no declared exposure envelope contains its
+  instant, and (``governed_paper_exposure_envelope_exceeded_at_fill``) when its exact post-fill |q| × fill mark strictly
+  exceeds the envelope's fraction of the publication-visible candidate equity the NT-R04 bound reads (equality admits);
+* refused (``governed_paper_depth_cap_unproven_at_fill``) when no depth cap is declared for the book record it executes
+  against and its side, and (``governed_paper_depth_cap_exceeded_at_fill``) when the order's requested quantity is at or
+  above that cap (an order must stay strictly below it).
+
+A refusal is ``REJECTED`` like every fill refusal: no fee, no transition and no state change, never a partial resize. The
+bounds never reach a reduction, a close or a protective close-only fill, and a schedule v2-v4 carries neither bound,
+so its payload, digest and re-run are exactly the accepted ones.
+
 Governed decision portfolio. ``simulate_historical_execution_governed_paper_decision_portfolio`` (schedule v4 only) is the
 same governed re-run, which also records, at every decision of the frozen trace, the portfolio as known at that instant
 BEFORE the decision is admitted (after the funding settlements and protective rules of the same nanosecond, before its
@@ -940,9 +956,11 @@ def _to_payload(artifact: object) -> dict[str, object]:
     """
 
     payload = {item.name: _serialize(getattr(artifact, item.name)) for item in fields(artifact)}  # type: ignore[arg-type]
-    versioned = _VERSIONED_PAYLOADS.get(type(artifact))
-    if versioned is not None and getattr(artifact, "schema_version", None) == versioned[0]:
-        for name in versioned[1]:
+    version = getattr(artifact, "schema_version", None)
+    for versions, names in _VERSIONED_PAYLOADS.get(type(artifact), ()):
+        if version not in versions:
+            continue
+        for name in names:
             if not _is_neutral(getattr(artifact, name)):
                 raise ValueError(f"{_REASON_PREFIX}:legacy_schema_carries_an_extension_field:{name}")
             del payload[name]
@@ -1730,6 +1748,21 @@ class _Simulation:
 
         return None
 
+    def _sizing_fill_admission(  # noqa: PLR0913 - the exact facts of one exposure-increasing fill
+        self,
+        side: HistoricalExecutionSide,
+        book_record_digest: str,
+        time_ns: int,
+        requested: Fraction,
+        notional: Fraction,
+        equity: Fraction,
+    ) -> str | None:
+        """Admission hook of an exposure-increasing fill past every earlier fill rule: its order side, the book record it
+        executes against, its instant, the order's requested quantity, its exact post-fill notional at the fill mark and
+        its positive candidate equity. A refusal reason, or None (the historical model admits every one)."""
+
+        return None
+
     def _unpublished_funding(self, time_ns: int) -> Fraction:
         """The booked cashflow of every settlement whose final rate is not visible at ``time_ns``.
 
@@ -2280,7 +2313,9 @@ class _Simulation:
             notional = abs(transition.post.quantity) * mark.price
             if candidate_equity <= 0 or notional > self.max_leverage * candidate_equity:
                 return reject("risk_limit_exceeded", **quoted)
-            refused = self._exposure_fill_admission(notional, candidate_equity)
+            refused = self._exposure_fill_admission(notional, candidate_equity) or self._sizing_fill_admission(
+                record.side, book.record.record_digest, book.visibility, requested, notional, candidate_equity
+            )
             if refused is not None:
                 return reject(refused, **quoted)
         outcome = (
@@ -2985,6 +3020,10 @@ _PROTECTIVE_GOVERNED_SCHEMA_VERSION = HISTORICAL_EXECUTION_PROTECTIVE_GOVERNED_P
 # Schedule v4: the v3 schedule re-run on information time (S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1, module docstring).
 HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v4"
 _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION
+# Schedule v5: the v4 schedule with the declared fill-time sizing bounds (S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1).
+HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v5"
+_SIZING_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION
+_INFORMATION_TIME_SCHEDULES = (_INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION, _SIZING_SCHEDULE_SCHEMA_VERSION)
 # PRDV4 §1.21 NT-R04 and §8.2: no single position strictly above 25% of NAV; schedule v4 enforces it at every fill.
 HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP = Fraction(25, 100)
 _GOVERNED_DIGEST_FIELD = "outcome_digest"
@@ -3024,6 +3063,35 @@ class HistoricalExecutionProtectiveWindow:
 
 
 @dataclass(frozen=True)
+class HistoricalExecutionExposureEnvelope:
+    """One declared exposure envelope ``[window_start_ns, window_end_ns)`` (schema v5 only).
+
+    ``max_exposure_fraction`` is a canonical exact rational text (``str(Fraction)``, e.g. ``"2/5"``) in ``[0, 1]``. An
+    exposure-increasing fill executing inside the window is refused when its exact post-fill notional at the fill mark
+    strictly exceeds that fraction of its publication-visible candidate equity; one executing outside every window is
+    refused as unproven.
+    """
+
+    window_start_ns: int
+    window_end_ns: int
+    max_exposure_fraction: str
+
+
+@dataclass(frozen=True)
+class HistoricalExecutionDepthCap:
+    """One declared depth cap of one book record and one order side (schema v5 only).
+
+    ``max_order_quantity`` is a canonical exact rational text (``str(Fraction)``) of the base quantity an order must stay
+    STRICTLY below when its exposure-increasing fill executes against ``book_record_digest`` on ``side``; a fill against
+    a book and side without a declared cap is refused as unproven.
+    """
+
+    book_record_digest: str
+    side: HistoricalExecutionSide
+    max_order_quantity: str
+
+
+@dataclass(frozen=True)
 class HistoricalExecutionAdmissionSchedule:
     """One neutral declared admission schedule: ordered, disjoint windows and an optional invalidation instant.
 
@@ -3031,7 +3099,9 @@ class HistoricalExecutionAdmissionSchedule:
     such a decision that would increase the magnitude of the position is refused at its decision instant, while an
     exit or a reduction of an open position stays subject only to the other rules. ``protective_windows`` (schema v3
     and v4 only) are the ordered, disjoint DEC-1 protective windows of a position-managed baseline. Schema v4 carries
-    exactly the v3 fields; its re-run admits on information time (see the module docstring).
+    exactly the v3 fields; its re-run admits on information time (see the module docstring). Schema v5 is schema v4
+    with ``exposure_envelopes`` (ordered, disjoint) and ``depth_caps`` (one per book record and side, ordered by digest
+    then side), the declared fill-time sizing bounds; no other schema carries them.
     """
 
     schema_version: str
@@ -3040,6 +3110,8 @@ class HistoricalExecutionAdmissionSchedule:
     invalidated_from_ns: int | None
     entry_refused_decision_sequences: tuple[int, ...] = ()
     protective_windows: tuple[HistoricalExecutionProtectiveWindow, ...] = ()
+    exposure_envelopes: tuple[HistoricalExecutionExposureEnvelope, ...] = ()
+    depth_caps: tuple[HistoricalExecutionDepthCap, ...] = ()
 
 
 HISTORICAL_EXECUTION_GOVERNED_PAPER_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
@@ -3239,11 +3311,18 @@ _GOVERNED_V3_FIELDS = (
     "pending_protective_attempt_time_ns",
     "pending_protective_attempt_digest",
 )
-# The legacy schema of each versioned artifact and the extension fields its legacy payload never carries.
-_VERSIONED_PAYLOADS: dict[type, tuple[str, tuple[str, ...]]] = {
-    HistoricalExecutionEconomicsResult: (_SCHEMA_VERSION, _RESULT_V2_FIELDS),
-    HistoricalExecutionAdmissionSchedule: (_SCHEDULE_SCHEMA_VERSION, ("protective_windows",)),
-    HistoricalExecutionGovernedPaperOutcome: (_GOVERNED_SCHEMA_VERSION, _GOVERNED_V3_FIELDS),
+_SCHEDULE_V5_FIELDS = ("exposure_envelopes", "depth_caps")
+# Per versioned artifact: the legacy schema versions and the extension fields their legacy payloads never carry.
+_VERSIONED_PAYLOADS: dict[type, tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]] = {
+    HistoricalExecutionEconomicsResult: (((_SCHEMA_VERSION,), _RESULT_V2_FIELDS),),
+    HistoricalExecutionAdmissionSchedule: (
+        ((_SCHEDULE_SCHEMA_VERSION,), ("protective_windows",)),
+        (
+            (_SCHEDULE_SCHEMA_VERSION, _PROTECTIVE_SCHEDULE_SCHEMA_VERSION, _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION),
+            _SCHEDULE_V5_FIELDS,
+        ),
+    ),
+    HistoricalExecutionGovernedPaperOutcome: (((_GOVERNED_SCHEMA_VERSION,), _GOVERNED_V3_FIELDS),),
 }
 
 
@@ -3283,8 +3362,17 @@ class _GovernedPaperSimulation(_Simulation):
             (item.window_start_ns, item.window_end_ns) for item in schedule.protective_windows
         )
         self.protective_starts = [start for start, _ in self.protective_windows]
+        self.sizing = schedule.schema_version == _SIZING_SCHEDULE_SCHEMA_VERSION
+        self.envelopes = tuple(
+            (item.window_start_ns, item.window_end_ns, Fraction(item.max_exposure_fraction))
+            for item in schedule.exposure_envelopes
+        )
+        self.envelope_starts = [start for start, _, _ in self.envelopes]
+        self.depth_caps = {
+            (item.book_record_digest, item.side): Fraction(item.max_order_quantity) for item in schedule.depth_caps
+        }
         super().__init__(**arguments)  # type: ignore[arg-type]
-        self.information_time = schedule.schema_version == _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION
+        self.information_time = schedule.schema_version in _INFORMATION_TIME_SCHEDULES
         if record_decision_portfolio:
             self.decision_snapshots = []
 
@@ -3356,6 +3444,86 @@ class _GovernedPaperSimulation(_Simulation):
             return "governed_paper_position_concentration_exceeded_at_fill"
         return None
 
+    def _sizing_fill_admission(  # noqa: PLR0913 - the exact facts of one exposure-increasing fill
+        self,
+        side: HistoricalExecutionSide,
+        book_record_digest: str,
+        time_ns: int,
+        requested: Fraction,
+        notional: Fraction,
+        equity: Fraction,
+    ) -> str | None:
+        """Schedule v5: the declared exposure envelope and depth cap of an exposure-increasing fill (none otherwise).
+
+        The envelope of the window containing the fill instant bounds the exact post-fill notional at the fill mark by
+        its fraction of the publication-visible candidate equity (strictly above refuses); the depth cap of the fill's
+        own book record and side bounds the order's requested quantity (at or above refuses). A fill outside every
+        envelope, or against a book and side without a cap, is refused as unproven. Never reaches a reduction, a close
+        or a protective close-only fill.
+        """
+
+        if not self.sizing:
+            return None
+        index = bisect.bisect_right(self.envelope_starts, time_ns) - 1
+        if index < 0 or time_ns >= self.envelopes[index][1]:
+            return "governed_paper_exposure_envelope_unproven_at_fill"
+        if notional > self.envelopes[index][2] * equity:
+            return "governed_paper_exposure_envelope_exceeded_at_fill"
+        cap = self.depth_caps.get((book_record_digest, side))
+        if cap is None:
+            return "governed_paper_depth_cap_unproven_at_fill"
+        if requested >= cap:
+            return "governed_paper_depth_cap_exceeded_at_fill"
+        return None
+
+
+def _canonical_rational(text: object, field_name: str, *, at_most_one: bool) -> None:
+    """A canonical exact rational text: ``str(Fraction(text)) == text``, non-negative (and at most 1 when asked)."""
+
+    if type(text) is not str or not text or len(text) > 256 or text.strip() != text:
+        raise _fail(f"admission_schedule_malformed:{field_name}")
+    try:
+        value = Fraction(text)
+    except (ValueError, ZeroDivisionError) as exc:
+        raise _fail(f"admission_schedule_malformed:{field_name}") from exc
+    if str(value) != text or value < 0 or (at_most_one and value > 1):
+        raise _fail(f"admission_schedule_malformed:{field_name}")
+
+
+def _canonical_sizing_bounds(value: HistoricalExecutionAdmissionSchedule) -> None:
+    """Schema v5's exposure envelopes (ordered, disjoint) and depth caps (unique, ordered); none on another schema."""
+
+    envelopes, caps = value.exposure_envelopes, value.depth_caps
+    if type(envelopes) is not tuple or type(caps) is not tuple:
+        raise _fail("admission_schedule_malformed:sizing_bounds")
+    if value.schema_version != _SIZING_SCHEDULE_SCHEMA_VERSION and (envelopes or caps):
+        raise _fail("admission_schedule_malformed:sizing_bounds_need_schema_v5")
+    previous_end: int | None = None
+    for envelope in envelopes:
+        if type(envelope) is not HistoricalExecutionExposureEnvelope:
+            raise _fail("admission_schedule_malformed:exposure_envelope")
+        for name in ("window_start_ns", "window_end_ns"):
+            if not historical_execution_wire_int_is_valid(getattr(envelope, name), minimum=0):
+                raise _fail(f"admission_schedule_malformed:exposure_envelope_{name}")
+        if envelope.window_end_ns <= envelope.window_start_ns:
+            raise _fail("admission_schedule_invalid:exposure_envelope_empty")
+        if previous_end is not None and envelope.window_start_ns < previous_end:
+            raise _fail("admission_schedule_invalid:exposure_envelopes_not_ordered_disjoint")
+        _canonical_rational(envelope.max_exposure_fraction, "max_exposure_fraction", at_most_one=True)
+        previous_end = envelope.window_end_ns
+    previous_key: tuple[str, str] | None = None
+    for cap in caps:
+        if type(cap) is not HistoricalExecutionDepthCap or type(cap.side) is not HistoricalExecutionSide:
+            raise _fail("admission_schedule_malformed:depth_cap")
+        digest = cap.book_record_digest
+        if type(digest) is not str or len(digest) != 64 or not all(char in "0123456789abcdef" for char in digest):
+            raise _fail("admission_schedule_malformed:depth_cap_book_record_digest")
+        _canonical_rational(cap.max_order_quantity, "max_order_quantity", at_most_one=False)
+        key = (digest, cap.side.value)
+        if previous_key is not None and key <= previous_key:
+            raise _fail("admission_schedule_invalid:depth_caps_not_ordered_unique")
+        previous_key = key
+
 
 def canonical_historical_execution_admission_schedule(value: object) -> HistoricalExecutionAdmissionSchedule:
     """Validate one declared admission schedule exactly: types, canonical decimals and ordered disjoint windows."""
@@ -3366,9 +3534,11 @@ def canonical_historical_execution_admission_schedule(value: object) -> Historic
         _SCHEDULE_SCHEMA_VERSION,
         _PROTECTIVE_SCHEDULE_SCHEMA_VERSION,
         _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION,
+        _SIZING_SCHEDULE_SCHEMA_VERSION,
     ):
         raise _fail("admission_schedule_malformed:schema_version")
     _canonical_protective_windows(value)
+    _canonical_sizing_bounds(value)
     _require_text(value.schedule_id, "schedule_id")
     if type(value.windows) is not tuple:
         raise _fail("admission_schedule_malformed:windows")
@@ -3614,12 +3784,12 @@ def _governed_run(
     behind them; with the equal-instant phase of every trade close (all empty when the re-run cannot be computed)."""
 
     schedule = canonical_historical_execution_admission_schedule(schedule)
-    if record_decision_portfolio and schedule.schema_version != _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION:
+    if record_decision_portfolio and schedule.schema_version not in _INFORMATION_TIME_SCHEDULES:
         raise _fail("decision_portfolio_needs_the_information_time_schedule")
     baseline = _governed_baseline(result, expected_result_digest)
     protective = baseline.position_management is not None
     expected_schedules = (
-        (_PROTECTIVE_SCHEDULE_SCHEMA_VERSION, _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION)
+        (_PROTECTIVE_SCHEDULE_SCHEMA_VERSION, *_INFORMATION_TIME_SCHEDULES)
         if protective
         else (_SCHEDULE_SCHEMA_VERSION,)
     )
@@ -4832,7 +5002,10 @@ __all__ = [
     "HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP",
     "HISTORICAL_EXECUTION_PROTECTIVE_ADMISSION_SCHEDULE_SCHEMA_VERSION",
     "HISTORICAL_EXECUTION_PROTECTIVE_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION",
+    "HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION",
+    "HistoricalExecutionDepthCap",
     "HistoricalExecutionExcursionProtection",
+    "HistoricalExecutionExposureEnvelope",
     "HistoricalExecutionPositionManagementInputs",
     "HistoricalExecutionProtectiveAttempt",
     "HistoricalExecutionProtectiveObligation",
