@@ -23,7 +23,8 @@ It proves:
   sizing evidence; every entry is still refused; the public gate replays every sealed reading; lineage switches,
   relabelled versions and forged digests never verify; a CTR source is fixed for the lineage, its revocations
   append-only and inside their day, its capture complete through the seal and never rewritten or backfilled; under the
-  TEST-ONLY qualification table its reading is available yet the depth cap stays BLOCKED;
+  TEST-ONLY qualification table its reading is available yet the depth cap stays BLOCKED; the public fill bounds and
+  sizing evidence never read a dataset that does not re-prove whole (Sol B1);
 * E. the fill-time refusal on the integrated path: with the decision-time gate forced open (permissive, test-only), the
   engine refuses every entry fill of a sizing lineage as unproven;
 * F. legacy byte identity: world G's integrated lineage (seal v8, evidence v8) equals its accepted-main pins.
@@ -113,6 +114,7 @@ from crypto_core.validation.historical_execution_economics import (
     historical_execution_admission_schedule_digest,
     historical_execution_admission_schedule_to_dict,
 )
+from crypto_core.validation.historical_pit_dataset import HistoricalPitValue, verify_historical_pit_dataset
 
 try:  # the module objects pytest collects (basename import): the shared synthetic worlds and their exact memos
     import test_governed_admitted_variant_paper_execution as gpe
@@ -176,6 +178,10 @@ def _production_tables_with_exact_memos():
         patch.setattr(gpe.execution, "verify_historical_ohlc_bar_archive", archives)
         patch.setattr(
             regime, "verify_historical_pit_dataset", gpe._EXACT[(gpe.execution, "verify_historical_pit_dataset")]
+        )  # noqa: SLF001
+        # the depth index's own re-proof: an identity memo, so any other object (a forgery) is verified in full
+        patch.setattr(
+            ctr, "verify_historical_pit_dataset", gpe._EXACT[(gpe.execution, "verify_historical_pit_dataset")]
         )  # noqa: SLF001
         assert entry_safety._CHECKS is PRODUCTION_CHECKS  # noqa: SLF001
         assert regime._APPROVAL_TABLE is rst.PRODUCTION_TABLE  # noqa: SLF001
@@ -1057,6 +1063,36 @@ def test_a_ctr_source_is_fixed_for_the_lineage_its_revocations_append_only_and_i
         assert item.seal.status is GovernedPaperDaySealStatus.SEALED
         with gpe.refused(reason):
             lineage_evidence((*day0, item))
+
+
+def test_the_public_fill_bounds_and_sizing_evidence_never_read_a_dataset_that_does_not_re_prove() -> None:
+    item = sizing_days(1)[0]
+    authority, run, _ = est.run_and_evidence(item)
+    dataset, schedule = item.seal_inputs.dataset, item.seal.schedule  # type: ignore[attr-defined]
+    derived = sizing_module.governed_paper_sizing_fill_bounds(
+        authority=authority, run=run, dataset=dataset, context=NO_SOURCE
+    )
+    assert derived == (schedule.exposure_envelopes, schedule.depth_caps) == ((), ())
+    # Sol B1: one value of a world G record altered under every carried digest (record, record set and dataset)
+    record_ = dataset.records[0]
+    value = record_.values[0]
+    other = "2.000000000000000000" if value.value == "1.000000000000000000" else "1.000000000000000000"
+    altered = replace(record_, values=(HistoricalPitValue(value.name, other), *record_.values[1:]))
+    forged = replace(dataset, records=(altered, *dataset.records[1:]))
+    assert (forged.record_digests, forged.dataset_digest) == (dataset.record_digests, dataset.dataset_digest)
+    assert verify_historical_pit_dataset(forged).intact is False
+    with pytest.raises(ctr.GovernedPaperCtrError, match="depth_dataset_not_authentic$"):
+        sizing_module.governed_paper_sizing_fill_bounds(authority=authority, run=run, dataset=forged, context=NO_SOURCE)
+    with pytest.raises(ctr.GovernedPaperCtrError, match="depth_dataset_not_authentic$"):
+        sizing_module.derive_governed_paper_sizing_evidence(
+            authority=authority,
+            run=run,
+            dataset=forged,
+            schedule=schedule,
+            snapshots={},
+            exact_values={},
+            context=NO_SOURCE,
+        )
 
 
 # --- E. the fill-time refusal on the integrated path (permissive decision gate, TEST-ONLY) -------------------------------------

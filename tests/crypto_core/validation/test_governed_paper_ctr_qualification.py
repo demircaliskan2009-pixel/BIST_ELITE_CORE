@@ -4,7 +4,9 @@ S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1).
 SYNTHETIC TEST VALUES ONLY. Every qualification, licence digest, approver reference, source record, count and order
 book here is a synthetic fixture that exercises structure. No real source is qualified (X-M1-C), no provider is
 asserted, and the TEST-ONLY qualification table is installed by these tests alone; the PRODUCTION table admits no
-qualification. The approved companion's acceptance criteria (§10.4, T-CTR-01..10) are covered.
+qualification. The approved companion's acceptance criteria (§10.4, T-CTR-01..10) are covered, with sequence progression
+judged in the capture's receipt order, never by a sort (Sol B2), and the depth index re-proving its whole dataset before
+it reads a book (Sol B1).
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ from fractions import Fraction
 import pytest
 
 import crypto_core.validation.governed_paper_ctr_qualification as ctr
+from crypto_core.validation.edge_artifact_core import EdgeEvidenceStatus
 from crypto_core.validation.governed_paper_ctr_qualification import (
     GOVERNED_PAPER_CTR_PRODUCTION_APPROVAL_TABLE,
     GOVERNED_PAPER_CTR_REQUIRED_USE,
@@ -48,7 +51,15 @@ from crypto_core.validation.governed_paper_ctr_qualification import (
     verify_governed_paper_ctr_source_capture,
     verify_governed_paper_ctr_source_qualification,
 )
+from crypto_core.validation.governed_paper_regime_state import governed_paper_order_book_series
 from crypto_core.validation.historical_execution_economics import HistoricalExecutionSide
+from crypto_core.validation.historical_pit_dataset import (
+    HistoricalPitValue,
+    build_historical_pit_dataset,
+    historical_pit_dataset_digest,
+    historical_pit_record_digest,
+    verify_historical_pit_dataset,
+)
 
 try:  # the module objects pytest collects (basename import): the shared synthetic depth-50 tips
     import test_governed_paper_regime_state as rst
@@ -280,6 +291,120 @@ def test_a_record_received_or_published_after_the_reading_instant_is_excluded(te
     assert (after.cancel_count, after.trade_count) == (10, 4)
 
 
+def received(*rows: GovernedPaperCtrSourceRecord, through: int = T, **changes: object) -> GovernedPaperCtrSourceContext:
+    """A context whose capture holds ``rows`` in exactly this receipt order. The capture builder never sorts, and the
+    capture is intact whatever order the sequence ids arrive in: its digest integrity is never the reading's coverage."""
+
+    q = qualification(**changes)
+    capture = build_governed_paper_ctr_source_capture(
+        capture_id="synthetic-capture-1", qualification=q, complete_through_receipt_ns=through, records=rows
+    )
+    assert verify_governed_paper_ctr_source_capture(capture, q).intact
+    return GovernedPaperCtrSourceContext(qualification=q, revocations=(), capture=capture)
+
+
+def test_sequence_progression_is_judged_in_receipt_order_and_never_by_a_sort(test_only: None) -> None:
+    anchor = record(0, K.ORDER_ADD, T - 100 * SECOND)
+    cancel = record(1, K.ORDER_CANCEL_FULL, T - 40 * SECOND)
+    trade = record(2, K.TRADE, T - 30 * SECOND)
+    in_order = read(received(anchor, cancel, trade))
+    assert (in_order.available, in_order.cancel_count, in_order.trade_count) == (True, 1, 1)
+    # Sol B2: received [0, 2, 1] while published [0, 1, 2]; a sort by sequence id read it as covered (1/1, alpha 1)
+    late_cancel = replace(cancel, receipt_time_ns=T - 20 * SECOND)
+    reordered = received(anchor, trade, late_cancel)
+    reading = read(reordered)
+    assert (reading.available, reading.reason, reading.alpha) == (False, "sequence_reordered_in_the_window", None)
+    # between the two receipts the cancel is missing (a gap), and its late receipt never rewrites that earlier reading
+    between = T - 25 * SECOND
+    assert read(reordered, between) == read(received(anchor, trade, through=between), between)
+    assert read(reordered, between).reason == "sequence_gap_in_the_window"
+    # an authentic depth never turns the reorder into a PASS: without a CTR reading there is no cap
+    depth = GovernedPaperDepthIndex(rst.book_dataset([tight(T - SECOND, T - SECOND)]), instrument=INS).at(T, BUY)
+    order = Fraction(50)  # below 2% of the depth 4100 (82)
+    assert evaluate_governed_paper_ctr_depth(quantity=order, depth=depth, ctr=in_order).status is D_PASS
+    blocked = evaluate_governed_paper_ctr_depth(quantity=order, depth=depth, ctr=reading)
+    assert (blocked.status, blocked.reason) == (D_BLOCKED, "ctr_unavailable:sequence_reordered_in_the_window")
+    assert governed_paper_ctr_depth_cap(depth, reading) is None
+
+
+def test_a_reorder_across_the_window_start_after_the_anchor_or_inside_a_receipt_tie_is_blocked(test_only: None) -> None:
+    head = record(0, K.ORDER_ADD, T - 90 * SECOND)
+    cases = {
+        # the record anchoring the window start (published at T - 61 s) received after a record published inside it
+        "anchor_received_after_a_window_record": (
+            head,
+            record(2, K.TRADE, T - 30 * SECOND),
+            record(1, K.ORDER_ADD, T - 61 * SECOND, T - 25 * SECOND),
+        ),
+        # an older record (published before the window) received after the anchor and a window record
+        "older_record_received_after_the_anchor": (
+            head,
+            record(2, K.ORDER_ADD, T - 70 * SECOND),
+            record(3, K.TRADE, T - 30 * SECOND),
+            record(1, K.ORDER_ADD, T - 80 * SECOND, T - 20 * SECOND),
+        ),
+        # two records sharing a receipt instant in an order other than the sequence's: the tie is never sorted
+        "receipt_tie_out_of_sequence_order": (
+            head,
+            record(2, K.TRADE, T - 30 * SECOND, T - 20 * SECOND),
+            record(1, K.ORDER_CANCEL_FULL, T - 40 * SECOND, T - 20 * SECOND),
+        ),
+    }
+    for name, rows in cases.items():
+        assert read(received(*rows)).reason == "sequence_reordered_in_the_window", name
+    tie = (
+        head,
+        record(1, K.ORDER_CANCEL_FULL, T - 40 * SECOND, T - 20 * SECOND),
+        record(2, K.TRADE, T - 30 * SECOND, T - 20 * SECOND),
+    )
+    assert read(received(*tie)).available is True  # the same tie in the sequence's order
+    duplicate = (*tie, record(1, K.ORDER_CANCEL_FULL, T - 40 * SECOND, T - 10 * SECOND))  # a late repeat
+    assert read(received(*duplicate)).reason == "sequence_duplicate_in_the_window"
+    # a reorder received wholly before the anchor lies outside the window and never blocks a later reading
+    before = (
+        head,
+        record(2, K.ORDER_ADD, T - 88 * SECOND),
+        record(1, K.ORDER_ADD, T - 89 * SECOND, T - 87 * SECOND),
+        record(3, K.ORDER_ADD, T - 70 * SECOND),
+        record(4, K.TRADE, T - 30 * SECOND),
+    )
+    assert read(received(*before)).available is True
+    # under heartbeat coverage the sequence is still judged in receipt order before any heartbeat interval
+    interval = 10 * SECOND
+    beats = [record(index, K.HEARTBEAT, T - WINDOW - SECOND + index * interval) for index in range(6)]
+    heartbeats = {
+        "coverage_method": GovernedPaperCtrCoverageMethod.VENUE_HEARTBEATS,
+        "heartbeat_max_interval_ns": interval,
+    }
+    swapped = (
+        *beats[:4],
+        beats[5],
+        replace(beats[4], receipt_time_ns=T - 8 * SECOND),
+        record(6, K.TRADE, T - 5 * SECOND),
+    )
+    assert read(received(*beats, record(6, K.TRADE, T - 5 * SECOND), **heartbeats)).available is True
+    assert read(received(*swapped, **heartbeats)).reason == "sequence_reordered_in_the_window"
+
+
+def test_a_reorder_received_after_the_decision_blocks_the_fill_reading_and_never_rewrites_the_decision(
+    test_only: None,
+) -> None:
+    rows = window_events(10, 4)  # contiguous ids 0..14, covered at T
+    after = (
+        record(16, K.TRADE, T + SECOND // 4),
+        record(15, K.ORDER_CANCEL_FULL, T + SECOND // 8, T + SECOND // 2),  # published before 16, received after it
+    )
+    decision = read(context(rows))
+    fill_source = context([*rows, *after], through=T + SECOND)
+    assert decision.available and read(fill_source) == decision  # T-CTR-10: receipts after T are invisible at T
+    fill = read(fill_source, T + SECOND)
+    assert (fill.available, fill.reason) == (False, "sequence_reordered_in_the_window")
+    d1000, order = depth_of(1_000), Fraction(15)
+    assert evaluate_governed_paper_ctr_depth(quantity=order, depth=d1000, ctr=decision).status is D_PASS
+    assert evaluate_governed_paper_ctr_depth(quantity=order, depth=d1000, ctr=fill).status is D_BLOCKED
+    assert governed_paper_ctr_depth_cap(d1000, fill) is None  # no fill-time cap: the engine refuses the fill (T-CTR-09)
+
+
 def test_the_qualification_applies_only_from_its_approval_and_until_a_revocation_or_supersession(
     test_only: None,
 ) -> None:
@@ -457,6 +582,127 @@ def test_a_stale_absent_or_foreign_tip_gives_no_depth() -> None:
     assert index.of_record("3" * 64, BUY).reason == "book_record_not_in_the_series"
     late = GovernedPaperDepthIndex(rst.book_dataset([tight(T - SECOND, T + SECOND)]), instrument=INS)
     assert late.at(T, BUY).reason == "no_order_book_tip_visible_at_the_instant"  # received after the decision
+
+
+def forged_quantities(record_: object, factor: int):  # noqa: ANN201
+    """``record_`` with every quantity multiplied by ``factor`` and its carried record digest KEPT: a forgery."""
+
+    def scaled(text: str) -> str:
+        whole, fraction = text.split(".")
+        units = (int(whole) * 10**18 + int(fraction)) * factor
+        return f"{units // 10**18}.{units % 10**18:018d}"
+
+    values = tuple(
+        HistoricalPitValue(item.name, scaled(item.value)) if item.name.endswith("_quantity") else item
+        for item in record_.values  # type: ignore[attr-defined]
+    )
+    return replace(record_, values=values)  # type: ignore[type-var]
+
+
+def restricted_dataset(records: list):  # noqa: ANN201
+    """``rst.book_dataset`` with restricted rights: READY, intact, and NOT advancing (verdict FAIL)."""
+
+    manifest, _, registry = rst.ingt.world_chain()
+    return build_historical_pit_dataset(
+        manifest,
+        expected_source_manifest_digest=manifest.source_packet_evidence_digest,
+        expected_data_requirement_registry_digest=rst.data_requirement_registry_digest(registry),
+        dataset_id="synthetic-books",
+        correlation_id="corr-1",
+        source_reference="archive:synthetic-books",
+        rights_status="restricted",
+        rights_reference="license-1",
+        records=tuple(records),
+    )
+
+
+def test_the_depth_index_re_proves_the_whole_dataset_so_a_forged_quantity_never_turns_fail_into_pass(
+    test_only: None,
+) -> None:
+    original = tight(T - SECOND, T - SECOND)
+    dataset = rst.book_dataset([original])
+    qualified = read(context(window_events(10, 4)))  # alpha 1
+    order = Fraction(100)
+    index = GovernedPaperDepthIndex(dataset, instrument=INS)
+    depth = index.at(T, BUY)
+    assert (index.dataset_digest, Fraction(depth.depth), governed_paper_ctr_depth_cap(depth, qualified)) == (  # type: ignore[arg-type]
+        dataset.dataset_digest,
+        Fraction(4_100),
+        Fraction(82),
+    )
+    assert evaluate_governed_paper_ctr_depth(quantity=order, depth=depth, ctr=qualified).status is D_FAIL
+    # Sol B1: every quantity x100 under the carried record digest, record digests and dataset digest. Read through the
+    # manifest alone it was depth 410000, cap 8200 and a PASS of the same order.
+    altered = forged_quantities(dataset.records[0], 100)
+    forged = replace(dataset, records=(altered,))
+    assert (altered.record_digest, forged.record_digests, forged.dataset_digest) == (
+        original.record_digest,
+        dataset.record_digests,
+        dataset.dataset_digest,
+    )
+    assert historical_pit_record_digest(altered) != altered.record_digest
+    assert historical_pit_dataset_digest(forged) != forged.dataset_digest
+    assert governed_paper_order_book_series(forged, INS) == ("", "book")  # its manifest alone still re-proves
+    assert verify_historical_pit_dataset(forged).intact is False
+    with pytest.raises(GovernedPaperCtrError, match="depth_dataset_not_authentic$"):
+        GovernedPaperDepthIndex(forged, instrument=INS)  # no index: no at(), of_record() or records_visible_between()
+    assert GovernedPaperDepthIndex(dataset, instrument=INS).at(T, BUY) == depth  # the authentic reading is unchanged
+
+
+def test_a_dataset_that_does_not_re_prove_whole_yields_no_index_and_a_rebuilt_one_is_another_artifact() -> None:
+    first, second = tight(T - 2 * SECOND, T - 2 * SECOND), tight(T - SECOND, T - SECOND)
+    dataset = rst.book_dataset([first, second])
+    altered = forged_quantities(dataset.records[1], 100)
+    redigested = replace(altered, record_digest=historical_pit_record_digest(altered))
+    stale = rst.book_dataset([first, altered])  # assembled over the stale record digest: intact, yet REJECTED
+    restricted = restricted_dataset([first, second])
+    assert (verify_historical_pit_dataset(stale).intact, stale.status, stale.advances) == (
+        True,
+        EdgeEvidenceStatus.REJECTED,
+        False,
+    )
+    assert (verify_historical_pit_dataset(restricted).intact, restricted.status, restricted.advances) == (
+        True,
+        EdgeEvidenceStatus.READY,
+        False,
+    )
+    candidates = {
+        "quantity_under_the_carried_digests": replace(dataset, records=(first, altered)),
+        "record_redigested_under_the_carried_record_set": replace(dataset, records=(first, redigested)),
+        "record_set_redigested_under_the_carried_dataset_digest": replace(
+            dataset, records=(first, redigested), record_digests=(first.record_digest, redigested.record_digest)
+        ),
+        "record_removed_under_the_carried_record_set": replace(dataset, records=(first,)),
+        "carried_dataset_digest_replaced": replace(dataset, dataset_digest="5" * 64),
+        "assembled_over_the_stale_record_digest": stale,
+        "restricted_rights_not_advancing": restricted,
+    }
+    accepted = []
+    for name, candidate in candidates.items():
+        try:
+            GovernedPaperDepthIndex(candidate, instrument=INS)
+        except GovernedPaperCtrError as exc:
+            assert str(exc).endswith("depth_dataset_not_authentic"), name
+        else:
+            accepted.append(name)
+    assert accepted == []
+    with pytest.raises(GovernedPaperCtrError, match="depth_inputs_malformed$"):
+        GovernedPaperDepthIndex(object(), instrument=INS)  # type: ignore[arg-type]
+    with pytest.raises(TypeError, match="depth_index_is_final$"):  # no subclass can skip the verification
+        type("UnverifiedDepthIndex", (GovernedPaperDepthIndex,), {})
+    # a rebuild over the altered quantities is a NEW artifact with its own digests, never the original record's identity
+    index, renewed = (
+        GovernedPaperDepthIndex(dataset, instrument=INS),
+        GovernedPaperDepthIndex(rst.book_dataset([first, redigested]), instrument=INS),
+    )
+    assert renewed.dataset_digest != index.dataset_digest == dataset.dataset_digest
+    assert (Fraction(index.at(T, BUY).depth), Fraction(renewed.at(T, BUY).depth)) == (  # type: ignore[arg-type]
+        Fraction(4_100),
+        Fraction(410_000),
+    )
+    assert renewed.at(T, BUY).book_record_digest == redigested.record_digest != second.record_digest
+    assert renewed.of_record(second.record_digest, BUY).reason == "book_record_not_in_the_series"
+    assert index.of_record(redigested.record_digest, BUY).reason == "book_record_not_in_the_series"
 
 
 def depth_of(value: object, exact: bool = True) -> GovernedPaperVisibleDepth:  # noqa: FBT001, FBT002

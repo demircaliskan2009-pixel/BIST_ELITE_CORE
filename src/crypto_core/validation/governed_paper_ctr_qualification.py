@@ -27,22 +27,30 @@ its publication). Its integrity is its digest binding; the origin of its timesta
 
 Reading at instant ``t`` (§1.2 A.4 and §5). Over the window ``(t - 60 s, t]``, a record counts only when it was received
 at or before ``t``. The qualification must be admitted, approved at or before ``t``, neither revoked nor superseded at or
-before ``t``, and of the genesis instrument; the capture must be complete through ``t``. The window must be covered:
-an anchor record published at or before ``t - 60 s`` and every later received record contiguous in sequence (a gap, a
-duplicate or a reorder is BLOCKED), and for ``VENUE_HEARTBEATS`` no publication gap above the declared interval up to
-``t``. ``ORDER_LEVEL_EVENTS`` count the cancels the definition names and every trade record; ``VENUE_PUBLISHED_COUNTS``
-must tile the window exactly with contiguous published intervals. ``N_trades = 0`` is BLOCKED. ``CTR = N_cancels /
-N_trades``; ``alpha = 1`` when ``CTR <= 5`` and ``1 / (1 + 0.2 (CTR - 5))`` above. No count is ever inferred from L2
-book changes, a quote disappearance, turnover or a model: no such path exists.
+before ``t``, and of the genesis instrument; the capture must be complete through ``t``. The window must be covered,
+judged on the records received at or before ``t`` in the capture's own receipt order, which is never re-sorted (a sort
+by sequence id would erase the evidence of an arrival reorder): the anchor is the record of the highest sequence id
+published at or before ``t - 60 s``, and the anchor, every record received after it and every record published inside
+the window must carry exactly the anchor's sequence id and its successors, each received after its predecessor, with
+publication instants that never run backwards (a gap, a duplicate or a reorder is BLOCKED). Records sharing a receipt
+instant keep the capture's order, so a tie in any order other than the sequence's is a reorder; no arrival order is
+inferred. For ``VENUE_HEARTBEATS`` there must also be no publication gap above the declared interval up to ``t``. The
+capture's digest integrity never implies coverage: an intact capture can hold a reorder that blocks every reading whose
+span contains it. ``ORDER_LEVEL_EVENTS`` count the cancels the definition names and every trade record;
+``VENUE_PUBLISHED_COUNTS`` must tile the window exactly with contiguous published intervals. ``N_trades = 0`` is
+BLOCKED. ``CTR = N_cancels / N_trades``; ``alpha = 1`` when ``CTR <= 5`` and ``1 / (1 + 0.2 (CTR - 5))`` above. No count
+is ever inferred from L2 book changes, a quote disappearance, turnover or a model: no such path exists.
 
 Depth (§1.12 Mechanism 2, §7.2). ``D`` is the visible depth within 5 bps of the mid on the side the order consumes
 (the asks for a buy, the bids for a sell; the side the engine's fill model reads), the summed base quantity of that
-side's levels inside the band of the dataset's authenticated ORDER_BOOK depth-50 tip. It is exact when the side's 50th
-level lies strictly beyond the band, otherwise a lower bound. At a decision the tip is the latest one visible at ``t``
-by native event time and fresh within 10 s (the NT-D02 reading); at a fill it is the book record the fill executes
-against. Evaluation, with ``q`` the order quantity: FAIL when ``q >= 0.02 D`` on an exact ``D`` (no CTR needed, since
-``alpha <= 1``); PASS when ``q < 0.02 alpha D`` with a qualified, covered reading; BLOCKED otherwise. The fill model's own
-depth cap is unchanged.
+side's levels inside the band of the dataset's authenticated ORDER_BOOK depth-50 tip. The dataset is re-proven whole
+first, through ``verify_historical_pit_dataset``, and must be intact, READY and advancing: an authentic manifest is
+never authority over the records, and a carried digest never authenticates altered records, so such a dataset yields no
+index, no depth and no cap. ``D`` is exact when the side's 50th level lies strictly beyond the band, otherwise a lower
+bound. At a decision the tip is the latest one visible at ``t`` by native event time and fresh within 10 s (the NT-D02
+reading); at a fill it is the book record the fill executes against. Evaluation, with ``q`` the order quantity: FAIL
+when ``q >= 0.02 D`` on an exact ``D`` (no CTR needed, since ``alpha <= 1``); PASS when ``q < 0.02 alpha D`` with a
+qualified, covered reading; BLOCKED otherwise. The fill model's own depth cap is unchanged.
 """
 
 from __future__ import annotations
@@ -55,6 +63,7 @@ from fractions import Fraction
 
 from crypto_core.validation.edge_artifact_core import (
     EdgeArtifactError,
+    EdgeEvidenceStatus,
     EdgeEvidenceVerification,
     edge_is_hex64,
     edge_payload_digest,
@@ -70,7 +79,11 @@ from crypto_core.validation.historical_execution_economics_policy import (
     historical_execution_render_amount,
     historical_execution_wire_int_is_valid,
 )
-from crypto_core.validation.historical_pit_dataset import HistoricalPitDataset, HistoricalPitRecord
+from crypto_core.validation.historical_pit_dataset import (
+    HistoricalPitDataset,
+    HistoricalPitRecord,
+    verify_historical_pit_dataset,
+)
 
 _PREFIX = "governed_paper_ctr_qualification"
 _NS = 1_000_000_000
@@ -702,23 +715,33 @@ def _coverage(  # noqa: C901 - one linear proof of the window's coverage
     time_ns: int,
     heartbeat_interval_ns: int | None,
 ) -> str:
-    """Why the window ``(t - 60 s, t]`` is not covered by ``records`` (received at or before ``t``); empty when it is."""
+    """Why the window ``(t - 60 s, t]`` is not covered by ``records``, the capture's records received at or before ``t``
+    in the capture's own receipt order; empty when it is.
+
+    That receipt order is the evidence and is never re-sorted. The anchor is the first-received record of the highest
+    sequence id published at or before ``t - 60 s``; the span is the anchor, every record received after it and every
+    record published inside the window, in receipt order. Its sequence ids must be exactly the anchor's and its
+    successors in that order: an id below the anchor's, or a receipt order other than the sequence order (a tie
+    included), is a reorder; a repeated id a duplicate; a missing id a gap. A publication instant running backwards
+    along the span is a reorder too.
+    """
 
     start = time_ns - _WINDOW_NS
-    anchors = [item for item in records if item.publication_time_ns <= start]
+    anchors = [index for index, item in enumerate(records) if item.publication_time_ns <= start]
     if not anchors:
         return "window_start_not_observed"
-    anchor = max(anchors, key=lambda item: item.sequence_id)
-    if any(item.publication_time_ns > start and item.sequence_id < anchor.sequence_id for item in records):
-        return "sequence_reordered_in_the_window"
-    span = sorted(
-        (item for item in records if item.sequence_id >= anchor.sequence_id), key=lambda item: item.sequence_id
-    )
+    position = max(anchors, key=lambda index: records[index].sequence_id)  # max() keeps the first on a tie
+    first = records[position].sequence_id
+    span = [item for index, item in enumerate(records) if index >= position or item.publication_time_ns > start]
     identifiers = [item.sequence_id for item in span]
+    if min(identifiers) < first:
+        return "sequence_reordered_in_the_window"
     if len(set(identifiers)) != len(identifiers):
         return "sequence_duplicate_in_the_window"
-    if identifiers != list(range(anchor.sequence_id, anchor.sequence_id + len(span))):
+    if max(identifiers) != first + len(identifiers) - 1:  # distinct ids from ``first``: contiguous iff this holds
         return "sequence_gap_in_the_window"
+    if identifiers != list(range(first, first + len(identifiers))):  # received out of sequence order
+        return "sequence_reordered_in_the_window"
     if any(
         later.publication_time_ns < earlier.publication_time_ns for earlier, later in zip(span, span[1:], strict=False)
     ):
@@ -758,7 +781,7 @@ def governed_paper_ctr_reading(
         return _unavailable(time_ns, f"qualification_{ended[0].kind.value.lower()}_at_the_reading_instant")
     if capture.complete_through_receipt_ns < time_ns:
         return _unavailable(time_ns, "capture_not_complete_at_the_reading_instant")
-    received = [item for item in capture.records if item.receipt_time_ns <= time_ns]
+    received = [item for item in capture.records if item.receipt_time_ns <= time_ns]  # the capture's receipt order
     reason = _coverage(received, time_ns=time_ns, heartbeat_interval_ns=qualification.heartbeat_max_interval_ns)
     if reason:
         return _unavailable(time_ns, reason)
@@ -825,11 +848,25 @@ def _side_depth(
 
 
 class GovernedPaperDepthIndex:
-    """The visible-depth readings of one dataset's authenticated ORDER_BOOK depth-50 series of one instrument."""
+    """The visible-depth readings of one dataset's authenticated ORDER_BOOK depth-50 series of one instrument.
+
+    The whole dataset is re-proven before any book is indexed: ``verify_historical_pit_dataset`` (exact schema and strict
+    parse, the EF-3 manifest re-proof, every record re-digested, the record set and the dataset digest through the one
+    canonical reassembly) must find it intact, and it must be READY and advancing. Otherwise ``GovernedPaperCtrError`` is
+    raised and no index exists over it, so no depth or cap is ever read from it. ``dataset_digest`` is the digest of
+    the verified dataset. The class is final: a subclass could skip the verification.
+    """
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        raise TypeError(_reason("depth_index_is_final"))
 
     def __init__(self, dataset: HistoricalPitDataset, *, instrument: str) -> None:
         if type(dataset) is not HistoricalPitDataset or type(instrument) is not str or not instrument:
             raise _fail("depth_inputs_malformed")
+        verification = verify_historical_pit_dataset(dataset)
+        if not verification.intact or dataset.status is not EdgeEvidenceStatus.READY or dataset.advances is not True:
+            raise _fail("depth_dataset_not_authentic")
+        self.dataset_digest = verification.recomputed_digest
         try:
             self.reason, series = governed_paper_order_book_series(dataset, instrument)
         except GovernedPaperRegimeError as exc:
