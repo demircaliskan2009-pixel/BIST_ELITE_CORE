@@ -111,6 +111,21 @@ Integrated risk and system-safety lineage (``S1_INTEGRATED_RISK_AND_SYSTEM_SAFET
 * HZ-STOP can pass only under a position-management policy v2, whose engine applies the PRDV4 §1.27/§8.3 INTRADAY initial
   stop beside the §1.9 stop. Without ``system_safety`` every regime seal and evidence is exactly the accepted v7
   artifact, and no v2-v7 payload carries a seal v8 field.
+
+Approved sizing chain lineage (``S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1``, seal v9 and evidence v9).
+* An integrated lineage whose protection inputs carry a sizing context does so on every day from day 0, and never
+  switches. The context is the CTR source known at ``E_{k+1}``, or none: one qualification for the whole lineage (or none
+  on every day), its revocations append-only and each effective inside the day that adds it, and its capture complete
+  through ``E_{k+1}``. The lineage evidence refuses a capture that rewrites a record or backfills one received at or
+  before ``E_k``, so no reading at or before ``E_k`` can change.
+* Its schedule is the engine's schedule v5: the information-time schedule v4 with the fill-time exposure envelopes and
+  depth caps derived from the genesis, the run, the archive and the CTR source (``governed_paper_sizing_chain``), facts
+  of the inputs alone. Its entry gate evaluates rule set v8: rule set v7 with ENVELOPE-FIT, SCALE-1 under A9' and
+  CTR-DEPTH on the sizing evidence each evaluation derives, a function of the inputs and of each decision's own
+  snapshot, so the sequential admission is unchanged.
+* The seal binds the sizing evidence digest and the CTR source binding (qualification, revocations, capture and its
+  record count). Without a sizing context every integrated seal and evidence is exactly the accepted v8 artifact, and no
+  v2-v8 payload carries a seal v9 field.
 """
 
 from __future__ import annotations
@@ -136,6 +151,11 @@ from crypto_core.validation.edge_kill_quarantine_decision import (
     EdgeKillQuarantineDecision,
     EdgeLifecycleState,
     verify_edge_kill_quarantine_decision,
+)
+from crypto_core.validation.governed_paper_allocation_envelope import GovernedPaperAllocationError
+from crypto_core.validation.governed_paper_ctr_qualification import (
+    GovernedPaperCtrError,
+    governed_paper_ctr_canonical_context,
 )
 from crypto_core.validation.governed_paper_entry_safety import (
     GovernedPaperEntrySafetyDecision,
@@ -179,6 +199,11 @@ from crypto_core.validation.governed_paper_regime_state import (
     verify_governed_paper_regime_approval,
     verify_governed_paper_regime_policy,
 )
+from crypto_core.validation.governed_paper_sizing_chain import (
+    GovernedPaperSizingContext,
+    GovernedPaperSizingError,
+    governed_paper_sizing_fill_bounds,
+)
 from crypto_core.validation.governed_paper_typed_identity import (
     GovernedPaperTypeDomain,
     governed_paper_typed_image,
@@ -190,6 +215,7 @@ from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_PROTECTIVE_ADMISSION_SCHEDULE_SCHEMA_VERSION,
+    HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HistoricalExecutionAdmissionSchedule,
     HistoricalExecutionAdmissionWindow,
     HistoricalExecutionExcursionProtection,
@@ -267,6 +293,7 @@ _MARKET_DATA_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v5"
 _KILL_SWITCH_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v6"
 _REGIME_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v7"
 _SYSTEM_SAFETY_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v8"
+_SIZING_CHAIN_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v9"
 _EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v2"
 _PROTECTIVE_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v3"
 _PORTFOLIO_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v4"
@@ -274,7 +301,9 @@ _MARKET_DATA_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v5"
 _KILL_SWITCH_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v6"
 _REGIME_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v7"
 _SYSTEM_SAFETY_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v8"
-_REGIME_SEALS = (_REGIME_SEAL_SCHEMA_VERSION, _SYSTEM_SAFETY_SEAL_SCHEMA_VERSION)
+_SIZING_CHAIN_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v9"
+_SYSTEM_SAFETY_SEALS = (_SYSTEM_SAFETY_SEAL_SCHEMA_VERSION, _SIZING_CHAIN_SEAL_SCHEMA_VERSION)
+_REGIME_SEALS = (_REGIME_SEAL_SCHEMA_VERSION, *_SYSTEM_SAFETY_SEALS)
 _KILL_SWITCH_SEALS = (_KILL_SWITCH_SEAL_SCHEMA_VERSION, *_REGIME_SEALS)
 _MARKET_DATA_SEALS = (_MARKET_DATA_SEAL_SCHEMA_VERSION, *_KILL_SWITCH_SEALS)
 _PORTFOLIO_SEALS = (_PORTFOLIO_SEAL_SCHEMA_VERSION, *_MARKET_DATA_SEALS)
@@ -420,10 +449,24 @@ class GovernedPaperDaySeal:
     regime_evidence_digest: str = ""
     regime_prefix_digest_open: str = ""
     regime_prefix_digest_close: str = ""
-    # Seal v8 only (a system-safety lineage, S1_INTEGRATED_RISK_AND_SYSTEM_SAFETY_CLOSURE_V1): no v2-v7 payload carries it.
+    # Seal v8 on (a system-safety lineage, S1_INTEGRATED_RISK_AND_SYSTEM_SAFETY_CLOSURE_V1): no v2-v7 payload carries it.
     system_state_evidence_digest: str = ""
+    # Seal v9 only (an approved sizing chain lineage, S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1): no v2-v8 payload carries
+    # these.
+    sizing_evidence_digest: str = ""
+    ctr_qualification_digest: str = ""
+    ctr_revocation_digests: tuple[str, ...] = ()
+    ctr_capture_digest: str = ""
+    ctr_capture_record_count: int = 0
 
 
+_SEAL_V9_FIELDS = (
+    "sizing_evidence_digest",
+    "ctr_qualification_digest",
+    "ctr_revocation_digests",
+    "ctr_capture_digest",
+    "ctr_capture_record_count",
+)
 _SEAL_V8_FIELDS = ("system_state_evidence_digest",)
 _SEAL_V6_FIELDS = (
     "kill_switch_ladder_digest",
@@ -464,7 +507,9 @@ class GovernedPaperDayProtectionInputs:
     with that) the proven kill-switch escalation lineage (seal v6, entry rule set v5). ``regime`` (only with that) is the
     Family B regime lineage's context (seal v7, entry rule set v6): the regime policy, its approval and the policy's MARK
     bar archive known at ``E_{k+1}``. ``system_safety`` (only with a regime context) selects the integrated risk and
-    system-safety lineage (seal v8, entry rule set v7).
+    system-safety lineage (seal v8, entry rule set v7). ``sizing`` (only with ``system_safety``) is the approved sizing
+    chain lineage's context (seal v9, entry rule set v7 -> v8, schedule v5): the CTR source known at ``E_{k+1}``
+    (qualification, revocations, capture complete through ``E_{k+1}``) or none.
     """
 
     authority_inputs: GovernedPaperProtectiveAuthorityInputs
@@ -478,6 +523,7 @@ class GovernedPaperDayProtectionInputs:
     kill_switch_escalation: bool = False
     regime: GovernedPaperEntrySafetyRegimeContext | None = None
     system_safety: bool = False
+    sizing: GovernedPaperSizingContext | None = None
 
 
 @dataclass(frozen=True)
@@ -681,13 +727,17 @@ def _to_payload(artifact: object) -> dict[str, object]:
 # Per artifact type: the legacy schema versions and the extension fields their payloads never carry.
 _LEGACY_PAYLOADS: dict[type, tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]] = {
     GovernedPaperDaySeal: (
-        ((_SEAL_SCHEMA_VERSION,), (*_SEAL_V3_FIELDS, *_SEAL_V6_FIELDS, *_SEAL_V7_FIELDS, *_SEAL_V8_FIELDS)),
+        (
+            (_SEAL_SCHEMA_VERSION,),
+            (*_SEAL_V3_FIELDS, *_SEAL_V6_FIELDS, *_SEAL_V7_FIELDS, *_SEAL_V8_FIELDS, *_SEAL_V9_FIELDS),
+        ),
         (
             (_PROTECTIVE_SEAL_SCHEMA_VERSION, _PORTFOLIO_SEAL_SCHEMA_VERSION, _MARKET_DATA_SEAL_SCHEMA_VERSION),
-            (*_SEAL_V6_FIELDS, *_SEAL_V7_FIELDS, *_SEAL_V8_FIELDS),
+            (*_SEAL_V6_FIELDS, *_SEAL_V7_FIELDS, *_SEAL_V8_FIELDS, *_SEAL_V9_FIELDS),
         ),
-        ((_KILL_SWITCH_SEAL_SCHEMA_VERSION,), (*_SEAL_V7_FIELDS, *_SEAL_V8_FIELDS)),
-        ((_REGIME_SEAL_SCHEMA_VERSION,), _SEAL_V8_FIELDS),
+        ((_KILL_SWITCH_SEAL_SCHEMA_VERSION,), (*_SEAL_V7_FIELDS, *_SEAL_V8_FIELDS, *_SEAL_V9_FIELDS)),
+        ((_REGIME_SEAL_SCHEMA_VERSION,), (*_SEAL_V8_FIELDS, *_SEAL_V9_FIELDS)),
+        ((_SYSTEM_SAFETY_SEAL_SCHEMA_VERSION,), _SEAL_V9_FIELDS),
     ),
     GovernedPaperExecutionEvidence: (((_EVIDENCE_SCHEMA_VERSION,), _EVIDENCE_V3_FIELDS),),
 }
@@ -990,6 +1040,7 @@ class _SealProof:
     kill_switch: bool = False
     regime: bool = False
     system_safety: bool = False
+    sizing_chain: bool = False
 
 
 def _closing(inputs: GovernedPaperDaySealInputs, cycle: GovernedPaperCycleAuthority, sleeve_id: str, end: int):  # noqa: ANN202
@@ -1049,6 +1100,44 @@ class _DayProtection:
     regime: GovernedPaperEntrySafetyRegimeContext | None = None
     regime_digests: tuple[str, str, str] = ("", "", "")  # policy, approval, archive (re-proven)
     system_safety: bool = False
+    sizing: GovernedPaperSizingContext | None = None
+    # the CTR source binding: qualification digest, revocation digests, capture digest and record count (re-proven)
+    ctr_binding: tuple[str, tuple[str, ...], str, int] = ("", (), "", 0)
+
+
+def _ctr_source(
+    sizing: GovernedPaperSizingContext,
+    prior: GovernedPaperDaySeal | None,
+    *,
+    genesis: GovernedPaperGenesis,
+    start: int,
+    end: int,
+) -> tuple[str, tuple[str, ...], str, int]:
+    """Re-prove one day's CTR source: the same qualification (or none) on every day of the lineage, its revocations
+    append-only and effective inside the day that adds them, and its capture complete through ``E_{k+1}``."""
+
+    source = sizing.ctr_source
+    if source is None:
+        if prior is not None and prior.ctr_qualification_digest != "":
+            raise _fail("ctr_source_changed_inside_the_lineage")
+        return "", (), "", 0
+    try:
+        governed_paper_ctr_canonical_context(source, instrument=genesis.instrument)
+    except GovernedPaperCtrError as exc:
+        raise _fail("ctr_source_not_authentic") from exc
+    qualification, capture = source.qualification, source.capture
+    if prior is not None and prior.ctr_qualification_digest != qualification.qualification_digest:
+        raise _fail("ctr_source_changed_inside_the_lineage")
+    digests = tuple(item.revocation_digest for item in source.revocations)
+    previous = () if prior is None else prior.ctr_revocation_digests
+    if digests[: len(previous)] != previous:
+        raise _fail("ctr_revocations_rewritten")
+    for revocation in source.revocations[len(previous) :]:
+        if revocation.effective_from_ns > end or (prior is not None and revocation.effective_from_ns <= start):
+            raise _fail("ctr_revocation_outside_the_sealed_day")
+    if capture.complete_through_receipt_ns != end:
+        raise _fail("ctr_capture_not_complete_through_the_seal")
+    return qualification.qualification_digest, digests, capture.capture_digest, len(capture.records)
 
 
 def _regime_context(
@@ -1136,11 +1225,18 @@ def _day_protection(  # noqa: C901 - one linear proof of the protective inputs
         raise _fail("protection_inputs_malformed:system_safety")
     if protection.system_safety and regime is None:
         raise _fail("system_safety_gate_needs_the_regime_lineage")
-    if (
-        prior is not None
-        and (prior.schema_version == _SYSTEM_SAFETY_SEAL_SCHEMA_VERSION) is not protection.system_safety
-    ):
+    if prior is not None and (prior.schema_version in _SYSTEM_SAFETY_SEALS) is not protection.system_safety:
         raise _fail("system_safety_gate_lineage_switched")
+    sizing = protection.sizing
+    if sizing is not None and type(sizing) is not GovernedPaperSizingContext:
+        raise _fail("protection_inputs_malformed:sizing")
+    if sizing is not None and not protection.system_safety:
+        raise _fail("sizing_chain_needs_the_system_safety_lineage")
+    if prior is not None and (prior.schema_version == _SIZING_CHAIN_SEAL_SCHEMA_VERSION) is not (sizing is not None):
+        raise _fail("sizing_chain_lineage_switched")
+    ctr_binding = (
+        ("", (), "", 0) if sizing is None else _ctr_source(sizing, prior, genesis=genesis, start=start, end=end)
+    )
     regime_digests = ("", "", "") if regime is None else _regime_context(regime, prior, genesis=genesis, end=end)
     authority, authority_inputs = protection.authority, protection.authority_inputs
     if type(authority) is not GovernedPaperProtectiveAuthority:
@@ -1224,6 +1320,8 @@ def _day_protection(  # noqa: C901 - one linear proof of the protective inputs
         regime=regime,
         regime_digests=regime_digests,
         system_safety=protection.system_safety,
+        sizing=sizing,
+        ctr_binding=ctr_binding,
     )
 
 
@@ -1321,6 +1419,8 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
     schedule = HistoricalExecutionAdmissionSchedule(
         schema_version=HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION
         if protection is None
+        else HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION
+        if protection.sizing is not None
         else HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION
         if protection.portfolio_no_trade
         else HISTORICAL_EXECUTION_PROTECTIVE_ADMISSION_SCHEDULE_SCHEMA_VERSION,
@@ -1391,6 +1491,13 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
                 regime_approval_digest=protection.regime_digests[1],
                 regime_archive_digest=protection.regime_digests[2],
             )
+        if protection.sizing is not None:
+            facts.update(
+                ctr_qualification_digest=protection.ctr_binding[0],
+                ctr_revocation_digests=protection.ctr_binding[1],
+                ctr_capture_digest=protection.ctr_binding[2],
+                ctr_capture_record_count=protection.ctr_binding[3],
+            )
         empty.update(
             open_excursion_deciding_day_index=None,
             open_excursion_deciding_cycle_digest=None,
@@ -1404,6 +1511,8 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
     kill_switch = protection is not None and protection.kill_switch_escalation
     regime = protection is not None and protection.regime is not None
     system_safety = protection is not None and protection.system_safety
+    sizing_chain = protection is not None and protection.sizing is not None
+    lineage = (protective, portfolio, market_data, kill_switch, regime, system_safety, sizing_chain)
     try:
         if not attested:
             raise _Blocked("closing_head_not_attested")
@@ -1418,12 +1527,10 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
         # The engine ran under the schedule the entry-safety refusals completed; a blocked day keeps the opening one.
         facts["schedule"] = replay.schedule
         facts["schedule_digest"] = historical_execution_admission_schedule_digest(replay.schedule)
-        return _SealProof(facts, (), protective, portfolio, market_data, kill_switch, regime, system_safety)
+        return _SealProof(facts, (), *lineage)
     except _Blocked as blocked:
         facts.update(empty)
-        return _SealProof(
-            facts, (_reason(blocked.code),), protective, portfolio, market_data, kill_switch, regime, system_safety
-        )
+        return _SealProof(facts, (_reason(blocked.code),), *lineage)
 
 
 @dataclass(frozen=True)
@@ -1504,6 +1611,15 @@ def _replay(
         or economics.simulated_economics_computed is not True
     ):
         raise _Blocked(f"economics_not_computed:{economics.gate_verdict.value}")
+    if protection is not None and protection.sizing is not None:
+        # The schedule v5 fill-time bounds: facts of the authenticated inputs alone, never of the admissions.
+        try:
+            envelopes, caps = governed_paper_sizing_fill_bounds(
+                authority=authority, run=run, dataset=inputs.dataset, context=protection.sizing
+            )
+        except (GovernedPaperSizingError, GovernedPaperCtrError, GovernedPaperAllocationError) as exc:
+            raise _fail("sizing_fill_bounds_not_derivable") from exc
+        schedule = replace(schedule, exposure_envelopes=envelopes, depth_caps=caps)
 
     evaluations: dict[tuple[int, ...], GovernedPaperEntrySafetyEvidence] = {}
 
@@ -1527,6 +1643,7 @@ def _replay(
                 kill_switch=protection.kill_switch_escalation,  # type: ignore[union-attr]
                 regime=protection.regime,  # type: ignore[union-attr]
                 system_safety=protection.system_safety,  # type: ignore[union-attr]
+                sizing=protection.sizing,  # type: ignore[union-attr]
             )
         return evaluations[refused]
 
@@ -1824,6 +1941,14 @@ def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the 
             if system_state is None:  # pragma: no cover - rule set v7 always binds its system-state evidence
                 raise _fail("system_state_evidence_missing")
             derived.update(system_state_evidence_digest=system_state.evidence_digest)
+        if protection.sizing is not None:
+            # The sizing readings of every entry since G and the schedule v5 bounds: each is a fact of the inputs the
+            # seal binds (the genesis, the archive, the engine prefix and the CTR source) and of a decision's own
+            # snapshot; the CTR capture is complete through E_{k+1} and append-only, so no sealed reading is revised.
+            sizing = replay.entry_safety.sizing_evidence
+            if sizing is None:  # pragma: no cover - rule set v8 always binds its sizing evidence
+                raise _fail("sizing_evidence_missing")
+            derived.update(sizing_evidence_digest=sizing.evidence_digest)
     return {
         **derived,
         "decision_run_digest": replay.run_digest,
@@ -1857,7 +1982,9 @@ def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the 
 def _assemble_seal(proof: _SealProof) -> GovernedPaperDaySeal:
     status = GovernedPaperDaySealStatus.BLOCKED if proof.blocked else GovernedPaperDaySealStatus.SEALED
     seed = GovernedPaperDaySeal(
-        schema_version=_SYSTEM_SAFETY_SEAL_SCHEMA_VERSION
+        schema_version=_SIZING_CHAIN_SEAL_SCHEMA_VERSION
+        if proof.sizing_chain
+        else _SYSTEM_SAFETY_SEAL_SCHEMA_VERSION
         if proof.system_safety
         else _REGIME_SEAL_SCHEMA_VERSION
         if proof.regime
@@ -2003,6 +2130,18 @@ def build_governed_paper_execution_evidence(inputs: GovernedPaperExecutionInputs
                         for name in set(current_regime) - set(earlier_regime)
                     ):
                         raise _fail(f"regime_archive_backfilled_before_the_day:{day}")
+                sizing = protection.sizing
+                if sizing is not None and sizing.ctr_source is not None:  # the seal proved one source on both days
+                    earlier_sizing = inputs.days[day - 1].seal_inputs.protection.sizing  # type: ignore[union-attr]
+                    earlier_records = earlier_sizing.ctr_source.capture.records  # type: ignore[union-attr]
+                    current_records = sizing.ctr_source.capture.records
+                    if current_records[: len(earlier_records)] != earlier_records:
+                        raise _fail(f"ctr_capture_rewritten:{day}")
+                    if any(
+                        item.receipt_time_ns <= cycle.window_start_ns
+                        for item in current_records[len(earlier_records) :]
+                    ):
+                        raise _fail(f"ctr_capture_backfilled_before_the_day:{day}")
         pending = item.seal_inputs.pending_cycle
         if pending is not None:
             index = pending.day_index
@@ -2051,7 +2190,9 @@ def build_governed_paper_execution_evidence(inputs: GovernedPaperExecutionInputs
             "terminal_outstanding_protective_obligation_count": terminal.outstanding_protective_obligation_count,
         }
     seed = GovernedPaperExecutionEvidence(
-        schema_version=_SYSTEM_SAFETY_EVIDENCE_SCHEMA_VERSION
+        schema_version=_SIZING_CHAIN_EVIDENCE_SCHEMA_VERSION
+        if terminal.schema_version == _SIZING_CHAIN_SEAL_SCHEMA_VERSION
+        else _SYSTEM_SAFETY_EVIDENCE_SCHEMA_VERSION
         if terminal.schema_version == _SYSTEM_SAFETY_SEAL_SCHEMA_VERSION
         else _REGIME_EVIDENCE_SCHEMA_VERSION
         if terminal.schema_version == _REGIME_SEAL_SCHEMA_VERSION

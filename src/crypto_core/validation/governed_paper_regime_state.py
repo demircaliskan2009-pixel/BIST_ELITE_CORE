@@ -1015,6 +1015,25 @@ def _parse_book(record: HistoricalPitRecord) -> tuple[list[tuple[int, int]], lis
     return sides[0], sides[1]
 
 
+def governed_paper_order_book_series(dataset: HistoricalPitDataset, instrument: str) -> tuple[str, str]:
+    """``(reason, series id)``: the dataset's one final, immutable ORDER_BOOK depth-50 series of ``instrument``, the
+    series every book sample here reads, judged on the dataset's own authenticated EF-3 manifest with the producer's
+    registry semantics; ``reason`` names why there is none. A non-authentic manifest raises ``GovernedPaperRegimeError``.
+    """
+
+    return _book_series(dataset, instrument)
+
+
+def governed_paper_order_book_levels(
+    record: HistoricalPitRecord,
+) -> tuple[tuple[tuple[int, int], ...], tuple[tuple[int, int], ...]] | None:
+    """The 50 exact ``(price, quantity)`` levels of each side of one ORDER_BOOK depth-50 tip, best first, in integer units
+    of 10^-18, or None for a malformed tip (exactly the parse every book sample here uses)."""
+
+    levels = _parse_book(record)
+    return None if levels is None else (tuple(levels[0]), tuple(levels[1]))
+
+
 def _reading_of(levels: tuple[list[tuple[int, int]], list[tuple[int, int]]]) -> _BookReading:
     bids, asks = levels
     bid, ask = bids[0][0], asks[0][0]
@@ -1630,6 +1649,8 @@ __all__ = [
     "build_governed_paper_regime_policy",
     "decision_evaluation_index",
     "derive_governed_paper_regime_evidence",
+    "governed_paper_order_book_levels",
+    "governed_paper_order_book_series",
     "governed_paper_regime_approval_digest",
     "governed_paper_regime_evidence_digest",
     "governed_paper_regime_evidence_to_dict",

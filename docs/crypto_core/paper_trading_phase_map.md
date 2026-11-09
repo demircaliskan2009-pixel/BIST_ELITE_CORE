@@ -502,3 +502,27 @@ Integrated risk and system safety (`S1_INTEGRATED_RISK_AND_SYSTEM_SAFETY_CLOSURE
   §1.11 M2 readings, NT-R03, the CVaR, liquidity and drift methodologies, the paper wallet and margin model, BOOT-1 and the
   EHS, the KS-1..KS-3 and system-state position mechanics, M1, D1, rights and C1-C9 stay open, and
   REAL_PAPER_EXECUTION stays BLOCKED. Every value in the tests is synthetic.
+
+Approved sizing chain (`S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1`, recorded 2026-11-07):
+
+- it constructs the human-approved doctrine adopted by PR #433 (D9, D15 and A9'; approved companion §4.1-§4.7 and §5):
+  `governed_paper_allocation_envelope.py` (ALLOCATION_ENVELOPE_V1: eligibility, top-five selection, share vector, BOOST,
+  the exact KKT projection and ENVELOPE_FIT), `governed_paper_ctr_qualification.py` (the CTR_SOURCE_QUALIFICATION_V1
+  consumer: qualification, revocation, capture, coverage and the 5 bps depth cap) and `governed_paper_sizing_chain.py`
+  (each entry's decision-time readings and the schedule v5 fill-time bounds). Every pending item (A_max, T_max, W_INC,
+  item 1.7, HD-07, items 5.1-5.2, FCD-13, X-H1, X-M1-C) stays unread, and a design approval is not production permission;
+- the one engine's schedule v5 (the information-time schedule v4 with exposure envelopes and depth caps as exact
+  rationals) refuses an exposure-increasing fill outside every proven envelope or strictly above its fraction of the
+  publication-visible candidate equity, and one against a book and side without a proven cap or at or above it. The
+  refusal is whole, never a resize, and no reduction or protective close reads the bounds;
+- entry gate rule set v8 (on top of v7) inserts ENVELOPE-FIT before SCALE-1, reads SCALE-1 under A9' (every v7 FAIL first,
+  then any other multiplier proven below 1 or an ENVELOPE_FIT FAIL; a PASS needs every multiplier and the Kelly fit
+  proven, which nothing proves) and appends CTR-DEPTH. Day seal v9 and lineage evidence v9 bind the sizing evidence and
+  the CTR source: one qualification per lineage, revocations append-only and effective inside their day, and a capture
+  complete through each seal, never rewritten or backfilled. Every v1-v8 artifact, schedules v2-v4 and rule sets v1-v7
+  stay byte-identical;
+- admission effect: none. No EHS, Sharpe_30d, activation proof or edge state machine is produced, so every allocation is
+  BLOCKED and the governed path proves no envelope; the production CTR table admits no qualification, so no depth cap is
+  proven. Every S1 entry is still refused, first by NT-D01 on the accepted worlds, and an entry that passed every
+  decision-time check would still be refused at its fill. REAL_PAPER_EXECUTION stays BLOCKED. Every value,
+  qualification and capture in the tests is synthetic.
