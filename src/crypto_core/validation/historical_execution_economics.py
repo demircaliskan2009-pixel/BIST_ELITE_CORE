@@ -702,6 +702,27 @@ class HistoricalExecutionProtectiveAttempt:
 
 
 @dataclass(frozen=True)
+class HistoricalExecutionProtectiveChild:
+    """One close-only flatten child of a governed re-run under schedule v6: the whole remaining position, requested
+    inside a declared flatten window. Never an order, never a fill by itself.
+
+    ``flatten_authority_digest`` is the declared identity of the flatten window in force at ``attempt_time_ns`` (the
+    schedule's neutral value; the engine never learns which governance declared it).
+    """
+
+    child_id: str
+    flatten_authority_digest: str
+    child_sequence: int
+    attempt_time_ns: int
+    position_quantity: str
+    requested_quantity: str
+    action: HistoricalExecutionIntentAction
+    side: HistoricalExecutionSide
+    earliest_execution_time_ns: int
+    child_digest: str
+
+
+@dataclass(frozen=True)
 class HistoricalExecutionPositionManagementInputs:
     """The position-management authorities one economics build consumes, each re-proven against its anchor."""
 
@@ -1281,6 +1302,8 @@ class _Ledgers:
     obligations: list[HistoricalExecutionProtectiveObligation] = field(default_factory=list)
     attempts: list[HistoricalExecutionProtectiveAttempt] = field(default_factory=list)
     pending_attempt: HistoricalExecutionProtectiveAttempt | None = None
+    children: list[HistoricalExecutionProtectiveChild] = field(default_factory=list)
+    pending_child: HistoricalExecutionProtectiveChild | None = None
 
 
 @dataclass(frozen=True)
@@ -1334,6 +1357,14 @@ class _Attempt:
     """A sealed protective attempt together with the EXACT quantity it requests."""
 
     record: HistoricalExecutionProtectiveAttempt
+    requested: Fraction
+
+
+@dataclass(frozen=True)
+class _Child:
+    """A sealed flatten child (schedule v6) together with the EXACT quantity it requests."""
+
+    record: HistoricalExecutionProtectiveChild
     requested: Fraction
 
 
@@ -1404,6 +1435,16 @@ class _MarkCursor:
 
 def _value(record: HistoricalPitRecord, name: str) -> Fraction:
     return Fraction(next(item.value for item in record.values if item.name == name))
+
+
+# Every order the one fill model executes: a decision intent, a v1 protective attempt or a schedule v6 flatten child.
+_Order = HistoricalExecutionIntent | HistoricalExecutionProtectiveAttempt | HistoricalExecutionProtectiveChild
+# A child the fill model rejects for one of these book reasons found no admissible book: the next child is derived at the
+# first admissible instant at least 30 seconds later (PRDV4 §1.19 Position Closure Protocol item 4).
+_FLATTEN_BOOK_REJECTIONS = frozenset(
+    {"book_invalid", "book_crossed", "spread_exceeds_max", "insufficient_depth", "fill_price_non_positive"}
+)
+_FLATTEN_RETRY_NS = 30_000_000_000
 
 
 class _Simulation:
@@ -1506,6 +1547,13 @@ class _Simulation:
         self.next_mark_check: tuple[int, int] | None = None
         self.protective_fills: dict[int, tuple[_Attempt, _Book]] = {}
         self.fill_index = len(run.decisions)  # protective fill events follow the decision indexes
+        # Flatten children (S1_PROTECTIVE_OBLIGATION_LEDGER_V2_ENGINE_CONSTRUCTION_V1): a governed re-run under schedule
+        # v6 only declares flatten windows; without them every method below that reads them is inert.
+        self.flatten_windows: tuple[tuple[int, int, str], ...] = ()  # (start, end, declared authority digest)
+        self.flatten_starts: list[int] = []
+        self.flatten_fills: dict[int, tuple[_Child, _Book]] = {}
+        self.child_sequence = 0
+        self.child_resume_at: int | None = None  # the earliest instant a refused or book-rejected child may recur
         # Information-time admission and the governed decision portfolio (S1_NO_TRADE_NATIVE_MEASUREMENT_CLOSURE_V1): a
         # governed re-run under schedule v4 only. The snapshots are recorded only when such a re-run asks for them, and
         # neither is ever part of a ledger.
@@ -1678,13 +1726,18 @@ class _Simulation:
             return book, ""
         return None, "no_eligible_book_observation"
 
-    def _fill_record(
-        self, order: HistoricalExecutionIntent | HistoricalExecutionProtectiveAttempt, **values: object
-    ) -> HistoricalExecutionFill:
-        """One fill outcome of a decision intent, or of a protective attempt (whose obligation id is its decision)."""
+    def _fill_record(self, order: _Order, **values: object) -> HistoricalExecutionFill:
+        """One fill outcome of a decision intent, of a protective attempt (whose obligation id is its decision), or of a
+        flatten child (whose declared flatten authority is its decision)."""
 
         if type(order) is HistoricalExecutionProtectiveAttempt:
             intent_id, intent_digest, decision_digest = order.attempt_id, order.attempt_digest, order.obligation_id
+        elif type(order) is HistoricalExecutionProtectiveChild:
+            intent_id, intent_digest, decision_digest = (
+                order.child_id,
+                order.child_digest,
+                order.flatten_authority_digest,
+            )
         else:
             intent_id, intent_digest, decision_digest = order.intent_id, order.intent_digest, order.decision_digest  # type: ignore[union-attr]
         base: dict[str, object] = {
@@ -1719,7 +1772,7 @@ class _Simulation:
         self.ledgers.fills.append(sealed)
         return sealed
 
-    def _unfilled(self, order: HistoricalExecutionIntent | HistoricalExecutionProtectiveAttempt, reason: str) -> None:
+    def _unfilled(self, order: _Order, reason: str) -> None:
         self._fill_record(order, outcome=HistoricalExecutionFillOutcome.UNFILLED, reason=reason)
 
     def _effective_slippage(self, effective: Fraction, book: _Book) -> Fraction:
@@ -2060,6 +2113,113 @@ class _Simulation:
             and not self._busy(time_ns)
         ):
             self._issue_attempt(protection, obligation, time_ns)
+        if self.flatten_windows:  # schedule v6 only: a flatten child comes after every v1 rule of the instant
+            self._flatten_step(time_ns)
+
+    # -- flatten children (schedule v6); inert without a declared flatten window --
+
+    def _in_flatten_window(self, time_ns: int) -> bool:
+        index = bisect.bisect_right(self.flatten_starts, time_ns) - 1
+        return index >= 0 and time_ns < self.flatten_windows[index][1]
+
+    def _flatten_step(self, time_ns: int) -> None:
+        """At most one close-only flatten child: inside a flatten window, with a position, nothing in flight and no v1
+        obligation outstanding (a v1 STOP or MAX_HOLD obligation keeps precedence), after any refusal's resume instant."""
+
+        protection = self.protection
+        if (
+            self.position.quantity == 0
+            or not self._in_flatten_window(time_ns)
+            or self._busy(time_ns)
+            or (protection is not None and protection.obligation is not None)
+            or (self.child_resume_at is not None and time_ns < self.child_resume_at)
+        ):
+            return
+        self._issue_child(time_ns)
+
+    def _issue_child(self, time_ns: int) -> None:
+        quantity = self.position.quantity
+        long_position = quantity > 0
+        index = bisect.bisect_right(self.flatten_starts, time_ns) - 1
+        authority = self.flatten_windows[index][2]
+        sequence = self.child_sequence
+        self.child_sequence += 1
+        record = HistoricalExecutionProtectiveChild(
+            child_id=_derived_id("protective_child", self.run_digest, authority, sequence),
+            flatten_authority_digest=authority,
+            child_sequence=sequence,
+            attempt_time_ns=time_ns,
+            position_quantity=_amount(quantity, "position_quantity"),
+            requested_quantity=_amount(abs(quantity), "requested_quantity"),
+            action=HistoricalExecutionIntentAction.CLOSE_LONG
+            if long_position
+            else HistoricalExecutionIntentAction.CLOSE_SHORT,
+            side=HistoricalExecutionSide.SELL if long_position else HistoricalExecutionSide.BUY,
+            earliest_execution_time_ns=_wire_int(time_ns + self.latency, "earliest_execution_time_ns"),
+            child_digest="",
+        )
+        sealed: HistoricalExecutionProtectiveChild = _sealed(record, "child_digest")  # type: ignore[assignment]
+        self.ledgers.children.append(sealed)
+        self.child_resume_at = None
+        refused = self._protective_admission(time_ns)  # DEC-1: a close-only child needs a protective window
+        if refused is not None:
+            self._fill_record(sealed, outcome=HistoricalExecutionFillOutcome.REJECTED, reason=refused)
+            self._resume_child_after_refusal(time_ns)
+            return
+        book, reason = self._select_protective_book(sealed)
+        self.attempt_in_flight = True  # until its fill resolves, or, without a book before the end, to the end
+        if book is None:
+            self._unfilled(sealed, reason)
+            self.ledgers.pending_child = sealed
+            return
+        index = self.fill_index
+        self.fill_index += 1
+        self.flatten_fills[index] = (_Child(sealed, abs(quantity)), book)
+        heapq.heappush(self.events, (book.visibility, _PRIORITY_FILL, index))
+
+    def _resume_child_after_refusal(self, time_ns: int) -> None:
+        """A governed refusal recurs at the next instant a protective window and a flatten window are both in force,
+        and never in this re-run without one."""
+
+        start = self._next_child_instant(time_ns)
+        if start is not None and start < self.end_ns:
+            self.child_resume_at = start
+            self._push_protective(start, _CURRENT_PROTECTION)
+        else:
+            self.child_resume_at = self.end_ns
+
+    def _next_child_instant(self, time_ns: int) -> int | None:
+        """The next instant a refused child may recur, or None (no refusal exists historically)."""
+
+        return None
+
+    def _flatten_fill_admission(self, time_ns: int) -> str | None:
+        """Admission hook of a flatten child's fill: a refusal reason, or None (no flatten window exists historically)."""
+
+        return None
+
+    def _execute_child(self, child: _Child, book: _Book) -> None:
+        reason = self._fill_core(
+            child.record,
+            child.requested,
+            book,
+            admission=lambda price, filled, visibility: (
+                self._protective_fill_admission(visibility) or self._flatten_fill_admission(visibility)
+            ),
+            close_only=True,
+        )
+        self.attempt_in_flight = False
+        if self.position.quantity == 0:  # the child closed the position (its protection is finalized)
+            return
+        if reason.startswith(_GOVERNED_REASON_PREFIX):
+            self._resume_child_after_refusal(book.visibility)
+            return
+        if reason in _FLATTEN_BOOK_REJECTIONS:  # no admissible book: retry at least 30 seconds later (§1.19 item 4)
+            retry = _wire_int(book.visibility + _FLATTEN_RETRY_NS, "flatten_retry_time_ns")
+            self.child_resume_at = retry
+            self._push_protective(retry, _CURRENT_PROTECTION)
+            return
+        self._protective_step(book.visibility)  # executed in part: the remainder at its own instant, v1 rules first
 
     def _issue_attempt(self, protection: _Protection, obligation: _Obligation, time_ns: int) -> None:
         quantity = self.position.quantity
@@ -2108,8 +2268,11 @@ class _Simulation:
             obligation.resume_at = start
             self._push_protective(start, protection.sequence)
 
-    def _select_protective_book(self, attempt: HistoricalExecutionProtectiveAttempt) -> tuple[_Book | None, str]:
-        """The first eligible book of a standing close-only attempt: no decision-staleness expiry applies to it."""
+    def _select_protective_book(
+        self, attempt: HistoricalExecutionProtectiveAttempt | HistoricalExecutionProtectiveChild
+    ) -> tuple[_Book | None, str]:
+        """The first eligible book of a standing close-only attempt or flatten child: no decision-staleness expiry
+        applies to it."""
 
         index = bisect.bisect_left(self.book_visibilities, attempt.earliest_execution_time_ns)
         while index < len(self.books):
@@ -2226,7 +2389,7 @@ class _Simulation:
 
     def _fill_core(
         self,
-        order: HistoricalExecutionIntent | HistoricalExecutionProtectiveAttempt,
+        order: _Order,
         requested: Fraction,
         book: _Book,
         *,
@@ -2562,6 +2725,9 @@ class _Simulation:
                     self.decision_in_flight = False
                     self._execute(intent, book)
                     self._protective_step(time_ns)
+                elif index in self.flatten_fills:
+                    child, book = self.flatten_fills.pop(index)
+                    self._execute_child(child, book)
                 else:
                     attempt, book = self.protective_fills.pop(index)
                     self._execute_protective(attempt, book)
@@ -3023,7 +3189,27 @@ _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_INFORMATION_TIM
 # Schedule v5: the v4 schedule with the declared fill-time sizing bounds (S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1).
 HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v5"
 _SIZING_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION
-_INFORMATION_TIME_SCHEDULES = (_INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION, _SIZING_SCHEDULE_SCHEMA_VERSION)
+# Schedule v6 and outcome v4: the v5 schedule with the declared exposure halt and flatten windows
+# (S1_PROTECTIVE_OBLIGATION_LEDGER_V2_ENGINE_CONSTRUCTION_V1, module docstring).
+HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v6"
+_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_ADMISSION_SCHEDULE_SCHEMA_VERSION
+HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION = (
+    "historical-execution-governed-paper-outcome.v4"
+)
+_PROTECTIVE_LEDGER_GOVERNED_SCHEMA_VERSION = (
+    HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION
+)
+_INFORMATION_TIME_SCHEDULES = (
+    _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION,
+    _SIZING_SCHEDULE_SCHEMA_VERSION,
+    _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
+)
+# The schedules carrying the declared fill-time sizing bounds: schedule v5 and, on top of it, schedule v6.
+HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS = (
+    _SIZING_SCHEDULE_SCHEMA_VERSION,
+    _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
+)
+_SIZING_BOUND_SCHEDULES = HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS
 # PRDV4 §1.21 NT-R04 and §8.2: no single position strictly above 25% of NAV; schedule v4 enforces it at every fill.
 HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP = Fraction(25, 100)
 _GOVERNED_DIGEST_FIELD = "outcome_digest"
@@ -3092,6 +3278,19 @@ class HistoricalExecutionDepthCap:
 
 
 @dataclass(frozen=True)
+class HistoricalExecutionFlattenWindow:
+    """One declared flatten window ``[window_start_ns, window_end_ns)`` (schema v6 only) and the authority that grants it.
+
+    Inside it the engine derives close-only flatten children of the whole remaining position (each also needs a DEC-1
+    protective window, at its instant and at its fill). It never authorizes an entry, an increase or a decision intent.
+    """
+
+    window_start_ns: int
+    window_end_ns: int
+    authority_digest: str
+
+
+@dataclass(frozen=True)
 class HistoricalExecutionAdmissionSchedule:
     """One neutral declared admission schedule: ordered, disjoint windows and an optional invalidation instant.
 
@@ -3101,7 +3300,9 @@ class HistoricalExecutionAdmissionSchedule:
     and v4 only) are the ordered, disjoint DEC-1 protective windows of a position-managed baseline. Schema v4 carries
     exactly the v3 fields; its re-run admits on information time (see the module docstring). Schema v5 is schema v4
     with ``exposure_envelopes`` (ordered, disjoint) and ``depth_caps`` (one per book record and side, ordered by digest
-    then side), the declared fill-time sizing bounds; no other schema carries them.
+    then side), the declared fill-time sizing bounds; schema v6 carries them too. Schema v6 is schema v5 with
+    ``exposure_halt_from_ns`` (the instant from which no exposure may increase) and ``flatten_windows`` (ordered, disjoint,
+    each at or after the halt), the declared protective-ledger bounds; no other schema carries them.
     """
 
     schema_version: str
@@ -3112,6 +3313,8 @@ class HistoricalExecutionAdmissionSchedule:
     protective_windows: tuple[HistoricalExecutionProtectiveWindow, ...] = ()
     exposure_envelopes: tuple[HistoricalExecutionExposureEnvelope, ...] = ()
     depth_caps: tuple[HistoricalExecutionDepthCap, ...] = ()
+    exposure_halt_from_ns: int | None = None
+    flatten_windows: tuple[HistoricalExecutionFlattenWindow, ...] = ()
 
 
 HISTORICAL_EXECUTION_GOVERNED_PAPER_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
@@ -3191,6 +3394,11 @@ class HistoricalExecutionGovernedPaperOutcome:
     attempt_ledger_digest: str = ""
     pending_protective_attempt_time_ns: int | None = None
     pending_protective_attempt_digest: str | None = None
+    # Schema v4 only (a schedule v6 re-run): a v2 or v3 payload carries none of these fields.
+    protective_children: tuple[HistoricalExecutionProtectiveChild, ...] = ()
+    child_ledger_digest: str = ""
+    pending_protective_child_time_ns: int | None = None
+    pending_protective_child_digest: str | None = None
 
 
 HISTORICAL_EXECUTION_GOVERNED_PAPER_DECISION_PORTFOLIO_SCHEMA_VERSION = (
@@ -3311,7 +3519,14 @@ _GOVERNED_V3_FIELDS = (
     "pending_protective_attempt_time_ns",
     "pending_protective_attempt_digest",
 )
+_GOVERNED_V4_FIELDS = (
+    "protective_children",
+    "child_ledger_digest",
+    "pending_protective_child_time_ns",
+    "pending_protective_child_digest",
+)
 _SCHEDULE_V5_FIELDS = ("exposure_envelopes", "depth_caps")
+_SCHEDULE_V6_FIELDS = ("exposure_halt_from_ns", "flatten_windows")
 # Per versioned artifact: the legacy schema versions and the extension fields their legacy payloads never carry.
 _VERSIONED_PAYLOADS: dict[type, tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]] = {
     HistoricalExecutionEconomicsResult: (((_SCHEMA_VERSION,), _RESULT_V2_FIELDS),),
@@ -3321,8 +3536,20 @@ _VERSIONED_PAYLOADS: dict[type, tuple[tuple[tuple[str, ...], tuple[str, ...]], .
             (_SCHEDULE_SCHEMA_VERSION, _PROTECTIVE_SCHEDULE_SCHEMA_VERSION, _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION),
             _SCHEDULE_V5_FIELDS,
         ),
+        (
+            (
+                _SCHEDULE_SCHEMA_VERSION,
+                _PROTECTIVE_SCHEDULE_SCHEMA_VERSION,
+                _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION,
+                _SIZING_SCHEDULE_SCHEMA_VERSION,
+            ),
+            _SCHEDULE_V6_FIELDS,
+        ),
     ),
-    HistoricalExecutionGovernedPaperOutcome: (((_GOVERNED_SCHEMA_VERSION,), _GOVERNED_V3_FIELDS),),
+    HistoricalExecutionGovernedPaperOutcome: (
+        ((_GOVERNED_SCHEMA_VERSION,), _GOVERNED_V3_FIELDS),
+        ((_GOVERNED_SCHEMA_VERSION, _PROTECTIVE_GOVERNED_SCHEMA_VERSION), _GOVERNED_V4_FIELDS),
+    ),
 }
 
 
@@ -3362,7 +3589,8 @@ class _GovernedPaperSimulation(_Simulation):
             (item.window_start_ns, item.window_end_ns) for item in schedule.protective_windows
         )
         self.protective_starts = [start for start, _ in self.protective_windows]
-        self.sizing = schedule.schema_version == _SIZING_SCHEDULE_SCHEMA_VERSION
+        self.sizing = schedule.schema_version in _SIZING_BOUND_SCHEDULES
+        self.exposure_halt_from = schedule.exposure_halt_from_ns
         self.envelopes = tuple(
             (item.window_start_ns, item.window_end_ns, Fraction(item.max_exposure_fraction))
             for item in schedule.exposure_envelopes
@@ -3375,6 +3603,13 @@ class _GovernedPaperSimulation(_Simulation):
         self.information_time = schedule.schema_version in _INFORMATION_TIME_SCHEDULES
         if record_decision_portfolio:
             self.decision_snapshots = []
+        # Schedule v6: each flatten window opens with one protective evaluation (inert while the position is FLAT).
+        self.flatten_windows = tuple(
+            (item.window_start_ns, item.window_end_ns, item.authority_digest) for item in schedule.flatten_windows
+        )
+        self.flatten_starts = [start for start, _, _ in self.flatten_windows]
+        for start in self.flatten_starts:
+            self._push_protective(start, _CURRENT_PROTECTION)
 
     def _in_protective_window(self, time_ns: int) -> bool:
         index = bisect.bisect_right(self.protective_starts, time_ns) - 1
@@ -3391,6 +3626,24 @@ class _GovernedPaperSimulation(_Simulation):
     def _next_protective_window_start(self, time_ns: int) -> int | None:
         index = bisect.bisect_right(self.protective_starts, time_ns)
         return self.protective_starts[index] if index < len(self.protective_starts) else None
+
+    def _next_child_instant(self, time_ns: int) -> int | None:
+        """Schedule v6: the earliest window start after ``time_ns`` where a protective (DEC-1) window and a flatten window
+        are both in force, or None."""
+
+        starts = {start for start in (*self.protective_starts, *self.flatten_starts) if start > time_ns}
+        for start in sorted(starts):
+            if self._in_protective_window(start) and self._in_flatten_window(start):
+                return start
+        return None
+
+    def _flatten_fill_admission(self, time_ns: int) -> str | None:
+        """Schedule v6: a flatten child's fill needs a flatten window as well as the protective window."""
+
+        return None if self._in_flatten_window(time_ns) else "governed_paper_flatten_authority_missing_at_fill"
+
+    def _halted(self, time_ns: int) -> bool:
+        return self.exposure_halt_from is not None and self.exposure_halt_from <= time_ns
 
     def _window_index(self, time_ns: int) -> int | None:
         index = bisect.bisect_right(self.window_starts, time_ns) - 1
@@ -3416,6 +3669,8 @@ class _GovernedPaperSimulation(_Simulation):
         post = actual + intent.requested if buying else actual - intent.requested
         if actual != 0 and abs(post) > abs(actual):
             return "governed_paper_same_side_add_unsupported"
+        if abs(post) > abs(actual) and self._halted(decided):  # schedule v6: no new exposure after a proven halt
+            return "governed_paper_exposure_halted"
         if abs(post) > abs(actual) and intent.record.decision_sequence in self.entry_refusals:
             return "governed_paper_entry_safety_refused"
         if post > window.max_long or -post > window.max_short:
@@ -3459,9 +3714,12 @@ class _GovernedPaperSimulation(_Simulation):
         its fraction of the publication-visible candidate equity (strictly above refuses); the depth cap of the fill's
         own book record and side bounds the order's requested quantity (at or above refuses). A fill outside every
         envelope, or against a book and side without a cap, is refused as unproven. Never reaches a reduction, a close
-        or a protective close-only fill.
+        or a protective close-only fill. Schedule v6 first refuses every exposure-increasing fill executing at or after its
+        declared exposure halt.
         """
 
+        if self._halted(time_ns):
+            return "governed_paper_exposure_halted_at_fill"
         if not self.sizing:
             return None
         index = bisect.bisect_right(self.envelope_starts, time_ns) - 1
@@ -3496,7 +3754,7 @@ def _canonical_sizing_bounds(value: HistoricalExecutionAdmissionSchedule) -> Non
     envelopes, caps = value.exposure_envelopes, value.depth_caps
     if type(envelopes) is not tuple or type(caps) is not tuple:
         raise _fail("admission_schedule_malformed:sizing_bounds")
-    if value.schema_version != _SIZING_SCHEDULE_SCHEMA_VERSION and (envelopes or caps):
+    if value.schema_version not in _SIZING_BOUND_SCHEDULES and (envelopes or caps):
         raise _fail("admission_schedule_malformed:sizing_bounds_need_schema_v5")
     previous_end: int | None = None
     for envelope in envelopes:
@@ -3525,6 +3783,36 @@ def _canonical_sizing_bounds(value: HistoricalExecutionAdmissionSchedule) -> Non
         previous_key = key
 
 
+def _canonical_protective_ledger_bounds(value: HistoricalExecutionAdmissionSchedule) -> None:
+    """Schema v6's exposure halt and flatten windows (ordered, disjoint, each at or after the halt); none on another
+    schema."""
+
+    halt, windows = value.exposure_halt_from_ns, value.flatten_windows
+    if type(windows) is not tuple:
+        raise _fail("admission_schedule_malformed:flatten_windows")
+    if value.schema_version != _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION and (halt is not None or windows):
+        raise _fail("admission_schedule_malformed:protective_ledger_bounds_need_schema_v6")
+    if halt is not None and not historical_execution_wire_int_is_valid(halt, minimum=0):
+        raise _fail("admission_schedule_malformed:exposure_halt_from_ns")
+    previous_end: int | None = None
+    for window in windows:
+        if type(window) is not HistoricalExecutionFlattenWindow:
+            raise _fail("admission_schedule_malformed:flatten_window")
+        for name in ("window_start_ns", "window_end_ns"):
+            if not historical_execution_wire_int_is_valid(getattr(window, name), minimum=0):
+                raise _fail(f"admission_schedule_malformed:flatten_{name}")
+        digest = window.authority_digest
+        if type(digest) is not str or len(digest) != 64 or not all(char in "0123456789abcdef" for char in digest):
+            raise _fail("admission_schedule_malformed:flatten_authority_digest")
+        if window.window_end_ns <= window.window_start_ns:
+            raise _fail("admission_schedule_invalid:flatten_window_empty")
+        if previous_end is not None and window.window_start_ns < previous_end:
+            raise _fail("admission_schedule_invalid:flatten_windows_not_ordered_disjoint")
+        if halt is None or window.window_start_ns < halt:  # a flatten child acts only where no exposure can increase
+            raise _fail("admission_schedule_invalid:flatten_window_before_the_exposure_halt")
+        previous_end = window.window_end_ns
+
+
 def canonical_historical_execution_admission_schedule(value: object) -> HistoricalExecutionAdmissionSchedule:
     """Validate one declared admission schedule exactly: types, canonical decimals and ordered disjoint windows."""
 
@@ -3535,10 +3823,12 @@ def canonical_historical_execution_admission_schedule(value: object) -> Historic
         _PROTECTIVE_SCHEDULE_SCHEMA_VERSION,
         _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION,
         _SIZING_SCHEDULE_SCHEMA_VERSION,
+        _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
     ):
         raise _fail("admission_schedule_malformed:schema_version")
     _canonical_protective_windows(value)
     _canonical_sizing_bounds(value)
+    _canonical_protective_ledger_bounds(value)
     _require_text(value.schedule_id, "schedule_id")
     if type(value.windows) is not tuple:
         raise _fail("admission_schedule_malformed:windows")
@@ -3694,6 +3984,7 @@ def _governed_outcome(
     pending: HistoricalExecutionIntent | None,
     reasons: Sequence[str],
     protective: bool,
+    ledger: bool = False,
 ) -> HistoricalExecutionGovernedPaperOutcome:
     refused = tuple(
         item.fill_digest
@@ -3713,8 +4004,20 @@ def _governed_outcome(
             "pending_protective_attempt_time_ns": None if attempt is None else attempt.attempt_time_ns,
             "pending_protective_attempt_digest": None if attempt is None else attempt.attempt_digest,
         }
+    if ledger:  # schedule v6 (only over a position-managed baseline): the flatten children
+        child = ledgers.pending_child
+        extension.update(
+            protective_children=tuple(ledgers.children),
+            child_ledger_digest=_ledger_digest(ledgers.children),
+            pending_protective_child_time_ns=None if child is None else child.attempt_time_ns,
+            pending_protective_child_digest=None if child is None else child.child_digest,
+        )
     seed = HistoricalExecutionGovernedPaperOutcome(
-        schema_version=_PROTECTIVE_GOVERNED_SCHEMA_VERSION if protective else _GOVERNED_SCHEMA_VERSION,
+        schema_version=_PROTECTIVE_LEDGER_GOVERNED_SCHEMA_VERSION
+        if ledger
+        else _PROTECTIVE_GOVERNED_SCHEMA_VERSION
+        if protective
+        else _GOVERNED_SCHEMA_VERSION,
         schedule=schedule,
         schedule_digest=historical_execution_admission_schedule_digest(schedule),
         baseline_result_id=result.result_id,
@@ -3800,6 +4103,7 @@ def _governed_run(
         for item in schedule.windows
     ):
         raise _fail("admission_schedule_outside_evaluation_window")
+    ledger = schedule.schema_version == _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION  # outcome v4: the flatten children
     try:
         simulation = _GovernedPaperSimulation(
             schedule=schedule,
@@ -3824,6 +4128,7 @@ def _governed_run(
             pending=None,
             reasons=(_reason(failure.code),),
             protective=protective,
+            ledger=ledger,
         )
         return failed, (), (), ()
     outcome = _governed_outcome(
@@ -3834,6 +4139,7 @@ def _governed_run(
         pending=_pending_intent(baseline.run, ledgers),
         reasons=(),
         protective=protective,
+        ledger=ledger,
     )
     # a close outside every event (none occurs) has no phase: its absence misaligns the closes, which then prove nothing
     return (
@@ -3968,6 +4274,7 @@ _RUN_DERIVED_FIELDS: dict[type, tuple[str, ...]] = {
         "obligation_digest",
     ),
     HistoricalExecutionProtectiveAttempt: ("attempt_id", "obligation_id", "attempt_digest"),
+    HistoricalExecutionProtectiveChild: ("child_id", "child_digest"),
 }
 _TRADE_DIGEST_LISTS = ("entry_fill_digests", "exit_fill_digests", "fee_digests", "funding_cashflow_digests")
 
@@ -3998,6 +4305,7 @@ def historical_execution_governed_paper_prefix_digest(
     before_ns: int,
     excluded_decision_sequences: tuple[int, ...] = (),
     excluded_protective_attempt_times: tuple[int, ...] = (),
+    excluded_protective_child_times: tuple[int, ...] = (),
 ) -> str:
     """The content identity of every governed economic event strictly before ``before_ns``.
 
@@ -4010,6 +4318,11 @@ def historical_execution_governed_paper_prefix_digest(
     protective fill outcome recorded before it (at its execution, else its attempt instant), except those of an excluded
     attempt, which the shorter replay's end left pending. It further adds the protections closed and the obligations
     discharged before the instant. An open protection and an outstanding obligation are never part of a prefix.
+
+    Outcome v4 (a schedule v6 re-run) further adds the flatten children made before the instant and every child fill
+    outcome recorded before it (at its execution, else its attempt instant), except those of an excluded child, which the
+    shorter replay's end left pending. A child fill keeps its ``decision_digest``: the declared flatten authority, never a
+    run-derived identifier.
     """
 
     if type(outcome) is not HistoricalExecutionGovernedPaperOutcome or outcome.simulated is not True:
@@ -4024,12 +4337,24 @@ def historical_execution_governed_paper_prefix_digest(
         type(item) is not int for item in excluded_protective_attempt_times
     ):
         raise _fail("prefix_excluded_attempts_malformed")
+    if type(excluded_protective_child_times) is not tuple or any(
+        type(item) is not int for item in excluded_protective_child_times
+    ):
+        raise _fail("prefix_excluded_children_malformed")
     excluded = set(excluded_decision_sequences)
     excluded_attempts = set(excluded_protective_attempt_times)
+    excluded_children = set(excluded_protective_child_times)
     decided = {item.intent_id: item for item in outcome.intents}
     attempted = {item.attempt_id: item for item in outcome.protective_attempts}
+    children = {item.child_id: item for item in outcome.protective_children}
     fills = []
     for item in outcome.fills:
+        child = children.get(item.intent_id)
+        if child is not None:
+            instant = child.attempt_time_ns if item.execution_time_ns is None else item.execution_time_ns
+            if child.attempt_time_ns not in excluded_children and instant < before_ns:
+                fills.append(_content(item))
+            continue
         attempt = attempted.get(item.intent_id)
         if attempt is not None:
             instant = attempt.attempt_time_ns if item.execution_time_ns is None else item.execution_time_ns
@@ -4057,7 +4382,11 @@ def historical_execution_governed_paper_prefix_digest(
             and item.end_time_ns < before_ns
         ],
     }
-    if outcome.schema_version == _PROTECTIVE_GOVERNED_SCHEMA_VERSION:
+    if outcome.schema_version == _PROTECTIVE_LEDGER_GOVERNED_SCHEMA_VERSION:
+        prefix["protective_children"] = [
+            _content(item) for item in outcome.protective_children if item.attempt_time_ns < before_ns
+        ]
+    if outcome.schema_version in (_PROTECTIVE_GOVERNED_SCHEMA_VERSION, _PROTECTIVE_LEDGER_GOVERNED_SCHEMA_VERSION):
         prefix["protective_attempts"] = [
             _content(item) for item in outcome.protective_attempts if item.attempt_time_ns < before_ns
         ]
@@ -5002,12 +5331,17 @@ __all__ = [
     "HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP",
     "HISTORICAL_EXECUTION_PROTECTIVE_ADMISSION_SCHEDULE_SCHEMA_VERSION",
     "HISTORICAL_EXECUTION_PROTECTIVE_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION",
+    "HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_ADMISSION_SCHEDULE_SCHEMA_VERSION",
+    "HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION",
     "HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION",
+    "HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS",
     "HistoricalExecutionDepthCap",
     "HistoricalExecutionExcursionProtection",
     "HistoricalExecutionExposureEnvelope",
+    "HistoricalExecutionFlattenWindow",
     "HistoricalExecutionPositionManagementInputs",
     "HistoricalExecutionProtectiveAttempt",
+    "HistoricalExecutionProtectiveChild",
     "HistoricalExecutionProtectiveObligation",
     "HistoricalExecutionProtectiveObligationStatus",
     "HistoricalExecutionProtectiveTrigger",

@@ -85,7 +85,7 @@ from crypto_core.validation.governed_paper_ctr_qualification import (
 from crypto_core.validation.governed_paper_execution_authority import GovernedPaperGenesisAuthority
 from crypto_core.validation.historical_decision_run import HistoricalDecisionRun
 from crypto_core.validation.historical_execution_economics import (
-    HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION,
+    HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS,
     HistoricalExecutionAdmissionSchedule,
     HistoricalExecutionDecisionExactValues,
     HistoricalExecutionDecisionPortfolioSnapshot,
@@ -500,16 +500,16 @@ def derive_governed_paper_sizing_evidence(  # noqa: PLR0913 - one evaluation's a
     """The sizing evidence of one evaluation (see the module docstring). Pure.
 
     ``snapshots`` and ``exact_values`` are the entry gate's own decision snapshots and the exact values of the same
-    engine re-run, keyed by decision sequence. ``schedule`` must be the schedule v5 under evaluation, carrying exactly the
-    fill-time bounds derived here (``schedule_sizing_bounds_not_derived`` otherwise). Malformed input raises
-    ``GovernedPaperSizingError``.
+    engine re-run, keyed by decision sequence. ``schedule`` must be the schedule v5 under evaluation (or the schedule v6
+    built on it), carrying exactly the fill-time bounds derived here (``schedule_sizing_bounds_not_derived`` otherwise).
+    Malformed input raises ``GovernedPaperSizingError``.
     """
 
     if type(authority) is not GovernedPaperGenesisAuthority or type(run) is not HistoricalDecisionRun:
         raise _fail("sizing_inputs_malformed")
     if type(dataset) is not HistoricalPitDataset or type(schedule) is not HistoricalExecutionAdmissionSchedule:
         raise _fail("sizing_inputs_malformed")
-    if schedule.schema_version != HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION:
+    if schedule.schema_version not in HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS:
         raise _fail("sizing_needs_the_schedule_v5")
     genesis, policy = authority.genesis, authority.economics_policy
     origin, reference = _capital_quantities(authority)
