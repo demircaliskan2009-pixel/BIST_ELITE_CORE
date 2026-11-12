@@ -15,6 +15,12 @@ It proves:
   remainder of a partial fill, retries at least 30 s after a book rejection, stays pending across a replay's end (the
   prefix excludes it by its instant) and never reverses a position; the halt refuses every later exposure increase,
   an in-flight entry at its fill included; a v1 STOP or MAX_HOLD obligation keeps precedence, at the same instant too;
+* A2. the v1 handoff: a v1 obligation due while a child is in flight waits only for that child, and when the child
+  resolves without closing the position (refused by its governed authority, rejected by its book or filled in part) it
+  is attempted at that resolution instant under v1's own window and book rules, never at the child's resume instant or
+  30 s retry, with one MAX_HOLD trigger, one order in flight and no further child; equal instants keep one deterministic
+  order, the repaired path replays byte-identically from its proofs and refuses tampering, and v1 alone and the filled
+  and partial children keep the audited head's identities;
 * B. the ledger: IR-2 proofs are admitted only by an independent verifier against an admitted anchor (the production
   table admits none; a self-report, the pending operator channel, a foreign, late, forged or unordered proof never
   proves); KS3_CLOSE from the authentic kill-switch ladder and SS3_CLOSE from authentic system-state readings open
@@ -30,7 +36,9 @@ It proves:
   holds a ledger from day 0 or never; a proof binds its halt and flatten window, stays append-only, is known inside its
   day and never verifies on the production table; and, under TEST-ONLY permissive entry and sizing tables only, a
   proven KS4 trigger flattens world G's open SHORT through one close-only child in flight across two seals, projected
-  onto the generic chain, while the later entry is halted at the gate.
+  onto the generic chain, while the later entry is halted at the gate; when a later SS4 proof ends that child's flatten
+  authority before its fill, the MAX_HOLD obligation due meanwhile is attempted at the child's refusal, pends across a
+  seal and closes the SHORT, every seal re-verifies and every resealed day is refused.
 """
 
 from __future__ import annotations
@@ -116,6 +124,7 @@ from crypto_core.validation.historical_execution_economics import (
     HistoricalExecutionExposureEnvelope,
     HistoricalExecutionFillOutcome,
     HistoricalExecutionFlattenWindow,
+    HistoricalExecutionProtectiveTriggerKind,
     HistoricalExecutionProtectiveWindow,
     HistoricalExecutionSide,
     HistoricalExecutionTransitionKind,
@@ -415,7 +424,455 @@ def test_a_child_in_flight_at_the_replay_end_is_pending_and_the_prefix_excludes_
     ) != historical_execution_governed_paper_prefix_digest(short, before_ns=short_end)
 
 
-# --- B. the ledger --------------------------------------------------------------------------------------------------------
+# --- A2. the v1 handoff when a child resolves without closing the position -------------------------------------------------
+
+MAX_HOLD_AT = lifet.book_visible(128)  # the D_0 SHORT's 24 h deadline: its opening fill (mark slot 32's book) + 24 h
+IN_FLIGHT = MAX_HOLD_AT - SECOND  # a child sent here skips slot 128's book (not after it) and waits for slot 129's
+AT_DEADLINE = MAX_HOLD_AT - 2 * SECOND  # a child sent here is priced by slot 128's book, visible AT the deadline
+MAX_HOLD = HistoricalExecutionProtectiveTriggerKind.MAX_HOLD
+
+
+def wide_at(*slots: int):  # noqa: ANN201
+    """A SYNTHETIC book function: a 1000 bps book (spread_exceeds_max) at mark slots ``slots``, the default elsewhere."""
+
+    def book(j: int, mid: Fraction) -> dict[str, str] | None:
+        return lifet.book_at(mid, half_spread=Fraction(5)) if j in slots else lifet.book_at(mid)
+
+    return book
+
+
+REJECTED_129 = lifet.path_to(lifet.LONG_RUN, (lifet.POSITIVE,) * 6, book=wide_at(129))  # the in-flight child's book
+REJECTED_129_130 = lifet.path_to(lifet.LONG_RUN, (lifet.POSITIVE,) * 6, book=wide_at(129, 130))  # and v1's first one
+REJECTED_128 = lifet.path_to(lifet.LONG_RUN, (lifet.POSITIVE,) * 6, book=wide_at(128))  # the book AT the deadline
+THIN_129 = lifet.path_to(lifet.LONG_RUN, (lifet.POSITIVE,) * 6, book=book_override(129, depth=25))  # 0.5 per fill
+# Identities computed at the audited head 1ab87cdf, before the handoff repair: the legacy schedule v4 outcomes of the
+# handoff worlds (v1 alone) and the R3 outcomes and ledgers (a filled and a partial child, no rejection branch).
+HANDOFF_REFERENCE_PINS = (
+    "6e67f35cc040a042c4f151135d4679d02059872cda132834dd5a5f87f1069e53",
+    "53c877ee082448f273e099776eaf5c19e63f31684b552b702037e230d9783418",
+    "9a13f08db4a8ea1b22d0d6a4b0a5b622fb28e19c7c7c8a386f66f555f9badd40",
+    "979aa69ca0947f0a00e3de09ef0f27e9a4eaa6e878a2c5b218fa87cb143a5899",
+    "f846c0aa60a9033010ffa01f5fd172d4c32bc22cc4e3b569977b46d1c8074281",
+)
+R3_PINS = (
+    "8501e00d9aa27a2be20b437bec6e80fc94d9dfa3043d9395559807ead1578e7a",
+    "30025ff4e3c94bb197e12fb10e76f93c5b7fda69b762480c56a45b0edd0693dd",
+    "e4cac56e0b5ddc69c0a8c7eb4deebf3c537a6cb1f9fe541f0f08a6384b2e60fc",
+    "31e0c41e3851652cf79be8047fcc22a5952d1c6966f5548192f256ec1538d9f1",
+)
+
+
+@functools.cache
+def handoff_world(path: lifet.Path) -> tuple:
+    return baseline() if path is sct.ONE_DAY_PATH else world_of(path)
+
+
+def handoff_outcome(path: lifet.Path, sent: int, flatten_end: int, **changes: object):  # noqa: ANN201
+    """The schedule v6 re-run of ``path`` with the halt and one flatten window ``[sent, flatten_end)`` (authority
+    ``AUTHORITY``): its child is sent at ``sent``, before the deadline, and resolves at or after it."""
+
+    _, result, schedule, reference = handoff_world(path)
+    outcome = lifet.governed_under(result, v6_of(schedule, reference, sent, ((sent, flatten_end),), **changes))
+    assert outcome.outcome_digest == historical_execution_governed_paper_outcome_digest(outcome)
+    return outcome
+
+
+def v1_timeline(outcome: object) -> tuple:
+    """Every v1 attempt instant, and each v1 attempt fill as (outcome, execution instant, reason)."""
+
+    fills = [(item.outcome, item.execution_time_ns, item.reason) for item in lifet.protective_fills(outcome)]  # type: ignore[arg-type]
+    return [item.attempt_time_ns for item in outcome.protective_attempts], fills  # type: ignore[attr-defined]
+
+
+def the_max_hold_obligation(outcome: object):  # noqa: ANN201
+    """The one v1 obligation: the 24 h MAX_HOLD trigger exactly once, due at the deadline."""
+
+    (obligation,) = outcome.protective_obligations  # type: ignore[attr-defined]
+    assert [item.trigger_kind for item in obligation.triggers] == [MAX_HOLD]
+    assert (obligation.triggers[0].trigger_time_ns, obligation.created_at_ns) == (MAX_HOLD_AT, MAX_HOLD_AT)
+    assert obligation.attempt_ids == tuple(item.attempt_id for item in outcome.protective_attempts)  # type: ignore[attr-defined]
+    return obligation
+
+
+def closed_by(outcome: object, at: int) -> None:
+    """The position closes once, at ``at``, through close-only fills that never cross zero: no fill is invented."""
+
+    kinds = [item.transition_kind for item in outcome.position_transitions]  # type: ignore[attr-defined]
+    assert kinds[0] is HistoricalExecutionTransitionKind.OPEN and kinds[-1] is HistoricalExecutionTransitionKind.CLOSE
+    assert set(kinds[1:-1]) <= {HistoricalExecutionTransitionKind.REDUCE}
+    quantities = [Fraction(item.post_quantity) for item in outcome.position_transitions]  # type: ignore[attr-defined]
+    assert all(quantity * quantities[0] >= 0 for quantity in quantities)  # never crosses zero
+    sizes = [abs(item) for item in quantities]
+    assert sizes == sorted(sizes, reverse=True)  # the position only shrinks
+    assert outcome.position_transitions[-1].time_ns == at  # type: ignore[attr-defined]
+    assert outcome.terminal_state.position_quantity == lifet.d(0)  # type: ignore[attr-defined]
+    assert (outcome.pending_protective_child_time_ns, outcome.pending_protective_attempt_time_ns) == (None, None)  # type: ignore[attr-defined]
+
+
+@functools.cache
+def authentic_handoff() -> tuple:
+    """The auditor's public-ledger context on the baseline world: a KS4 proof at IN_FLIGHT (its child waits for slot
+    129's book) and an SS4 proof at the MAX_HOLD deadline that threatens the lineage's own book, so the flatten
+    authority ends at the deadline while the DEC-1 protective window stays in force."""
+
+    book = baseline()[0].dataset.source_manifest_digest
+    proofs = (proof(IN_FLIGHT), proof(MAX_HOLD_AT, K.SS4_FLATTEN, scope=(book,)))
+    with integrity_table(TEST_ONLY_TABLE):
+        outcome, evidence = ledger_for(baseline(), proofs=proofs)
+    return proofs, outcome, evidence
+
+
+def test_r1_a_child_refused_at_its_fill_hands_the_max_hold_obligation_to_v1_at_its_own_resolution() -> None:
+    proofs, outcome, evidence = authentic_handoff()
+    resolved, closed = lifet.book_visible(129), lifet.book_visible(130)
+    assert opened_at(baseline()[3]) + 24 * HOUR == MAX_HOLD_AT  # the deadline passes while the child is in flight
+    # the child: the whole SHORT at IN_FLIGHT, refused at its fill because its flatten authority ended at the deadline
+    ((child, fill),) = children_of(outcome)  # no child preempts v1, before or after its resolution
+    assert (child.attempt_time_ns, child.flatten_authority_digest, child.requested_quantity) == (
+        IN_FLIGHT,
+        proofs[0].proof_digest,
+        lifet.d(1),
+    )
+    assert (fill.outcome, fill.reason, fill.execution_time_ns) == (
+        REJECTED,
+        "governed_paper_flatten_authority_missing_at_fill",
+        resolved,
+    )
+    assert fill.fill_digest in outcome.governance_rejected_fill_digests
+    window = HistoricalExecutionFlattenWindow(IN_FLIGHT, MAX_HOLD_AT, proofs[0].proof_digest)
+    assert outcome.schedule.flatten_windows == (window,)  # the SS4 proof ends the flatten authority at the deadline
+    assert outcome.schedule.protective_windows[0].window_end_ns > closed  # v1's close-only authority stays valid
+    # v1: the obligation due in flight is attempted at the child's resolution, never at a later child resume instant
+    obligation = the_max_hold_obligation(outcome)
+    (attempt,) = outcome.protective_attempts
+    assert (attempt.attempt_time_ns, attempt.position_quantity, attempt.requested_quantity, attempt.side) == (
+        resolved,
+        lifet.d(-1),
+        lifet.d(1),
+        HistoricalExecutionSide.BUY,
+    )
+    assert attempt.earliest_execution_time_ns == resolved + 100_000_000  # the governed latency
+    # the next authenticated book strictly after the resolution (mark slot 130) closes the whole SHORT through v1
+    (v1_fill,) = lifet.protective_fills(outcome)
+    assert (v1_fill.outcome, v1_fill.execution_time_ns, v1_fill.filled_quantity) == (FILLED, closed, lifet.d(1))
+    assert v1_fill.book_event_time_ns == lifet.slot(130) + lifet.BOOK_OFFSET
+    assert (obligation.status.value, obligation.discharged_at_ns, obligation.discharging_fill_digest) == (
+        "DISCHARGED",
+        closed,
+        v1_fill.fill_digest,
+    )
+    assert obligation.breach_duration_ns == closed - MAX_HOLD_AT
+    closed_by(outcome, closed)
+    assert outcome.position_transitions[-1].fill_digest == v1_fill.fill_digest
+    # the ledger agrees: the refused child is recorded at its instant, and the v1 fill discharges the schedule
+    (schedule,) = evidence.schedules
+    events = [(item.kind, item.time_ns, item.reason) for item in schedule.events]
+    assert (E.CHILD_SENT, IN_FLIGHT, "") in events
+    assert (E.INTEGRITY_UNPROVEN, resolved, "governed_paper_flatten_authority_missing_at_fill") in events
+    assert events[-1] == (E.DISCHARGED, closed, "verified_position_zero")
+    assert [(item.source.value, item.time_ns, item.quantity) for item in schedule.attributed_fills] == [
+        ("V1_ATTEMPT", closed, lifet.d(1))
+    ]
+    assert (schedule.status, schedule.discharged_at_ns, evidence.open_obligation_count) == (
+        GovernedPaperProtectiveScheduleStatus.DISCHARGED,
+        closed,
+        0,
+    )
+    assert evidence.governed_outcome_digest == outcome.outcome_digest
+
+
+def test_r2_a_child_book_rejection_never_lends_its_30_second_retry_to_v1() -> None:
+    resolved = lifet.book_visible(129)
+    outcome = handoff_outcome(REJECTED_129, IN_FLIGHT, lifet.LONG_RUN)  # the auditor's rejected child book
+    ((child, fill),) = children_of(outcome)
+    assert (child.attempt_time_ns, fill.outcome, fill.reason, fill.execution_time_ns) == (
+        IN_FLIGHT,
+        REJECTED,
+        "spread_exceeds_max",
+        resolved,
+    )
+    assert fill.fill_digest not in outcome.governance_rejected_fill_digests
+    # v1 is attempted at the rejection instant itself, not at the child's retry 30 s later
+    assert v1_timeline(outcome) == ([resolved], [(FILLED, lifet.book_visible(130), "filled")])
+    assert the_max_hold_obligation(outcome).discharged_at_ns == lifet.book_visible(130)
+    closed_by(outcome, lifet.book_visible(130))
+    # v1 keeps its own book rule: a rejected v1 attempt re-attempts at its own rejection instant, never 30 s later, and
+    # the child's retry wake event (while v1 is in flight) issues nothing: one child, one attempt in flight at a time
+    twice = handoff_outcome(REJECTED_129_130, IN_FLIGHT, lifet.LONG_RUN)
+    assert len(twice.protective_children) == 1
+    assert v1_timeline(twice) == (
+        [resolved, lifet.book_visible(130)],
+        [
+            (REJECTED, lifet.book_visible(130), "spread_exceeds_max"),
+            (FILLED, lifet.book_visible(131), "filled"),
+        ],
+    )
+    assert the_max_hold_obligation(twice).discharged_at_ns == lifet.book_visible(131)
+    closed_by(twice, lifet.book_visible(131))
+    for item in (outcome, twice):
+        assert all(child.attempt_time_ns < resolved for child in item.protective_children)
+
+
+def test_r3_a_filled_or_partial_child_keeps_its_exact_fill_attribution_and_v1_takes_only_the_remainder() -> None:
+    with integrity_table(TEST_ONLY_TABLE):
+        whole, whole_ledger = ledger_for(baseline(), proofs=(proof(IN_FLIGHT),))
+        part, part_ledger = ledger_for(handoff_world(THIN_129), proofs=(proof(IN_FLIGHT),))
+    resolved = lifet.book_visible(129)
+    # FILLED: the child closes the whole SHORT and discharges the v1 obligation due in flight; v1 never attempts
+    ((_, fill),) = children_of(whole)
+    assert (fill.outcome, fill.execution_time_ns, fill.filled_quantity) == (FILLED, resolved, lifet.d(1))
+    obligation = the_max_hold_obligation(whole)
+    assert (obligation.status.value, obligation.discharging_fill_digest, whole.protective_attempts) == (
+        "DISCHARGED",
+        fill.fill_digest,
+        (),
+    )
+    closed_by(whole, resolved)
+    assert [(item.source.value, item.quantity) for item in whole_ledger.schedules[0].attributed_fills] == [
+        ("CHILD", lifet.d(1))
+    ]
+    # PARTIALLY_FILLED: the child closes 0.5 at its book; v1 then holds precedence and closes only the remaining 0.5
+    ((_, partial),) = children_of(part)  # no second child while the v1 obligation is outstanding
+    assert (partial.outcome, partial.execution_time_ns, partial.filled_quantity) == (PARTIAL, resolved, lifet.d("0.5"))
+    (attempt,) = part.protective_attempts
+    assert (attempt.attempt_time_ns, attempt.position_quantity, attempt.requested_quantity) == (
+        resolved,
+        lifet.d("-0.5"),
+        lifet.d("0.5"),
+    )
+    (v1_fill,) = lifet.protective_fills(part)
+    assert (v1_fill.outcome, v1_fill.execution_time_ns, v1_fill.filled_quantity) == (
+        FILLED,
+        lifet.book_visible(130),
+        lifet.d("0.5"),
+    )
+    assert the_max_hold_obligation(part).discharging_fill_digest == v1_fill.fill_digest
+    closed_by(part, lifet.book_visible(130))
+    assert [
+        (item.transition_kind, item.fill_digest, item.closed_quantity) for item in part.position_transitions[1:]
+    ] == [
+        (HistoricalExecutionTransitionKind.REDUCE, partial.fill_digest, lifet.d("0.5")),
+        (HistoricalExecutionTransitionKind.CLOSE, v1_fill.fill_digest, lifet.d("0.5")),
+    ]
+    assert [(item.source.value, item.quantity) for item in part_ledger.schedules[0].attributed_fills] == [
+        ("CHILD", lifet.d("0.5")),
+        ("V1_ATTEMPT", lifet.d("0.5")),
+    ]  # each fill attributed once, to its own order
+    # both paths are byte-identical to the audited head's (neither reaches a rejection branch)
+    assert (whole.outcome_digest, whole_ledger.evidence_digest, part.outcome_digest, part_ledger.evidence_digest) == (
+        R3_PINS
+    )
+
+
+AUTHORITY_GAP = (
+    HistoricalExecutionProtectiveWindow(lifet.ANCHOR, MAX_HOLD_AT + 10 * MINUTE, "a" * 64),
+    HistoricalExecutionProtectiveWindow(MAX_HOLD_AT + HOUR, lifet.LONG_RUN + 24 * HOUR, "a" * 64),
+)  # SYNTHETIC: no DEC-1 window from 10 min after the deadline until 1 h after it
+
+
+@pytest.mark.parametrize(
+    ("path", "sent", "flatten_end", "changes", "rejection", "attempts", "v1_fills"),
+    [
+        pytest.param(  # MAX_HOLD, the child's outcome and v1's evaluation at ONE instant: v1 loses nothing to the child
+            sct.ONE_DAY_PATH,
+            AT_DEADLINE,
+            MAX_HOLD_AT,
+            {},
+            ("governed_paper_flatten_authority_missing_at_fill", MAX_HOLD_AT),
+            [MAX_HOLD_AT],
+            [(FILLED, lifet.book_visible(129), "filled")],
+            id="governed-refusal-at-the-deadline",
+        ),
+        pytest.param(
+            REJECTED_128,
+            AT_DEADLINE,
+            lifet.LONG_RUN,
+            {},
+            ("spread_exceeds_max", MAX_HOLD_AT),
+            [MAX_HOLD_AT],
+            [(FILLED, lifet.book_visible(129), "filled")],
+            id="book-rejection-at-the-deadline",
+        ),
+        pytest.param(  # the auditor's FLATTEN_EXPIRES timestamps: the deadline passes 1 s after the child is sent
+            sct.ONE_DAY_PATH,
+            IN_FLIGHT,
+            MAX_HOLD_AT,
+            {},
+            ("governed_paper_flatten_authority_missing_at_fill", lifet.book_visible(129)),
+            [lifet.book_visible(129)],
+            [(FILLED, lifet.book_visible(130), "filled")],
+            id="governed-refusal-after-the-deadline",
+        ),
+        pytest.param(  # v1's own DEC-1 rule at the handoff, then the child's resume wake and v1's resume coincide
+            sct.ONE_DAY_PATH,
+            IN_FLIGHT,
+            lifet.LONG_RUN,
+            {"protective_windows": AUTHORITY_GAP},
+            ("governed_paper_protective_authority_missing_at_fill", lifet.book_visible(129)),
+            [lifet.book_visible(129), MAX_HOLD_AT + HOUR],
+            [
+                (REJECTED, None, "governed_paper_protective_authority_missing"),
+                (FILLED, lifet.book_visible(133), "filled"),
+            ],
+            id="dec1-refusal-and-coinciding-resume-wakes",
+        ),
+    ],
+)
+def test_r4_equal_and_near_instants_keep_one_deterministic_order_and_never_duplicate_a_protective_order(  # noqa: PLR0913
+    path: lifet.Path,
+    sent: int,
+    flatten_end: int,
+    changes: dict,
+    rejection: tuple[str, int],
+    attempts: list[int],
+    v1_fills: list[tuple],
+) -> None:
+    outcome = handoff_outcome(path, sent, flatten_end, **changes)
+    ((child, fill),) = children_of(outcome)  # never a second child: v1's obligation holds the slot after the outcome
+    assert (child.attempt_time_ns, fill.outcome, (fill.reason, fill.execution_time_ns)) == (sent, REJECTED, rejection)
+    # the first v1 attempt is the child's own resolution instant; each later one is v1's own rule, never a child retry
+    assert v1_timeline(outcome) == (attempts, v1_fills)
+    obligation = the_max_hold_obligation(outcome)  # one MAX_HOLD trigger, though the deadline met other events
+    assert (obligation.status.value, obligation.discharged_at_ns) == ("DISCHARGED", v1_fills[-1][1])
+    closed_by(outcome, v1_fills[-1][1])
+    if rejection[1] == MAX_HOLD_AT:  # resolved AT the deadline: v1 attempts and closes exactly as without the child
+        reference = handoff_world(path)[3]
+        assert v1_timeline(outcome) == v1_timeline(reference)
+        assert outcome.position_transitions[-1].time_ns == reference.position_transitions[-1].time_ns
+    # the equal-instant priority is deterministic: an independent re-run is byte-identical
+    assert historical_execution_governed_paper_outcome_to_dict(
+        handoff_outcome(path, sent, flatten_end, **changes)
+    ) == historical_execution_governed_paper_outcome_to_dict(outcome)
+
+
+def ledger_arguments(world: tuple, outcome: object, ladder: object, context: object) -> dict[str, object]:
+    """The public ledger builder's arguments for one re-run of ``world`` (as ``ledger_for`` passes them)."""
+
+    w, result = world[0], world[1]
+    return {
+        "genesis_digest": GENESIS,
+        "instrument": result.instrument,
+        "start_ns": result.evaluation_start_ns,
+        "outcome": outcome,
+        "ladder": ladder,
+        "system_states": (),
+        "decision_instants": tuple(item.decision_time_ns for item in w.run.decisions),
+        "context": context,
+        "book_source_digest": w.dataset.source_manifest_digest,
+        "depth_cap_fraction": policy_of(result).visible_depth_cap_fraction,
+    }
+
+
+def test_r5_the_handoff_replays_from_its_proofs_byte_identically_and_every_tamper_is_refused() -> None:
+    proofs, outcome, evidence = authentic_handoff()
+    world = baseline()
+    w, result, schedule, reference = world
+    context = GovernedPaperProtectiveLedgerContext(proofs)
+    resolved = lifet.book_visible(129)
+    with integrity_table(TEST_ONLY_TABLE):
+        # the schedule rebuilt from the proofs alone, an independent re-run, and the ledger rebuilt from that re-run
+        halt, flatten = governed_paper_protective_ledger_schedule_bounds(
+            context, book_source_digest=w.dataset.source_manifest_digest, horizon_ns=result.evaluation_end_ns
+        )
+        rebuilt = replace(v6_of(schedule, reference), exposure_halt_from_ns=halt, flatten_windows=flatten)
+        replayed = derivation(world, rebuilt)
+        replayed_ledger = derive_governed_paper_protective_ledger(
+            **ledger_arguments(world, replayed.outcome, replayed.ladder, context)  # type: ignore[arg-type]
+        )
+        # tampering: the v1 attempt restated at the child's 30 s retry, or no v1 attempt at all (the unrepaired shape)
+        (attempt,) = outcome.protective_attempts
+        late = replace(
+            outcome, protective_attempts=(replace(attempt, attempt_time_ns=attempt.attempt_time_ns + 30 * SECOND),)
+        )
+        dropped = replace(outcome, protective_attempts=())
+        for forged in (late, dropped):
+            assert historical_execution_governed_paper_outcome_digest(forged) != outcome.outcome_digest
+            resealed = replace(forged, outcome_digest=historical_execution_governed_paper_outcome_digest(forged))
+            for item, reason in ((forged, "outcome_digest_mismatch"), (resealed, "ladder_not_of_this_re_run")):
+                with pytest.raises(GovernedPaperProtectiveLedgerError, match=f"{reason}$"):
+                    derive_governed_paper_protective_ledger(
+                        **ledger_arguments(world, item, replayed.ladder, context)  # type: ignore[arg-type]
+                    )
+    assert historical_execution_admission_schedule_digest(rebuilt) == historical_execution_admission_schedule_digest(
+        outcome.schedule
+    )
+    assert historical_execution_governed_paper_outcome_to_dict(
+        replayed.outcome
+    ) == historical_execution_governed_paper_outcome_to_dict(outcome)
+    assert replayed.ladder.governed_outcome_digest == outcome.outcome_digest
+    assert governed_paper_protective_ledger_evidence_to_dict(
+        replayed_ledger
+    ) == governed_paper_protective_ledger_evidence_to_dict(evidence)
+    # the ledger: moving the refused child's event off its resolution instant breaks the chain and the evidence digest
+    (ledger_schedule,) = evidence.schedules
+    events = list(ledger_schedule.events)
+    index = next(
+        position
+        for position, item in enumerate(events)
+        if (item.kind, item.time_ns) == (E.INTEGRITY_UNPROVEN, resolved)
+    )
+    events[index] = replace(events[index], time_ns=resolved + 30 * SECOND)
+    broken = replace(ledger_schedule, events=tuple(events))
+    assert governed_paper_protective_ledger_event_chain_intact(ledger_schedule)
+    assert not governed_paper_protective_ledger_event_chain_intact(broken)
+    assert governed_paper_protective_ledger_evidence_digest(replace(evidence, schedules=(broken,))) != (
+        evidence.evidence_digest
+    )
+
+
+HANDOFF_V1_ALONE = (  # each handoff world under v1 alone: its attempt instants and its attempt fills
+    (sct.ONE_DAY_PATH, [MAX_HOLD_AT], [(FILLED, lifet.book_visible(129), "filled")]),
+    (
+        REJECTED_129,
+        [MAX_HOLD_AT, lifet.book_visible(129)],
+        [(REJECTED, lifet.book_visible(129), "spread_exceeds_max"), (FILLED, lifet.book_visible(130), "filled")],
+    ),
+    (
+        REJECTED_129_130,
+        [MAX_HOLD_AT, lifet.book_visible(129), lifet.book_visible(130)],
+        [
+            (REJECTED, lifet.book_visible(129), "spread_exceeds_max"),
+            (REJECTED, lifet.book_visible(130), "spread_exceeds_max"),
+            (FILLED, lifet.book_visible(131), "filled"),
+        ],
+    ),
+    (REJECTED_128, [MAX_HOLD_AT], [(FILLED, lifet.book_visible(129), "filled")]),
+    (
+        THIN_129,
+        [MAX_HOLD_AT, lifet.book_visible(129)],
+        [
+            (PARTIAL, lifet.book_visible(129), "visible_depth_cap_partial_remainder_cancelled"),
+            (FILLED, lifet.book_visible(130), "filled"),
+        ],
+    ),
+)
+
+
+V1_REPLAYED_FIELDS = (
+    "fills",
+    "protective_attempts",
+    "protective_obligations",
+    "position_transitions",
+    "terminal_state",
+)
+
+
+def test_r6_v1_alone_keeps_its_exact_rules_and_legacy_identities_on_every_handoff_world() -> None:
+    digests = []
+    for path, attempts, fills in HANDOFF_V1_ALONE:
+        _, result, schedule, reference = handoff_world(path)
+        # the legacy schedule v4 (no child): the deadline attempt at exactly MAX_HOLD_AT, then v1's own book rules
+        assert reference.schema_version != OUTCOME_V4 and reference.protective_children == ()
+        assert v1_timeline(reference) == (attempts, fills)
+        the_max_hold_obligation(reference)
+        closed_by(reference, fills[-1][1])
+        # a schedule v6 without a halt or a flatten window replays v1 exactly: the v2 extension stays inert
+        bare = lifet.governed_under(result, v6_of(schedule, reference))
+        assert (bare.schema_version, bare.protective_children) == (OUTCOME_V4, ())
+        for name in V1_REPLAYED_FIELDS:
+            assert getattr(bare, name) == getattr(reference, name), name
+        digests.append(reference.outcome_digest)
+    assert tuple(digests) == HANDOFF_REFERENCE_PINS  # byte-identical to the audited head's legacy outcomes
 
 
 def anchor(**changes: object):  # noqa: ANN201
@@ -1509,6 +1966,114 @@ def test_end_to_end_a_proven_trigger_flattens_world_gs_open_short_through_one_cl
     assert no_target_anywhere(governed_paper_protective_ledger_evidence_to_dict(ledger))
     assert (evidence.schema_version, evidence.status) == (V10_EVIDENCE, GovernedPaperExecutionStatus.READY)
     assert (verification.intact, verification.reason_codes) == (True, ())
+
+
+def test_world_g_seals_the_v1_handoff_at_a_refused_childs_resolution_replays_it_and_refuses_its_tampering() -> None:
+    """R5 on world G (seal v10, evidence v10): the end-to-end child of the test above, but an SS4 proof 1 h into day 4
+    threatens the lineage's own book, so the child in flight is refused at its day 5 fill; the MAX_HOLD obligation due on
+    day 4 meanwhile is attempted at that very resolution, stays pending (world G's next book is on day 7) and closes the
+    SHORT on day 7."""
+
+    prefix = ledger_days(3)
+    tau, threatened = gpe.instant(3) + 2 * HOUR, gpe.instant(4) + HOUR
+    first = world_g_proof(tau)
+    book = prefix[0].seal_inputs.dataset.source_manifest_digest
+    second = proof(
+        threatened, K.SS4_FLATTEN, scope=(book,), genesis=prefix[0].seal.genesis_digest, approved_at_ns=gpe.instant(0)
+    )
+    contexts = {day: GovernedPaperProtectiveLedgerContext((first,) if day == 3 else (first, second)) for day in (3, 4)}
+    # the production prefix re-verifies under the production tables (the lineage evidence shares this identity memo)
+    assert [(item.intact, item.reason_codes) for item in map(verified, prefix)] == [(True, ())] * 3
+    with permissive_entries():
+        days = prefix
+        for day in range(3, 8):
+            days = (*days, ledger_day(days, contexts[min(day, 4)]))
+        outcome = lineage.protected_replay(days[7])[1]
+        gate = ledger_gate(days[7], 7, contexts[4])
+        evidence, verification = lineage_evidence(days)
+        with integrity_table(TEST_ONLY_TABLE):
+            sealed = [rst.verify(item.seal, item.seal_inputs) for item in days[3:]]
+            forged = [
+                rst.verify(gpe.reseal_seal(days[day].seal, **changes), days[day].seal_inputs)
+                for day, changes in (
+                    (5, {"pending_protective_attempt_time_ns": None}),  # the unrepaired day 5: no v1 attempt pending
+                    (6, {"pending_protective_attempt_time_ns": None}),
+                    (7, {"open_protective_ledger_obligation_count": 1}),
+                    (7, {"protective_ledger_evidence_digest": "0" * 64}),
+                )
+            ]
+    # the engine: the child in flight across day 4 is refused at its day 5 fill by its ended flatten authority
+    opened, closed = outcome.position_transitions
+    deadline = opened.time_ns + 24 * HOUR
+    assert gpe.instant(3) < opened.time_ns < tau < gpe.instant(4) <= deadline < threatened < gpe.instant(5)
+    ((child, fill),) = children_of(outcome)
+    resolved = fill.execution_time_ns
+    assert (child.attempt_time_ns, fill.outcome, fill.reason) == (
+        tau,
+        REJECTED,
+        "governed_paper_flatten_authority_missing_at_fill",
+    )
+    assert gpe.instant(5) < resolved < gpe.instant(6)
+    # v1: the MAX_HOLD obligation due on day 4 is attempted at the resolution itself and closes the SHORT on day 7
+    (obligation,) = outcome.protective_obligations
+    assert [item.trigger_kind for item in obligation.triggers] == [MAX_HOLD]
+    (attempt,) = outcome.protective_attempts
+    (v1_fill,) = lifet.protective_fills(outcome)
+    assert (obligation.created_at_ns, attempt.attempt_time_ns, attempt.requested_quantity) == (
+        deadline,
+        resolved,
+        lifet.d(1),
+    )
+    assert (v1_fill.outcome, v1_fill.filled_quantity) == (FILLED, lifet.d(1))
+    assert gpe.instant(7) < v1_fill.execution_time_ns < gpe.instant(8)
+    assert (closed.transition_kind, closed.fill_digest, closed.post_quantity) == (
+        HistoricalExecutionTransitionKind.CLOSE,
+        v1_fill.fill_digest,
+        lifet.d(0),
+    )
+    assert (obligation.status.value, obligation.discharging_fill_digest) == ("DISCHARGED", v1_fill.fill_digest)
+    # the seals: the flatten window ends at the SS4 proof from day 4 on; the child, then the v1 attempt, pend by instant
+    for day in range(3, 8):
+        seal, prior = days[day].seal, days[day - 1].seal
+        assert (seal.schema_version, seal.status, seal.reason_codes) == (V10_SEAL, SEALED, ())
+        assert seal.schedule.flatten_windows == (
+            HistoricalExecutionFlattenWindow(tau, gpe.instant(4) if day == 3 else threatened, first.proof_digest),
+        )
+        assert seal.prefix_digest_open == prior.prefix_digest_close
+        assert seal.protective_ledger_prefix_digest_open == prior.protective_ledger_prefix_digest_close
+    assert [days[day].seal.integrity_proof_digests for day in range(3, 8)] == [(first.proof_digest,)] + [
+        (first.proof_digest, second.proof_digest)
+    ] * 4
+    assert [days[day].seal.pending_protective_child_time_ns for day in range(3, 8)] == [tau, tau, None, None, None]
+    assert [days[day].seal.pending_protective_attempt_time_ns for day in range(3, 8)] == [
+        None,
+        None,
+        resolved,
+        resolved,
+        None,
+    ]
+    # KS4 alone on day 3; the SS4 proof joins the open schedule as a second obligation on day 4; both discharge on day 7
+    assert [days[day].seal.open_protective_ledger_obligation_count for day in range(3, 8)] == [1, 2, 2, 2, 0]
+    # replay: every seal re-verifies from its inputs, the public gate rebuilds the sealed ledger, the lineage verifies
+    assert [(item.intact, item.reason_codes) for item in sealed] == [(True, ())] * 5
+    assert gate.evidence_digest == days[7].seal.entry_safety_evidence_digest
+    ledger = gate.protective_ledger_evidence
+    assert ledger is not None and ledger.evidence_digest == days[7].seal.protective_ledger_evidence_digest
+    assert ledger.governed_outcome_digest == days[7].seal.governed_outcome_digest == outcome.outcome_digest
+    (schedule,) = ledger.schedules
+    assert [item.trigger_kind for item in schedule.obligations] == [K.KS4_FLATTEN, K.SS4_FLATTEN]
+    events = [(item.kind, item.time_ns) for item in schedule.events]
+    assert (E.CHILD_SENT, tau) in events and (E.MERGED, threatened) in events
+    assert (E.INTEGRITY_UNPROVEN, resolved) in events
+    assert events[-1] == (E.DISCHARGED, v1_fill.execution_time_ns)
+    assert [item.source.value for item in schedule.attributed_fills] == ["V1_ATTEMPT"]
+    assert governed_paper_protective_ledger_prefix_digest(ledger, before_ns=gpe.instant(7)) == (
+        days[7].seal.protective_ledger_prefix_digest_open
+    )
+    assert (evidence.schema_version, evidence.status) == (V10_EVIDENCE, GovernedPaperExecutionStatus.READY)
+    assert (verification.intact, verification.reason_codes) == (True, ())
+    # tampering: no resealed day verifies, the unrepaired "no pending v1 attempt" day 5 included
+    assert [item.intact for item in forged] == [False] * 4
 
 
 # --- legacy byte identity -----------------------------------------------------------------------------------------------------

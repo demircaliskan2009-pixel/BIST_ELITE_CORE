@@ -2211,15 +2211,19 @@ class _Simulation:
         self.attempt_in_flight = False
         if self.position.quantity == 0:  # the child closed the position (its protection is finalized)
             return
+        # A refusal or a book rejection gates only the NEXT CHILD: a governed refusal recurs at the next window pair, a
+        # book rejection at least 30 seconds later (§1.19 item 4). Neither instant is ever a v1 instant (_busy never reads
+        # child_resume_at).
         if reason.startswith(_GOVERNED_REASON_PREFIX):
             self._resume_child_after_refusal(book.visibility)
-            return
-        if reason in _FLATTEN_BOOK_REJECTIONS:  # no admissible book: retry at least 30 seconds later (§1.19 item 4)
+        elif reason in _FLATTEN_BOOK_REJECTIONS:
             retry = _wire_int(book.visibility + _FLATTEN_RETRY_NS, "flatten_retry_time_ns")
             self.child_resume_at = retry
             self._push_protective(retry, _CURRENT_PROTECTION)
-            return
-        self._protective_step(book.visibility)  # executed in part: the remainder at its own instant, v1 rules first
+        # Whatever the outcome, the child's resolution frees the one in-flight slot, so every v1 rule of this instant runs
+        # now, before any later child: a STOP or MAX_HOLD obligation that came due while the child was in flight is
+        # attempted here under v1's own window and book rules; a remainder after a partial fill follows the same order.
+        self._protective_step(book.visibility)
 
     def _issue_attempt(self, protection: _Protection, obligation: _Obligation, time_ns: int) -> None:
         quantity = self.position.quantity
