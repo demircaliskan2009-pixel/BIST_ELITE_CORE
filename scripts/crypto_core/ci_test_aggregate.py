@@ -10,9 +10,9 @@ prints one ``::error::`` line per defect and exits 1:
    ``coverage.sqlite``;
 3. every report is well formed and names this head, this run (an earlier attempt of it at most) and its own shard,
    ran the canonical invocation without ``PYTEST_ADDOPTS``, and exited 0;
-4. all reports carry the identical, duplicate-free collection; each shard selected exactly what
-   :func:`ci_test_shard.partition` assigns it, so the selections are disjoint and cover the collection; every
-   selected test has exactly one accepted outcome (passed, skipped, xfailed, xpassed);
+4. all reports carry the identical, duplicate-free collection (the same node ids, files in the same order); each
+   shard selected exactly what :func:`ci_test_shard.partition` assigns it, so the selections are disjoint and cover
+   the collection; every selected test has exactly one accepted outcome (passed, skipped, xfailed, xpassed);
 5. every coverage file matches the digest its report recorded and holds line data measured only under the source
    root, and the combined data equals the exact union of the shards' lines;
 6. the total of that union passes ``--fail-under`` by pytest-cov's own rule (``should_fail_under`` at the
@@ -195,22 +195,40 @@ def check_report(
     return errors
 
 
+def file_order(node_ids: Sequence[str]) -> list[str]:
+    """The files of ``node_ids`` in first-appearance order -- the only order :func:`partition` depends on."""
+    return list(dict.fromkeys(file_of(node_id) for node_id in node_ids))
+
+
 def check_partition(shards: Sequence[Shard], shard_count: int) -> list[str]:
-    """One identical collection, re-partitioned here: each selection exact, together disjoint and complete."""
+    """One identical collection, re-partitioned here: each selection exact, together disjoint and complete.
+
+    Identical means the same node ids with the files in the same order. The order of the ids INSIDE one file is not
+    compared: a test parametrized over a set (``list(frozenset(...))``) is ordered by the process's string hash seed,
+    which differs between processes exactly as it differs between two serial runs.
+    """
     reference = shards[0].report["collected"]
-    errors = [
-        f"shard {shard.index}: collection ({len(shard.report['collected'])} ids) differs from shard "
-        f"{shards[0].index} ({len(reference)} ids)"
-        for shard in shards[1:]
-        if shard.report["collected"] != reference
-    ]
+    reference_ids, reference_files = set(reference), file_order(reference)
+    errors = []
+    for shard in shards[1:]:
+        collected = shard.report["collected"]
+        if set(collected) != reference_ids:
+            missing = sorted(reference_ids - set(collected))
+            extra = sorted(set(collected) - reference_ids)
+            errors.append(
+                f"shard {shard.index}: collection ({len(collected)} ids) differs from shard {shards[0].index} "
+                f"({len(reference)} ids): missing {_sample(missing)}; extra {_sample(extra)}"
+            )
+        elif file_order(collected) != reference_files:
+            errors.append(f"shard {shard.index}: collection orders its files differently from shard {shards[0].index}")
     if errors:
         return errors
     assignment = partition(reference, shard_count)
     seen: Counter[str] = Counter()
     for shard in shards:
-        expected = [node_id for node_id in reference if assignment[file_of(node_id)] == shard.index]
-        if shard.report["selected"] != expected:
+        expected = {node_id for node_id in reference if assignment[file_of(node_id)] == shard.index}
+        # set equality is exact here: check_report already refused duplicate selected ids
+        if set(shard.report["selected"]) != expected:
             errors.append(
                 f"shard {shard.index}: selection ({len(shard.report['selected'])} ids) is not its partition ({len(expected)} ids)"
             )
@@ -332,8 +350,8 @@ def main(argv: Sequence[str] | None = None, out: TextIO = sys.stdout) -> int:
             )
     if shards and isinstance(shards[0].report, dict) and isinstance(shards[0].report.get("collected"), list):
         collected = shards[0].report["collected"]
-        digest = hashlib.sha256("\n".join(map(str, collected)).encode("utf-8")).hexdigest()
-        print(f"collection: {len(collected)} node ids, sha256 {digest}", file=out)
+        digest = hashlib.sha256("\n".join(sorted(map(str, collected))).encode("utf-8")).hexdigest()
+        print(f"collection: {len(collected)} node ids, sha256 of the sorted ids {digest}", file=out)
     print(f"outcomes: {dict(sorted(tally.items()))}", file=out)
     if total is not None:
         print(f"coverage of the verified union: {total:.2f}% (fail-under {args.fail_under:g})", file=out)

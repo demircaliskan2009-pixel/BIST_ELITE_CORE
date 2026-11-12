@@ -151,6 +151,27 @@ def test_an_earlier_attempt_of_the_same_run_is_still_evidence_of_this_commit(evi
     assert evidence.run()[0] == 0
 
 
+def _swap_inside_file(ids: list[str], path: str) -> list[str]:
+    positions = [index for index, node_id in enumerate(ids) if file_of(node_id) == path]
+    swapped = list(ids)
+    for index, node_id in zip(positions, reversed([ids[index] for index in positions])):
+        swapped[index] = node_id
+    return swapped
+
+
+def test_a_different_order_inside_one_file_is_the_same_collection(evidence: Evidence) -> None:
+    # e.g. parametrize(list(frozenset(...))): the order follows each process's string hash seed
+    path = "tests/crypto_core/test_three.py"
+    report = evidence.report(2)
+    assert path in {file_of(node_id) for node_id in report["selected"]}
+    report["collected"] = _swap_inside_file(report["collected"], path)
+    report["selected"] = _swap_inside_file(report["selected"], path)
+    assert report["collected"] != COLLECTION
+    evidence.write(2, report)
+    code, out = evidence.run()
+    assert code == 0, out
+
+
 def _needs(job: str, result: object) -> Callable[[Evidence], None]:
     def mutate(evidence: Evidence) -> None:
         evidence.needs[job] = {"result": result, "outputs": {}}
@@ -210,6 +231,13 @@ def _incomplete_collection(evidence: Evidence) -> None:
     owned_by_one = evidence.report(1)["selected"][0]
     report = evidence.report(2)
     report["collected"] = [node_id for node_id in COLLECTION if node_id != owned_by_one]
+    evidence.write(2, report)
+
+
+def _reordered_files(evidence: Evidence) -> None:
+    report = evidence.report(2)
+    moved = [node_id for node_id in COLLECTION if file_of(node_id) == "tests/crypto_core/test_two.py"]
+    report["collected"] = [node_id for node_id in COLLECTION if node_id not in moved] + moved
     evidence.write(2, report)
 
 
@@ -347,6 +375,7 @@ NEGATIVE_CASES = {
     "nothing-selected": (_edit(1, selected=[], outcomes={}), "shard 1: selected no test"),
     "duplicate-node-ids": (_duplicate_collected, "duplicate collected node ids: tests/crypto_core/test_one.py::test_a"),
     "incomplete-collection": (_incomplete_collection, "shard 2: collection (4 ids) differs from shard 1 (5 ids)"),
+    "reordered-files": (_reordered_files, "shard 2: collection orders its files differently from shard 1"),
     "selected-outside-collection": (
         _selected_outside_collection,
         "shard 2: selected node ids outside its own collection",
