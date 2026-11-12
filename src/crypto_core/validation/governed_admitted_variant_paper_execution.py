@@ -126,6 +126,24 @@ Approved sizing chain lineage (``S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1``, sea
 * The seal binds the sizing evidence digest and the CTR source binding (qualification, revocations, capture and its
   record count). Without a sizing context every integrated seal and evidence is exactly the accepted v8 artifact, and no
   v2-v8 payload carries a seal v9 field.
+
+Protective obligation ledger v2 lineage (``S1_PROTECTIVE_OBLIGATION_LEDGER_V2_ENGINE_CONSTRUCTION_V1``, seal v10 and
+evidence v10).
+* A sizing chain lineage whose protection inputs carry a protective ledger context does so on every day from day 0, and
+  never switches. The context holds the IR-2 integrity trigger proofs known at ``E_{k+1}`` (none in production, whose
+  approval table admits no anchor): append-only, each authentic and admitted, and each new proof's instant inside the
+  day that adds it, so no sealed day gains a trigger after its seal.
+* Its schedule is the engine's schedule v6: schedule v5 with the exposure halt and the flatten window the proofs imply
+  (``governed_paper_protective_ledger``), facts of the inputs alone. Its entry gate evaluates rule set v9: rule set v8
+  with PROTECTIVE-LEDGER on the v2 ledger each evaluation derives from the same engine re-run.
+* A flatten child's fill is projected like a protective fill: close-only, never bound to the cycle's direction
+  authority (DEC-1), through the reservation of the cycle that decided its excursion. A child left in flight by the
+  replay's end is excluded from both prefixes by its instant; a seal's pending child is the previous seal's own (the
+  same instant) or one made inside its own day.
+* The seal binds the ledger evidence digest, the ledger's prefix before ``E_k`` and before ``E_{k+1}`` (X1 for the
+  ledger: the prefix before ``E_k`` must equal the previous seal's), the integrity proof digests and the count of open
+  obligations. Without a protective ledger context every sizing chain seal and evidence is exactly the accepted v9
+  artifact, and no v2-v9 payload carries a seal v10 field.
 """
 
 from __future__ import annotations
@@ -194,6 +212,13 @@ from crypto_core.validation.governed_paper_protective_authority import (
     governed_paper_protective_window,
     verify_governed_paper_protective_revocation,
 )
+from crypto_core.validation.governed_paper_protective_ledger import (
+    GovernedPaperProtectiveLedgerContext,
+    GovernedPaperProtectiveLedgerError,
+    governed_paper_protective_ledger_canonical_context,
+    governed_paper_protective_ledger_prefix_digest,
+    governed_paper_protective_ledger_schedule_bounds,
+)
 from crypto_core.validation.governed_paper_regime_state import (
     governed_paper_regime_prefix_digest,
     verify_governed_paper_regime_approval,
@@ -215,6 +240,7 @@ from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_PROTECTIVE_ADMISSION_SCHEDULE_SCHEMA_VERSION,
+    HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HistoricalExecutionAdmissionSchedule,
     HistoricalExecutionAdmissionWindow,
@@ -294,6 +320,7 @@ _KILL_SWITCH_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v6"
 _REGIME_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v7"
 _SYSTEM_SAFETY_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v8"
 _SIZING_CHAIN_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v9"
+_PROTECTIVE_LEDGER_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v10"
 _EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v2"
 _PROTECTIVE_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v3"
 _PORTFOLIO_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v4"
@@ -302,7 +329,9 @@ _KILL_SWITCH_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v6"
 _REGIME_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v7"
 _SYSTEM_SAFETY_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v8"
 _SIZING_CHAIN_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v9"
-_SYSTEM_SAFETY_SEALS = (_SYSTEM_SAFETY_SEAL_SCHEMA_VERSION, _SIZING_CHAIN_SEAL_SCHEMA_VERSION)
+_PROTECTIVE_LEDGER_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v10"
+_SIZING_CHAIN_SEALS = (_SIZING_CHAIN_SEAL_SCHEMA_VERSION, _PROTECTIVE_LEDGER_SEAL_SCHEMA_VERSION)
+_SYSTEM_SAFETY_SEALS = (_SYSTEM_SAFETY_SEAL_SCHEMA_VERSION, *_SIZING_CHAIN_SEALS)
 _REGIME_SEALS = (_REGIME_SEAL_SCHEMA_VERSION, *_SYSTEM_SAFETY_SEALS)
 _KILL_SWITCH_SEALS = (_KILL_SWITCH_SEAL_SCHEMA_VERSION, *_REGIME_SEALS)
 _MARKET_DATA_SEALS = (_MARKET_DATA_SEAL_SCHEMA_VERSION, *_KILL_SWITCH_SEALS)
@@ -451,15 +480,31 @@ class GovernedPaperDaySeal:
     regime_prefix_digest_close: str = ""
     # Seal v8 on (a system-safety lineage, S1_INTEGRATED_RISK_AND_SYSTEM_SAFETY_CLOSURE_V1): no v2-v7 payload carries it.
     system_state_evidence_digest: str = ""
-    # Seal v9 only (an approved sizing chain lineage, S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1): no v2-v8 payload carries
+    # Seal v9 on (an approved sizing chain lineage, S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1): no v2-v8 payload carries
     # these.
     sizing_evidence_digest: str = ""
     ctr_qualification_digest: str = ""
     ctr_revocation_digests: tuple[str, ...] = ()
     ctr_capture_digest: str = ""
     ctr_capture_record_count: int = 0
+    # Seal v10 only (a protective ledger v2 lineage, S1_PROTECTIVE_OBLIGATION_LEDGER_V2_ENGINE_CONSTRUCTION_V1): no v2-v9
+    # payload carries these.
+    protective_ledger_evidence_digest: str = ""
+    protective_ledger_prefix_digest_open: str = ""
+    protective_ledger_prefix_digest_close: str = ""
+    integrity_proof_digests: tuple[str, ...] = ()
+    pending_protective_child_time_ns: int | None = None
+    open_protective_ledger_obligation_count: int = 0
 
 
+_SEAL_V10_FIELDS = (
+    "protective_ledger_evidence_digest",
+    "protective_ledger_prefix_digest_open",
+    "protective_ledger_prefix_digest_close",
+    "integrity_proof_digests",
+    "pending_protective_child_time_ns",
+    "open_protective_ledger_obligation_count",
+)
 _SEAL_V9_FIELDS = (
     "sizing_evidence_digest",
     "ctr_qualification_digest",
@@ -509,7 +554,9 @@ class GovernedPaperDayProtectionInputs:
     bar archive known at ``E_{k+1}``. ``system_safety`` (only with a regime context) selects the integrated risk and
     system-safety lineage (seal v8, entry rule set v7). ``sizing`` (only with ``system_safety``) is the approved sizing
     chain lineage's context (seal v9, entry rule set v7 -> v8, schedule v5): the CTR source known at ``E_{k+1}``
-    (qualification, revocations, capture complete through ``E_{k+1}``) or none.
+    (qualification, revocations, capture complete through ``E_{k+1}``) or none. ``protective_ledger`` (only with
+    ``sizing``) is the protective obligation ledger v2 lineage's context (seal v10, entry rule set v9, schedule v6): the
+    IR-2 integrity trigger proofs known at ``E_{k+1}`` (none in production).
     """
 
     authority_inputs: GovernedPaperProtectiveAuthorityInputs
@@ -524,6 +571,7 @@ class GovernedPaperDayProtectionInputs:
     regime: GovernedPaperEntrySafetyRegimeContext | None = None
     system_safety: bool = False
     sizing: GovernedPaperSizingContext | None = None
+    protective_ledger: GovernedPaperProtectiveLedgerContext | None = None
 
 
 @dataclass(frozen=True)
@@ -738,6 +786,19 @@ _LEGACY_PAYLOADS: dict[type, tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]
         ((_KILL_SWITCH_SEAL_SCHEMA_VERSION,), (*_SEAL_V7_FIELDS, *_SEAL_V8_FIELDS, *_SEAL_V9_FIELDS)),
         ((_REGIME_SEAL_SCHEMA_VERSION,), (*_SEAL_V8_FIELDS, *_SEAL_V9_FIELDS)),
         ((_SYSTEM_SAFETY_SEAL_SCHEMA_VERSION,), _SEAL_V9_FIELDS),
+        (
+            (
+                _SEAL_SCHEMA_VERSION,
+                _PROTECTIVE_SEAL_SCHEMA_VERSION,
+                _PORTFOLIO_SEAL_SCHEMA_VERSION,
+                _MARKET_DATA_SEAL_SCHEMA_VERSION,
+                _KILL_SWITCH_SEAL_SCHEMA_VERSION,
+                _REGIME_SEAL_SCHEMA_VERSION,
+                _SYSTEM_SAFETY_SEAL_SCHEMA_VERSION,
+                _SIZING_CHAIN_SEAL_SCHEMA_VERSION,
+            ),
+            _SEAL_V10_FIELDS,
+        ),
     ),
     GovernedPaperExecutionEvidence: (((_EVIDENCE_SCHEMA_VERSION,), _EVIDENCE_V3_FIELDS),),
 }
@@ -1041,6 +1102,7 @@ class _SealProof:
     regime: bool = False
     system_safety: bool = False
     sizing_chain: bool = False
+    protective_ledger: bool = False
 
 
 def _closing(inputs: GovernedPaperDaySealInputs, cycle: GovernedPaperCycleAuthority, sleeve_id: str, end: int):  # noqa: ANN202
@@ -1103,6 +1165,35 @@ class _DayProtection:
     sizing: GovernedPaperSizingContext | None = None
     # the CTR source binding: qualification digest, revocation digests, capture digest and record count (re-proven)
     ctr_binding: tuple[str, tuple[str, ...], str, int] = ("", (), "", 0)
+    protective_ledger: GovernedPaperProtectiveLedgerContext | None = None
+    integrity_proof_digests: tuple[str, ...] = ()  # re-proven: append-only, each new one inside this day
+
+
+def _integrity_proofs(
+    context: GovernedPaperProtectiveLedgerContext,
+    prior: GovernedPaperDaySeal | None,
+    *,
+    genesis: GovernedPaperGenesis,
+    start: int,
+    end: int,
+) -> tuple[str, ...]:
+    """Re-prove one day's IR-2 integrity proofs: each authentic and admitted (``governed_paper_protective_ledger``), the
+    ones the previous seal bound kept in order, and every new one known inside this day, never before it."""
+
+    try:
+        governed_paper_protective_ledger_canonical_context(
+            context, genesis_digest=genesis.genesis_digest, horizon_ns=end
+        )
+    except GovernedPaperProtectiveLedgerError as exc:
+        raise _fail("integrity_proofs_not_authentic") from exc
+    digests = tuple(item.proof_digest for item in context.integrity_proofs)
+    previous = () if prior is None else prior.integrity_proof_digests
+    if digests[: len(previous)] != previous:
+        raise _fail("integrity_proofs_rewritten")
+    for proof in context.integrity_proofs[len(previous) :]:
+        if prior is not None and proof.trigger_time_ns < start:
+            raise _fail("integrity_proof_outside_the_sealed_day")
+    return digests
 
 
 def _ctr_source(
@@ -1232,8 +1323,18 @@ def _day_protection(  # noqa: C901 - one linear proof of the protective inputs
         raise _fail("protection_inputs_malformed:sizing")
     if sizing is not None and not protection.system_safety:
         raise _fail("sizing_chain_needs_the_system_safety_lineage")
-    if prior is not None and (prior.schema_version == _SIZING_CHAIN_SEAL_SCHEMA_VERSION) is not (sizing is not None):
+    if prior is not None and (prior.schema_version in _SIZING_CHAIN_SEALS) is not (sizing is not None):
         raise _fail("sizing_chain_lineage_switched")
+    ledger = protection.protective_ledger
+    if ledger is not None and type(ledger) is not GovernedPaperProtectiveLedgerContext:
+        raise _fail("protection_inputs_malformed:protective_ledger")
+    if ledger is not None and sizing is None:
+        raise _fail("protective_ledger_needs_the_sizing_chain_lineage")
+    if prior is not None and (prior.schema_version == _PROTECTIVE_LEDGER_SEAL_SCHEMA_VERSION) is not (
+        ledger is not None
+    ):
+        raise _fail("protective_ledger_lineage_switched")
+    proof_digests = () if ledger is None else _integrity_proofs(ledger, prior, genesis=genesis, start=start, end=end)
     ctr_binding = (
         ("", (), "", 0) if sizing is None else _ctr_source(sizing, prior, genesis=genesis, start=start, end=end)
     )
@@ -1322,6 +1423,8 @@ def _day_protection(  # noqa: C901 - one linear proof of the protective inputs
         system_safety=protection.system_safety,
         sizing=sizing,
         ctr_binding=ctr_binding,
+        protective_ledger=ledger,
+        integrity_proof_digests=proof_digests,
     )
 
 
@@ -1419,6 +1522,8 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
     schedule = HistoricalExecutionAdmissionSchedule(
         schema_version=HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION
         if protection is None
+        else HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_ADMISSION_SCHEDULE_SCHEMA_VERSION
+        if protection.protective_ledger is not None
         else HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION
         if protection.sizing is not None
         else HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION
@@ -1498,6 +1603,8 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
                 ctr_capture_digest=protection.ctr_binding[2],
                 ctr_capture_record_count=protection.ctr_binding[3],
             )
+        if protection.protective_ledger is not None:
+            facts.update(integrity_proof_digests=protection.integrity_proof_digests)
         empty.update(
             open_excursion_deciding_day_index=None,
             open_excursion_deciding_cycle_digest=None,
@@ -1512,7 +1619,8 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
     regime = protection is not None and protection.regime is not None
     system_safety = protection is not None and protection.system_safety
     sizing_chain = protection is not None and protection.sizing is not None
-    lineage = (protective, portfolio, market_data, kill_switch, regime, system_safety, sizing_chain)
+    ledger = protection is not None and protection.protective_ledger is not None
+    lineage = (protective, portfolio, market_data, kill_switch, regime, system_safety, sizing_chain, ledger)
     try:
         if not attested:
             raise _Blocked("closing_head_not_attested")
@@ -1620,6 +1728,13 @@ def _replay(
         except (GovernedPaperSizingError, GovernedPaperCtrError, GovernedPaperAllocationError) as exc:
             raise _fail("sizing_fill_bounds_not_derivable") from exc
         schedule = replace(schedule, exposure_envelopes=envelopes, depth_caps=caps)
+    if protection is not None and protection.protective_ledger is not None:
+        # The schedule v6 bounds: the exposure halt and the flatten window the re-proven IR-2 proofs imply, with the
+        # archive's source manifest as the book's authentication identity; facts of the inputs alone.
+        halt, flatten = governed_paper_protective_ledger_schedule_bounds(
+            protection.protective_ledger, book_source_digest=inputs.dataset.source_manifest_digest, horizon_ns=end
+        )
+        schedule = replace(schedule, exposure_halt_from_ns=halt, flatten_windows=flatten)
 
     evaluations: dict[tuple[int, ...], GovernedPaperEntrySafetyEvidence] = {}
 
@@ -1644,6 +1759,7 @@ def _replay(
                 regime=protection.regime,  # type: ignore[union-attr]
                 system_safety=protection.system_safety,  # type: ignore[union-attr]
                 sizing=protection.sizing,  # type: ignore[union-attr]
+                protective_ledger=protection.protective_ledger,  # type: ignore[union-attr]
             )
         return evaluations[refused]
 
@@ -1704,12 +1820,18 @@ def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the 
     prior_attempt = None if prior is None else prior.pending_protective_attempt_time_ns
     if pending_attempt is not None and pending_attempt != prior_attempt and not start <= pending_attempt < end:
         raise _fail("pending_protective_attempt_without_its_day")
+    # A flatten child the replay's end left in flight (outcome v4): made today, or the previous seal's own.
+    pending_child = outcome.pending_protective_child_time_ns
+    prior_child = None if prior is None else prior.pending_protective_child_time_ns
+    if pending_child is not None and pending_child != prior_child and not start <= pending_child < end:
+        raise _fail("pending_protective_child_without_its_day")
     excluded_open = () if prior_pending is None else (prior_pending,)
     prefix_open = historical_execution_governed_paper_prefix_digest(
         outcome,
         before_ns=start,
         excluded_decision_sequences=excluded_open,
         excluded_protective_attempt_times=() if prior_attempt is None else (prior_attempt,),
+        excluded_protective_child_times=() if prior_child is None else (prior_child,),
     )
     if prior is not None and prefix_open != prior.prefix_digest_close:
         raise _fail("sealed_prefix_rewritten")
@@ -1718,6 +1840,7 @@ def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the 
         before_ns=end,
         excluded_decision_sequences=() if pending_sequence is None else (pending_sequence,),
         excluded_protective_attempt_times=() if pending_attempt is None else (pending_attempt,),
+        excluded_protective_child_times=() if pending_child is None else (pending_child,),
     )
 
     # The deciding cycle of an excursion (DEC-1 lineage): the cycle that decided its opening intent, which is today's,
@@ -1766,6 +1889,7 @@ def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the 
     attempted = {item.attempt_id: item for item in outcome.protective_attempts}
     obligations = {item.obligation_id: item for item in outcome.protective_obligations}
     protections = {item.protection_id: item for item in outcome.excursion_protections}
+    children = {item.child_id: item for item in outcome.protective_children}
     states_at: list[tuple[int, PaperPositionState]] = []
     day_fills = [
         item
@@ -1774,7 +1898,30 @@ def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the 
     ]
     for fill in day_fills:
         attempt = attempted.get(fill.intent_id)
-        if attempt is None:
+        child = children.get(fill.intent_id)
+        if child is not None:
+            # A flatten child (schedule v6) is close-only and never bound to a cycle's direction authority (DEC-1): it is
+            # projected like a protective fill, through the reservation of the cycle that decided its excursion.
+            instant = fill.execution_time_ns
+            held = [
+                item
+                for item in outcome.excursion_protections
+                if item.opened_at_ns <= instant and (item.closed_at_ns is None or item.closed_at_ns >= instant)  # type: ignore[operator]
+            ]
+            if not held:
+                raise _fail("flatten_fill_without_its_excursion")
+            deciding = opening_cycle(held[-1])[2]
+            if transitions[fill.fill_digest].transition_kind not in (
+                HistoricalExecutionTransitionKind.REDUCE,
+                HistoricalExecutionTransitionKind.CLOSE,
+            ):
+                raise _Blocked("flatten_fill_not_close_only")
+            base, side, requested = (
+                f"{genesis.genesis_id}-c{child.attempt_time_ns}",
+                child.side,
+                child.requested_quantity,
+            )
+        elif attempt is None:
             intent = decided[fill.intent_id]
             deciding_day = (intent.decision_time_ns - genesis.genesis_start_ns) // _UTC_DAY_NS
             if deciding_day == cycle.day_index and reservation is not None:
@@ -1949,6 +2096,26 @@ def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the 
             if sizing is None:  # pragma: no cover - rule set v8 always binds its sizing evidence
                 raise _fail("sizing_evidence_missing")
             derived.update(sizing_evidence_digest=sizing.evidence_digest)
+        if protection.protective_ledger is not None:
+            # X1 for the ledger: re-derived from G over the sealed re-run, its prefix before E_k must be the previous
+            # seal's prefix at E_{k+1}; every ledger identity is a content identity, so no replay rewrites a sealed event.
+            ledger = replay.entry_safety.protective_ledger_evidence
+            if ledger is None:  # pragma: no cover - rule set v9 always binds its ledger evidence
+                raise _fail("protective_ledger_evidence_missing")
+            if ledger.governed_outcome_digest != outcome.outcome_digest:  # pragma: no cover - the fixed point's re-run
+                raise _fail("protective_ledger_not_of_the_sealed_re_run")
+            ledger_open = governed_paper_protective_ledger_prefix_digest(ledger, before_ns=start)
+            if prior is not None and ledger_open != prior.protective_ledger_prefix_digest_close:
+                raise _fail("protective_ledger_prefix_rewritten")
+            derived.update(
+                protective_ledger_evidence_digest=ledger.evidence_digest,
+                protective_ledger_prefix_digest_open=ledger_open,
+                protective_ledger_prefix_digest_close=governed_paper_protective_ledger_prefix_digest(
+                    ledger, before_ns=end
+                ),
+                pending_protective_child_time_ns=pending_child,
+                open_protective_ledger_obligation_count=ledger.open_obligation_count,
+            )
     return {
         **derived,
         "decision_run_digest": replay.run_digest,
@@ -1982,7 +2149,9 @@ def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the 
 def _assemble_seal(proof: _SealProof) -> GovernedPaperDaySeal:
     status = GovernedPaperDaySealStatus.BLOCKED if proof.blocked else GovernedPaperDaySealStatus.SEALED
     seed = GovernedPaperDaySeal(
-        schema_version=_SIZING_CHAIN_SEAL_SCHEMA_VERSION
+        schema_version=_PROTECTIVE_LEDGER_SEAL_SCHEMA_VERSION
+        if proof.protective_ledger
+        else _SIZING_CHAIN_SEAL_SCHEMA_VERSION
         if proof.sizing_chain
         else _SYSTEM_SAFETY_SEAL_SCHEMA_VERSION
         if proof.system_safety
@@ -2142,6 +2311,9 @@ def build_governed_paper_execution_evidence(inputs: GovernedPaperExecutionInputs
                         for item in current_records[len(earlier_records) :]
                     ):
                         raise _fail(f"ctr_capture_backfilled_before_the_day:{day}")
+                # The IR-2 integrity proofs need no lineage check here: each seal binds the digests of its own proofs,
+                # and the seal re-proof above already refuses a proof the previous seal bound being dropped, reordered
+                # or rewritten, and a new proof triggered before the day (``_integrity_proofs``).
         pending = item.seal_inputs.pending_cycle
         if pending is not None:
             index = pending.day_index
@@ -2190,7 +2362,9 @@ def build_governed_paper_execution_evidence(inputs: GovernedPaperExecutionInputs
             "terminal_outstanding_protective_obligation_count": terminal.outstanding_protective_obligation_count,
         }
     seed = GovernedPaperExecutionEvidence(
-        schema_version=_SIZING_CHAIN_EVIDENCE_SCHEMA_VERSION
+        schema_version=_PROTECTIVE_LEDGER_EVIDENCE_SCHEMA_VERSION
+        if terminal.schema_version == _PROTECTIVE_LEDGER_SEAL_SCHEMA_VERSION
+        else _SIZING_CHAIN_EVIDENCE_SCHEMA_VERSION
         if terminal.schema_version == _SIZING_CHAIN_SEAL_SCHEMA_VERSION
         else _SYSTEM_SAFETY_EVIDENCE_SCHEMA_VERSION
         if terminal.schema_version == _SYSTEM_SAFETY_SEAL_SCHEMA_VERSION

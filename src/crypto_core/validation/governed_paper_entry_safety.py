@@ -241,6 +241,18 @@ whose decision-time checks passed would still be refused at its fill unless both
 readings are facts of the inputs and of each decision's own snapshot, so the sequential admission keeps its unique fixed
 point, and every v1-v7 check outcome, payload and digest stays byte-identical. Every S1 entry is still refused.
 
+Protective obligation ledger v2 (``S1_PROTECTIVE_OBLIGATION_LEDGER_V2_ENGINE_CONSTRUCTION_V1``, rule set v9). Rule sets
+v1-v8 hold for every evaluation without it. When the day seal opts in, on top of rule set v8, the evaluation derives the
+v2 ledger of its horizon (``governed_paper_protective_ledger``) from the same engine re-run under schedule v6, its
+kill-switch ladder, the §1.29 readings of its entries and the IR-2 integrity proofs the context carries (none in
+production), and appends PROTECTIVE-LEDGER: it FAILs while any v2 obligation is open after the instant's child
+derivation (approved companion §6.1 and §6.6 step 5: entries are refused while any obligation is open) and from the
+earliest proven integrity trigger on (PRDV4 §1.19 KS-4 and §1.29 HALT: every engine disabled, so no new entry), and
+otherwise PASSes. A system-state reading never reads the ledger, so the readings are derived first and the ledger after
+them; the ledger at a decision reads only the re-run, the ladder and the readings up to that instant, so the sequential
+admission keeps its unique fixed point. Every v1-v8 check outcome, payload and digest stays byte-identical, and every S1
+entry is still refused.
+
 The evidence is digest-bound and paper-only. It proves no venue fact, edge, profitability, readiness or Stage-4
 completion. Exact arithmetic, no float, no ``decimal`` context, and no IO, clock, randomness, network or environment.
 """
@@ -299,6 +311,17 @@ from crypto_core.validation.governed_paper_kill_switch import (
     governed_paper_kill_switch_unmeasured,
     governed_paper_kill_switch_unproven_at,
 )
+from crypto_core.validation.governed_paper_protective_ledger import (
+    GOVERNED_PAPER_PROTECTIVE_LEDGER_CONTRACT_ID,
+    GOVERNED_PAPER_PROTECTIVE_LEDGER_RULE_DIGEST,
+    GOVERNED_PAPER_PROTECTIVE_LEDGER_RULE_ID,
+    GovernedPaperProtectiveLedgerContext,
+    GovernedPaperProtectiveLedgerError,
+    GovernedPaperProtectiveLedgerEvidence,
+    derive_governed_paper_protective_ledger,
+    governed_paper_protective_ledger_halted_at,
+    governed_paper_protective_ledger_open_at,
+)
 from crypto_core.validation.governed_paper_regime_state import (
     GOVERNED_PAPER_REGIME_CHECK_IDS,
     GOVERNED_PAPER_REGIME_CONTRACT_ID,
@@ -339,12 +362,14 @@ from crypto_core.validation.governed_paper_system_state import (
 from crypto_core.validation.historical_decision_run import HistoricalDecisionRun
 from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP,
-    HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION,
+    HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_ADMISSION_SCHEDULE_SCHEMA_VERSION,
+    HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS,
     HistoricalExecutionAdmissionSchedule,
     HistoricalExecutionDecisionExactValues,
     HistoricalExecutionDecisionPortfolioSnapshot,
     HistoricalExecutionEconomicsError,
     HistoricalExecutionEconomicsResult,
+    HistoricalExecutionGovernedPaperOutcome,
     HistoricalExecutionProtectiveWindow,
     historical_execution_visible_observations,
     simulate_historical_execution_governed_paper_decision_portfolio,
@@ -458,6 +483,7 @@ GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_ID = "governed-paper-entry-safe
 GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID = "governed-paper-entry-safety.v6"
 GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID = "governed-paper-entry-safety.v7"
 GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID = "governed-paper-entry-safety.v8"
+GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID = "governed-paper-entry-safety.v9"
 
 GOVERNED_PAPER_ENTRY_SAFETY_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
     ("paper_only", True),
@@ -637,6 +663,20 @@ class GovernedPaperEntrySafetySizing:
 
 
 @dataclass(frozen=True)
+class GovernedPaperEntrySafetyProtectiveLedger:
+    """The v2 ledger facts of one decision at ``t`` (rule set v9), read from its evaluation's derived ledger evidence.
+
+    ``open_obligation_ids`` are the obligations open after the child derivation of ``t``, ``halted`` whether a proven
+    integrity trigger halts every exposure increase at ``t``, and ``evidence_digest`` names the ledger evidence. Never
+    accepted from a caller: the evaluation derives them.
+    """
+
+    open_obligation_ids: tuple[str, ...]
+    halted: bool
+    evidence_digest: str
+
+
+@dataclass(frozen=True)
 class GovernedPaperEntrySafetyObservation:
     """The point-in-time facts one decision is evaluated on (derived by this module, never caller authority)."""
 
@@ -693,6 +733,8 @@ class GovernedPaperEntrySafetyObservation:
     system_safety: bool = False
     # Rule set v8 only: the sizing facts of the decision (absent without them, as in rule sets v1-v7).
     sizing: GovernedPaperEntrySafetySizing | None = None
+    # Rule set v9 only: the v2 ledger facts of the decision (absent without them, as in rule sets v1-v8).
+    protective_ledger: GovernedPaperEntrySafetyProtectiveLedger | None = None
 
 
 @dataclass(frozen=True)
@@ -787,8 +829,10 @@ class GovernedPaperEntrySafetyEvidence:
     regime_evidence: GovernedPaperRegimeEvidence | None = None
     # Rule set v7 on: the derived §1.29 system-state lower bounds of its entries (never in a v1-v6 payload).
     system_state_evidence: GovernedPaperSystemStateEvidence | None = None
-    # Rule set v8 only: the derived sizing evidence of its entries (never in a v1-v7 payload).
+    # Rule set v8 on: the derived sizing evidence of its entries (never in a v1-v7 payload).
     sizing_evidence: GovernedPaperSizingEvidence | None = None
+    # Rule set v9 only: the derived v2 protective obligation ledger of its horizon (never in a v1-v8 payload).
+    protective_ledger_evidence: GovernedPaperProtectiveLedgerEvidence | None = None
 
 
 # --- helpers -----------------------------------------------------------------------------------------------------------
@@ -829,6 +873,7 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
         GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID,
     ):
         if evidence.kill_switch_ladder is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_kill_switch_ladder")
@@ -837,6 +882,7 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
         GOVERNED_PAPER_ENTRY_SAFETY_REGIME_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID,
     ):
         if evidence.regime_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_regime_evidence")
@@ -844,14 +890,22 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
     if evidence.rule_set_id not in (
         GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID,
     ):
         if evidence.system_state_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_system_state_evidence")
         del payload["system_state_evidence"]
-    if evidence.rule_set_id != GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID:
+    if evidence.rule_set_id not in (
+        GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID,
+    ):
         if evidence.sizing_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_sizing_evidence")
         del payload["sizing_evidence"]
+    if evidence.rule_set_id != GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID:
+        if evidence.protective_ledger_evidence is not None:
+            raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_protective_ledger_evidence")
+        del payload["protective_ledger_evidence"]
     return payload
 
 
@@ -1851,6 +1905,41 @@ _SIZING_CHAIN_CHECKS: tuple[_Check, ...] = (
 )
 
 
+def _protective_ledger_check(observation: _Observation) -> _Outcome:
+    """PROTECTIVE-LEDGER (rule set v9): FAIL while a v2 obligation is open or a proven integrity trigger halts every
+    exposure increase at ``t``; otherwise PASS. Read from the decision's derived ledger facts."""
+
+    facts = observation.protective_ledger
+    if facts is None:  # pragma: no cover - the rule set v9 check is evaluated only on a decision with ledger facts
+        raise _fail("observation_malformed:protective_ledger_check_without_ledger_facts")
+    if facts.halted:
+        return _Outcome(
+            _Status.FAIL, "HALTED", "proven_integrity_trigger_halts_every_exposure_increase", (facts.evidence_digest,)
+        )
+    if facts.open_obligation_ids:
+        return _Outcome(
+            _Status.FAIL,
+            str(len(facts.open_obligation_ids)),
+            "v2_protective_obligation_open_entries_refused",
+            (facts.evidence_digest, *facts.open_obligation_ids),
+        )
+    return _Outcome(_Status.PASS, "0", "no_v2_obligation_open_and_no_integrity_halt", (facts.evidence_digest,))
+
+
+# Rule set v9 only: rule set v8's tail with PROTECTIVE-LEDGER appended, only on a decision that carries ledger facts.
+_PROTECTIVE_LEDGER_CHECKS: tuple[_Check, ...] = (
+    *_SIZING_CHAIN_CHECKS,
+    _Check(
+        "PROTECTIVE-LEDGER",
+        _R,
+        "PRDV4 §1.19 D10 D11, §1.29 D13 D14 PROTECTIVE_OBLIGATION_LEDGER_V2 (approved companion §6.1 and §6.6 step 5; "
+        "§1.19 KS-4 and §1.29 HALT engine disable)",
+        "no_v2_obligation_open_after_the_instants_child_derivation_and_no_proven_integrity_halt",
+        _protective_ledger_check,
+    ),
+)
+
+
 def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
     *,
     protective: bool = False,
@@ -1860,6 +1949,7 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
     regime: bool = False,
     system_safety: bool = False,
     sizing_chain: bool = False,
+    protective_ledger: bool = False,
 ) -> dict[str, object]:
     """The rule set this module evaluates: every check, in order, with its PRDV4 clause and published threshold.
 
@@ -1876,9 +1966,13 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
     ``regime=True``) is rule set v7: rule set v6 with SYSTEM-STATE read on the §1.29 proven lower bound and HZ-STOP,
     HZ-LIMITS and SCALE-1 appended (``S1_INTEGRATED_RISK_AND_SYSTEM_SAFETY_CLOSURE_V1``). ``sizing_chain=True`` (only
     with ``system_safety=True``) is rule set v8: rule set v7 with ENVELOPE-FIT inserted before SCALE-1, SCALE-1 read under
-    A9' and CTR-DEPTH appended (``S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1``).
+    A9' and CTR-DEPTH appended (``S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1``). ``protective_ledger=True`` (only with
+    ``sizing_chain=True``) is rule set v9: rule set v8 with PROTECTIVE-LEDGER appended
+    (``S1_PROTECTIVE_OBLIGATION_LEDGER_V2_ENGINE_CONSTRUCTION_V1``).
     """
 
+    if protective_ledger and not sizing_chain:
+        raise _fail("protective_ledger_rule_set_needs_the_sizing_chain_rule_set")
     if sizing_chain and not system_safety:
         raise _fail("sizing_chain_rule_set_needs_the_system_safety_rule_set")
     if portfolio and not protective:
@@ -2128,6 +2222,32 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
                 "fixed_point_is_unchanged",
             },
         )
+    if protective_ledger:
+        ledger_checks = [
+            {"check_id": item.check_id, "family": item.family.value, "clause": item.clause, "threshold": item.threshold}
+            for item in (*_CHECKS, *_REGIME_CHECKS, *_PROTECTIVE_LEDGER_CHECKS)
+        ]
+        rule_set.update(
+            rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID,
+            contract_id=GOVERNED_PAPER_PROTECTIVE_LEDGER_CONTRACT_ID,
+            checks=ledger_checks,
+            protective_ledger_rule={
+                "approved_doctrine": "PRDV4 §1.19 D10 D11, §1.29 D13 D14; s1_approved_doctrine_adoption_v1 §6.1-§6.7 "
+                "read with §0.4",
+                "approved_items": ["4.1", "4.2", "FCD-11"],
+                "ledger_rule_id": GOVERNED_PAPER_PROTECTIVE_LEDGER_RULE_ID,
+                "ledger_rule_digest": GOVERNED_PAPER_PROTECTIVE_LEDGER_RULE_DIGEST,
+                "source": "the_ledger_derived_from_the_one_engine_re_run_under_schedule_v6_its_kill_switch_ladder_the_"
+                "entries_system_state_readings_and_the_admitted_ir_2_integrity_proofs_never_accepted",
+                "PROTECTIVE-LEDGER": "fail_while_a_v2_obligation_is_open_after_the_instants_child_derivation_or_from_"
+                "the_earliest_proven_integrity_trigger_otherwise_pass",
+                "exposure_halt_fill": "the_engine_refuses_every_exposure_increasing_intent_and_fill_at_or_after_the_"
+                "earliest_proven_integrity_trigger",
+                "pending_never_read": ["HC-11c", "HC-11f", "HD-04", "HC-05d"],
+                "admission": "the_ledger_at_a_decision_reads_the_re_run_ladder_and_readings_up_to_its_instant_the_"
+                "sequential_fixed_point_is_unchanged",
+            },
+        )
     return rule_set
 
 
@@ -2147,6 +2267,7 @@ def governed_paper_entry_safety_rule_set_digest(  # noqa: PLR0913
     regime: bool = False,
     system_safety: bool = False,
     sizing_chain: bool = False,
+    protective_ledger: bool = False,
 ) -> str:
     return edge_sha256_text(
         edge_canonical_json(
@@ -2158,6 +2279,7 @@ def governed_paper_entry_safety_rule_set_digest(  # noqa: PLR0913
                 regime=regime,
                 system_safety=system_safety,
                 sizing_chain=sizing_chain,
+                protective_ledger=protective_ledger,
             )
         )
     )
@@ -2213,6 +2335,26 @@ GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_DIGEST = governed_paper_entry_
     system_safety=True,
     sizing_chain=True,
 )
+GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET = governed_paper_entry_safety_rule_set(
+    protective=True,
+    portfolio=True,
+    market_data=True,
+    kill_switch=True,
+    regime=True,
+    system_safety=True,
+    sizing_chain=True,
+    protective_ledger=True,
+)
+GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(
+    protective=True,
+    portfolio=True,
+    market_data=True,
+    kill_switch=True,
+    regime=True,
+    system_safety=True,
+    sizing_chain=True,
+    protective_ledger=True,
+)
 
 
 # --- one decision ------------------------------------------------------------------------------------------------------
@@ -2267,7 +2409,25 @@ def _canonical_observation(observation: object) -> GovernedPaperEntrySafetyObser
         if "T11" not in unproven and "T2" in unproven:
             raise _fail("observation_malformed:kill_switch_drawdown_proofs_inconsistent")
     _canonical_sizing(observation)
+    _canonical_protective_ledger(observation)
     return observation
+
+
+def _canonical_protective_ledger(observation: GovernedPaperEntrySafetyObservation) -> None:
+    """The rule set v9 facts are exact types and exist only on top of rule set v8."""
+
+    facts = observation.protective_ledger
+    if facts is None:
+        return
+    if type(facts) is not GovernedPaperEntrySafetyProtectiveLedger:
+        raise _fail("observation_malformed:protective_ledger")
+    if observation.sizing is None:
+        raise _fail("observation_malformed:protective_ledger_without_the_sizing_facts")
+    if not edge_is_hex64(facts.evidence_digest) or type(facts.halted) is not bool:
+        raise _fail("observation_malformed:protective_ledger_facts")
+    ids = facts.open_obligation_ids
+    if type(ids) is not tuple or any(not edge_is_hex64(item) for item in ids) or len(set(ids)) != len(ids):
+        raise _fail("observation_malformed:protective_ledger_open_obligations")
 
 
 def _canonical_sizing(observation: GovernedPaperEntrySafetyObservation) -> None:
@@ -2623,7 +2783,9 @@ def evaluate_governed_paper_entry_safety(
     checks: list[GovernedPaperEntrySafetyCheck] = []
     first: GovernedPaperEntrySafetyCheck | None = None
     tail: tuple[_Check, ...] = ()
-    if observation.sizing is not None:
+    if observation.protective_ledger is not None:
+        tail = _PROTECTIVE_LEDGER_CHECKS
+    elif observation.sizing is not None:
         tail = _SIZING_CHAIN_CHECKS
     elif observation.system_safety:
         tail = _SYSTEM_SAFETY_CHECKS
@@ -3190,6 +3352,8 @@ class _GovernedRun:
     snapshots: dict[int, HistoricalExecutionDecisionPortfolioSnapshot]
     ladder: GovernedPaperKillSwitchLadder | None
     exact: dict[int, HistoricalExecutionDecisionExactValues]
+    # Rule set v5 on: the governed outcome of that same re-run (the v2 ledger of rule set v9 reads it).
+    outcome: HistoricalExecutionGovernedPaperOutcome | None = None
 
 
 def _governed_run(
@@ -3226,6 +3390,7 @@ def _governed_run(
         raise _fail("portfolio_economics_not_of_this_evaluation")
     derived_ladder: GovernedPaperKillSwitchLadder | None = None
     exact: dict[int, HistoricalExecutionDecisionExactValues] = {}
+    outcome: HistoricalExecutionGovernedPaperOutcome | None = None
     try:  # derived, never accepted: the engine re-proves the economics and re-runs it under the schedule
         if ladder is None:
             derived = simulate_historical_execution_governed_paper_decision_portfolio(
@@ -3240,13 +3405,13 @@ def _governed_run(
                 schedule=portfolio.schedule,
                 single_instrument_portfolio=single,
             )
-            derived, derived_ladder = derivation.portfolio, derivation.ladder
+            derived, derived_ladder, outcome = derivation.portfolio, derivation.ladder, derivation.outcome
             exact = {item.decision_sequence: item for item in derivation.exact_values}
     except HistoricalExecutionEconomicsError as exc:
         raise _fail("portfolio_not_derivable") from exc
     except GovernedPaperKillSwitchError as exc:
         raise _fail("kill_switch_ladder_not_derivable") from exc
-    return _GovernedRun({item.decision_sequence: item for item in derived.snapshots}, derived_ladder, exact)
+    return _GovernedRun({item.decision_sequence: item for item in derived.snapshots}, derived_ladder, exact, outcome)
 
 
 def governed_paper_entry_safety_entry_sequences(run: HistoricalDecisionRun) -> tuple[int, ...]:
@@ -3291,6 +3456,7 @@ def build_governed_paper_entry_safety_evidence(
     regime: GovernedPaperEntrySafetyRegimeContext | None = None,
     system_safety: bool = False,
     sizing: GovernedPaperSizingContext | None = None,
+    protective_ledger: GovernedPaperProtectiveLedgerContext | None = None,
 ) -> GovernedPaperEntrySafetyEvidence:
     """Evaluate every entry decision of ``run`` over the archive ``dataset`` it was built from (see the module docstring).
 
@@ -3309,7 +3475,11 @@ def build_governed_paper_entry_safety_evidence(
     ``sizing`` (rule set v8, only with ``system_safety``) is the verified sizing context the day seal supplies: the
     schedule under evaluation must be the schedule v5 carrying exactly the derived fill-time bounds, the evaluation derives
     every entry's ENVELOPE_FIT and CTR depth-cap readings from the same engine re-run, reads SCALE-1 under A9' and binds
-    the sizing evidence. A malformed or foreign input raises ``GovernedPaperEntrySafetyError``. Pure.
+    the sizing evidence. ``protective_ledger`` (rule set v9, only with ``sizing``) is the verified v2 ledger context the
+    day seal supplies (its IR-2 integrity proofs): the schedule under evaluation must be the schedule v6 carrying exactly
+    the halt and flatten windows the context implies, the evaluation derives the v2 ledger from the same engine re-run,
+    its ladder and the entries' system-state readings, appends PROTECTIVE-LEDGER and binds the ledger evidence. A
+    malformed or foreign input raises ``GovernedPaperEntrySafetyError``. Pure.
     """
 
     if type(authority) is not GovernedPaperGenesisAuthority:
@@ -3336,6 +3506,10 @@ def build_governed_paper_entry_safety_evidence(
         raise _fail("sizing_context_malformed")
     if sizing is not None and not system_safety:
         raise _fail("sizing_without_the_system_safety_rule_set")
+    if protective_ledger is not None and type(protective_ledger) is not GovernedPaperProtectiveLedgerContext:
+        raise _fail("protective_ledger_context_malformed")
+    if protective_ledger is not None and sizing is None:
+        raise _fail("protective_ledger_without_the_sizing_chain_rule_set")
     genesis = authority.genesis
     protection = _canonical_protection(protection, instrument=genesis.instrument)
     if run.status is not EdgeEvidenceStatus.READY or run.gate_verdict is not EdgeGateVerdict.PASS:
@@ -3362,9 +3536,13 @@ def build_governed_paper_entry_safety_evidence(
     if market_data and snapshots is None:
         raise _fail("market_data_without_a_governed_portfolio")
     if governed is not None and (
-        portfolio.schedule.schema_version == HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION  # type: ignore[union-attr]
+        portfolio.schedule.schema_version in HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS  # type: ignore[union-attr]
     ) is not (sizing is not None):
         raise _fail("sizing_schedule_and_rule_set_mismatch")
+    if governed is not None and (
+        portfolio.schedule.schema_version == HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_ADMISSION_SCHEDULE_SCHEMA_VERSION  # type: ignore[union-attr]
+    ) is not (protective_ledger is not None):
+        raise _fail("protective_ledger_schedule_and_rule_set_mismatch")
     observations = historical_execution_visible_observations(dataset, policy=policy, instrument=genesis.instrument)
     # the archive is verified just above and the kline feed candidate in ``_canonical_protection``
     market = (
@@ -3416,8 +3594,7 @@ def build_governed_paper_entry_safety_evidence(
         except (GovernedPaperSizingError, GovernedPaperCtrError, GovernedPaperAllocationError) as exc:
             raise _fail("sizing_evidence_not_derivable") from exc
         sizing_readings = {item.decision_sequence: item for item in sizing_evidence.readings}
-    decisions: list[GovernedPaperEntrySafetyDecision] = []
-    system_states: list[GovernedPaperSystemStateReading] = []
+    pending: list[GovernedPaperEntrySafetyObservation] = []
     for decision in run.decisions:
         if decision.resulting_direction not in _ENTRY_DIRECTIONS:
             continue
@@ -3463,13 +3640,46 @@ def build_governed_paper_entry_safety_evidence(
                 sizing_readings[decision.decision_sequence], sizing_evidence.evidence_digest
             ),
         )
-        decisions.append(evaluate_governed_paper_entry_safety(observation))
-        if system_safety:  # the same derivation the decision's SYSTEM-STATE and SCALE-1 read
-            system_states.append(governed_paper_entry_safety_system_state_reading(observation))
+        pending.append(observation)
+    # The same derivation the decisions' SYSTEM-STATE and SCALE-1 read; it never reads the ledger, so it comes first.
+    system_states = (
+        [governed_paper_entry_safety_system_state_reading(item) for item in pending] if system_safety else []
+    )
+    ledger_evidence: GovernedPaperProtectiveLedgerEvidence | None = None
+    if protective_ledger is not None:
+        try:  # derived, never accepted: the re-run, ladder, readings and IR-2 proofs are re-proven by the derivation
+            ledger_evidence = derive_governed_paper_protective_ledger(
+                genesis_digest=genesis.genesis_digest,
+                instrument=genesis.instrument,
+                start_ns=genesis.genesis_start_ns,
+                outcome=governed.outcome,  # type: ignore[union-attr,arg-type]
+                ladder=ladder,  # type: ignore[arg-type]
+                system_states=system_states,
+                decision_instants=tuple(item.decision_time_ns for item in run.decisions),
+                context=protective_ledger,
+                book_source_digest=dataset.source_manifest_digest,
+                depth_cap_fraction=policy.visible_depth_cap_fraction,
+            )
+        except GovernedPaperProtectiveLedgerError as exc:
+            raise _fail("protective_ledger_not_derivable") from exc
+        pending = [
+            replace(
+                item,
+                protective_ledger=GovernedPaperEntrySafetyProtectiveLedger(
+                    governed_paper_protective_ledger_open_at(ledger_evidence, item.decision_time_ns),
+                    governed_paper_protective_ledger_halted_at(ledger_evidence, item.decision_time_ns),
+                    ledger_evidence.evidence_digest,
+                ),
+            )
+            for item in pending
+        ]
+    decisions = [evaluate_governed_paper_entry_safety(item) for item in pending]
     protective, measured = protection is not None, snapshots is not None
     seed = GovernedPaperEntrySafetyEvidence(
         schema_version=_SCHEMA_VERSION,
-        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID
+        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID
+        if protective_ledger is not None
+        else GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID
         if sizing is not None
         else GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID
         if system_safety
@@ -3492,6 +3702,7 @@ def build_governed_paper_entry_safety_evidence(
             regime=regime is not None,
             system_safety=system_safety,
             sizing_chain=sizing is not None,
+            protective_ledger=protective_ledger is not None,
         ),
         genesis_id=genesis.genesis_id,
         genesis_digest=genesis.genesis_digest,
@@ -3515,6 +3726,7 @@ def build_governed_paper_entry_safety_evidence(
         if system_safety
         else None,
         sizing_evidence=sizing_evidence,
+        protective_ledger_evidence=ledger_evidence,
     )
     return replace(seed, evidence_digest=edge_payload_digest(_evidence_payload(seed), _DIGEST_FIELD))
 

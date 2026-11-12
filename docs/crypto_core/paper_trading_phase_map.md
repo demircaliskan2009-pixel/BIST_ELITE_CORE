@@ -526,3 +526,37 @@ Approved sizing chain (`S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1`, recorded 2026
   proven. Every S1 entry is still refused, first by NT-D01 on the accepted worlds, and an entry that passed every
   decision-time check would still be refused at its fill. REAL_PAPER_EXECUTION stays BLOCKED. Every value,
   qualification and capture in the tests is synthetic.
+
+Protective obligation ledger v2 (`S1_PROTECTIVE_OBLIGATION_LEDGER_V2_ENGINE_CONSTRUCTION_V1`, recorded 2026-11-10):
+
+- it constructs the approved PR-B doctrine (approved companion `s1_approved_doctrine_adoption_v1.md` §0.4 and
+  §6.1-§6.7): `governed_paper_protective_ledger.py` derives, and never accepts, one digest-chained ledger per open
+  position from one engine re-run, the proven kill-switch ladder (KS3_CLOSE), the §1.29 system-state lower bounds
+  (SS3_CLOSE) and IR-2 integrity trigger proofs (KS4_FLATTEN, SS4_FLATTEN). Each position's schedule is anchored once by
+  its first obligation and never re-anchored or resized; its events are append-only and each identity is a content
+  identity, so the ledger's prefix before `E_k` is replay-stable. Discharge needs a verified zero position;
+- the pending methods stay undefined and unread: TARGET(t) (HC-11c), the impact measure (HC-11f), participation (HD-04)
+  and the operator raise channel (HC-05d). A nonurgent KS3 or SS3 obligation therefore opens, keeps its deadline (the
+  trigger + 30 minutes, the INTRADAY trigger + 15 minutes), records CAP_UNPROVEN, refuses every entry and records
+  `UNFULFILLED_PROTECTIVE_OBLIGATION_V1` with its first failing link, but no nonurgent child is ever derived;
+- an integrity trigger counts only when an independent verifier re-derives it from raw sealed inputs against an anchor
+  that the active approval table admits and that was approved before the trigger. An executor's self-report never
+  proves one, and the production table admits no anchor. A proven trigger halts every exposure increase from its
+  instant. While every proof declares a complete threat scope that excludes the archive's own book source (IR-4), it
+  also opens a flatten window whose demand is the whole remaining position (IR-5);
+- the one engine's schedule v6 (schedule v5 with the exposure halt and the flatten windows) refuses every
+  exposure-increasing intent and fill at or after the halt. Inside a flatten window with a DEC-1 protective window in
+  force, it sends at most one engine-native close-only child through the one fill model. A v1 STOP or MAX_HOLD obligation
+  keeps precedence, a governed refusal resumes at the next window and a book rejection retries at least 30 s later. A
+  child without a book stays in flight across the replay's end (outcome v4), and no child ever reverses a position;
+- entry gate rule set v9 (on top of v8) appends PROTECTIVE-LEDGER, which FAILs while a v2 obligation is open or a halt is
+  proven and PASSes otherwise. Day seal v10 and lineage evidence v10 bind the ledger evidence, its prefix before `E_k`
+  and `E_k+1` (X1 for the ledger), the integrity proof digests (append-only, each known inside the day that adds it), the
+  pending child and the count of open obligations. Every v1-v9 artifact, schedules v2-v5, outcomes v2-v3 and rule sets
+  v1-v8 stay byte-identical;
+- admission effect: none. The production integrity table admits no anchor, so production has no halt and no flatten
+  window. World G's integrated lineage never holds a position, so no KS3 or SS3 obligation opens there. Every S1 entry is
+  still refused, first by NT-D01 on the accepted worlds. The end-to-end flatten of an open position runs only under
+  test-only permissive entry and sizing tables. Of the KS-4 action (cancel all open orders, disable all engines) only the
+  halt is represented: it refuses every exposure-increasing intent and fill, an entry in flight included, and no other
+  order is cancelled. REAL_PAPER_EXECUTION stays BLOCKED. Every value, anchor and proof in the tests is synthetic.
