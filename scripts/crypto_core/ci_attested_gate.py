@@ -48,6 +48,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import Counter
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -551,6 +552,7 @@ def check_coverage(coverage_files: dict[int, Path], ctx: Context, fail_under: fl
     """Rebuild and verify the exact line union of the verified shards, then apply the floor to that union."""
     prefix = os.path.normcase(os.path.join(str(ctx.root), *plan.SOURCE_DIR.split("/"))) + os.sep
     lines: dict[str, set[int]] = {}
+    reported: tuple[float, int] | str = "the coverage union was not reported"
     with tempfile.TemporaryDirectory(prefix="crypto-core-coverage-union-", ignore_cleanup_errors=True) as work:
         union_file = os.path.join(work, "union.coverage")
         union = CoverageData(basename=union_file)
@@ -611,7 +613,9 @@ def run(evidence_dir: Path, shards: int, fail_under: float, environ: Mapping[str
     if not evidence_problems:
         suite = check_suite({index: report for index, (report, _) in evidence.items()}, shards)
         sizes = " / ".join(str(len(evidence[index][0]["selected"])) for index in sorted(evidence))
-        _section(out, "suite", suite, f"{len(evidence[1][0]['collection'])} tests collected identically; ran {sizes}")
+        tally = Counter(outcome for report, _ in evidence.values() for outcome in report["outcomes"].values())
+        summary = f"{len(evidence[1][0]['collection'])} tests collected identically; ran {sizes}; {dict(sorted(tally.items()))}"
+        _section(out, "suite", suite, summary)
         violations += suite
     if violations:
         return _verdict(out, [*violations, "coverage was not evaluated: the shard evidence is not fully verified"])

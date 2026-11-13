@@ -419,6 +419,7 @@ def test_a_cancelled_or_killed_gate_never_reports_a_pass(world, api, tmp_path):
         encoding="utf-8",
         errors="replace",
     )
+    stdout = ""
     try:
         deadline = time.monotonic() + 60
         while not api.requests and time.monotonic() < deadline:
@@ -565,9 +566,9 @@ def test_the_gate_refuses_modified_tracked_files_in_its_own_checkout(world, api,
     tracked.write_bytes(original + b"\nEXTRA = 1\n")
     try:
         code, out = run_gate(lay_out(tmp_path, current(world, 2)), 2)
+        assert_fail(code, out, "tracked files of the gate's checkout differ")
     finally:
         tracked.write_bytes(original)
-    assert_fail(code, out, "tracked files of the gate's checkout differ")
 
 
 # --- evidence provenance and the suite -----------------------------------------------------------------------------
