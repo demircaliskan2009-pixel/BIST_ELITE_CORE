@@ -205,7 +205,10 @@ def check_partition(shards: Sequence[Shard], shard_count: int) -> list[str]:
 
     Identical means the same node ids with the files in the same order. The order of the ids INSIDE one file is not
     compared: a test parametrized over a set (``list(frozenset(...))``) is ordered by the process's string hash seed,
-    which differs between processes exactly as it differs between two serial runs.
+    which differs between processes exactly as it differs between two serial runs. No seed is pinned, so every run
+    keeps the serial gate's per-run hash randomization. Comparing ids as a set loses no test: a file is never split,
+    so each parametrize list is collected and run whole inside one process, and no permutation of ids over values
+    can drop or repeat a parameter value.
     """
     reference = shards[0].report["collected"]
     reference_ids, reference_files = set(reference), file_order(reference)
