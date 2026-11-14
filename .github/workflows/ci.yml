@@ -13,10 +13,10 @@ permissions:
   contents: read
 
 jobs:
-  tests:
-    name: tests
+  lint:
+    name: lint
     runs-on: ubuntu-latest
-    timeout-minutes: 120
+    timeout-minutes: 30
     env:
       PYTHONPATH: ${{ github.workspace }}/src
       PYTHONWARNINGS: error
@@ -54,10 +54,118 @@ jobs:
       - name: Ruff format check
         run: ruff format --check src/crypto_core tests/crypto_core scripts/crypto_core
 
-      - name: Run pytest with coverage
+  # The canonical suite in whole-file shards. Every shard collects all of tests/crypto_core and runs only its
+  # share of scripts/crypto_core/ci_shard_plan.py; its evidence is uploaded under a name bound to this run and
+  # this run attempt. The job name is the producer identity the required `tests` gate attests through the API.
+  test-shard:
+    name: pytest shard ${{ matrix.shard }} of 3
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3]
+    env:
+      PYTHONPATH: ${{ github.workspace }}/src
+      PYTHONWARNINGS: error
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+
+      - name: Install dependencies
         run: |
           set -euo pipefail
-          python -m pytest -q -W error --cov=src/crypto_core --cov-report=term --cov-fail-under=70 tests/crypto_core
+          python -m pip install --upgrade pip
+          if [ -f requirements-dev.txt ]; then
+            python -m pip install -r requirements-dev.txt
+          elif [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt pytest
+          else
+            python -m pip install pytest
+          fi
+          python -m pip install pytest-cov ruff
+
+      - name: Run pytest shard with coverage
+        run: |
+          set -euo pipefail
+          python -m pytest -p scripts.crypto_core.ci_shard_evidence --ci-shard=${{ matrix.shard }}/3 --ci-evidence-dir=ci-shard-evidence -q -W error --cov=src/crypto_core --cov-report= tests/crypto_core
+
+      - name: Upload shard evidence of this run attempt
+        uses: actions/upload-artifact@v4
+        with:
+          name: crypto-core-pytest-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}-shard-${{ matrix.shard }}-of-3
+          path: ci-shard-evidence/
+          if-no-files-found: error
+          retention-days: 30
+
+  # The required check. `always()` keeps it from ever being skipped (a skipped job would report success), so it
+  # decides even when a prerequisite failed or was cancelled. It passes only on evidence of this exact run attempt
+  # whose every producer job the GitHub Actions API attests as completed/success; see ci_attested_gate.py.
+  tests:
+    name: tests
+    needs: [lint, test-shard]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      actions: read
+      contents: read
+    env:
+      PYTHONPATH: ${{ github.workspace }}/src
+      PYTHONWARNINGS: error
+      PIP_DISABLE_PIP_VERSION_CHECK: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+            pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip
+          if [ -f requirements-dev.txt ]; then
+            python -m pip install -r requirements-dev.txt
+          elif [ -f requirements.txt ]; then
+            python -m pip install -r requirements.txt pytest
+          else
+            python -m pip install pytest
+          fi
+          python -m pip install pytest-cov ruff
+
+      - name: Download shard evidence of this run attempt
+        uses: actions/download-artifact@v4
+        with:
+          pattern: crypto-core-pytest-run-${{ github.run_id }}-attempt-${{ github.run_attempt }}-shard-*
+          path: ${{ runner.temp }}/ci-shard-evidence
+
+      - name: Verify attested shard evidence and the coverage floor
+        env:
+          CRYPTO_CORE_CI_NEEDS: ${{ toJSON(needs) }}
+          CRYPTO_CORE_CI_RUN_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          python -m scripts.crypto_core.ci_attested_gate --evidence-dir "${{ runner.temp }}/ci-shard-evidence" --shards 3 --fail-under 70
 
   slow-tests:
     name: slow-tests
@@ -101,9 +209,9 @@ jobs:
           set -euo pipefail
           python -m pytest -q --runslow --cov=src/crypto_core --cov-report=term --cov-fail-under=70
 
+  # Static analysis needs no pytest output, so it runs in parallel with the shards.
   codeql:
     name: codeql
-    needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
