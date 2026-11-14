@@ -21,10 +21,19 @@ It exits 0 only if every check below passes for THIS workflow run and THIS run a
 4. Suite: all shards collected the same duplicate-free tests in the same file order, each ran exactly its whole-file
    share of ``ci_shard_plan.assign_files``, the shares are disjoint and cover the collection, and every selected test
    passed, skipped, xfailed or xpassed.
-5. Coverage, evaluated only after 1-4 pass: every coverage file is readable statement data for ``src/crypto_core``
-   of this checkout, their exact line union is rebuilt and re-verified, and the union must reach ``--fail-under`` by
-   coverage's own fail-under rule, the rule the serial gate applied through pytest-cov.  Shard percentages are never
-   averaged.
+5. Source universe, derived from the gate's own checkout and never from any artifact: the reportable Python files of
+   ``src/crypto_core`` in the committed tree, by coverage.py's own discovery rule (``find_python_files``: a plainly
+   named ``.py``/``.pyw`` file in a chain of packages below the source directory).  It must equal what that rule
+   finds in this checkout, every file must be a regular file at its own path, and no entry under the source
+   directory of the committed tree may be a symbolic link or a submodule.
+6. Coverage, evaluated only after 1-5 pass: coverage records every file it discovers, executed or not, so every
+   shard's coverage file must be readable statement data naming exactly the source universe at the paths coverage
+   gives them in this checkout -- a missing file, and any foreign, traversing, aliased or otherwise noncanonical
+   path, fails -- with every recorded line inside its committed file.  Their exact line union is rebuilt and
+   re-verified, coverage's own report over exactly the source universe gives the total (an unanalysable file fails
+   instead of leaving the denominator), its per-file analysis must account for the same statements, and the union
+   must reach ``--fail-under`` by coverage's own fail-under rule, the rule the serial gate applied through
+   pytest-cov.  Shard percentages are never averaged.
 
 Any violation, error or interruption exits nonzero.  ``CRYPTO_CORE_TESTS_GATE=PASS`` is printed only as the last
 line of a run in which every check passed.
@@ -36,6 +45,7 @@ import argparse
 import contextlib
 import hashlib
 import json
+import math
 import os
 import platform
 import re
@@ -45,6 +55,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tokenize
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -56,6 +67,7 @@ from typing import TextIO
 
 from coverage import Coverage, CoverageData
 from coverage.exceptions import CoverageException
+from coverage.files import find_python_files
 from coverage.results import should_fail_under
 
 from scripts.crypto_core import ci_shard_plan as plan
@@ -96,6 +108,9 @@ _REPORT_FIELDS = frozenset(
     }
 )
 _JOB_FIELDS = (("id", int), ("name", str), ("run_id", int), ("run_attempt", int), ("status", str), ("head_sha", str))
+# The file-name rule of coverage.py's ``find_python_files``, verbatim: a file it measures although nothing ran it.
+_SOURCE_FILE_NAME = re.compile(r"^[^.#~!$@%^&*()+=,]+\.pyw?$")
+_REGULAR_FILE_MODES = ("100644", "100755")
 
 
 class GateError(Exception):
@@ -116,6 +131,15 @@ class Context:
     tree: str
     needs: str
     token: str = field(repr=False)
+
+
+@dataclass(frozen=True)
+class SourceUniverse:
+    """The source files whose statements form the coverage denominator, from the gate's own checkout."""
+
+    files: tuple[str, ...]  # repository-relative POSIX paths, sorted
+    paths: Mapping[str, str]  # the exact path coverage records for each file in this checkout -> its relative path
+    line_counts: Mapping[str, int]  # relative path -> physical lines of the committed file
 
 
 def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -506,72 +530,202 @@ def check_suite(reports: dict[int, dict], shards: int) -> list[str]:
     return violations
 
 
-def _merge_shard(index: int, path: Path, union: CoverageData, lines: dict[str, set[int]], prefix: str) -> str | None:
+def _committed_files(ctx: Context) -> tuple[set[str], list[str]]:
+    """Regular files under the source directory of the committed tree, and its entries that are anything else."""
+    listing = _git(ctx.root, "ls-tree", "-r", "-z", "--full-tree", ctx.tree, "--", plan.SOURCE_DIR)
+    files: set[str] = set()
+    problems: list[str] = []
+    for record in listing.split("\0"):
+        meta, _, path = record.partition("\t")
+        if not path.startswith(plan.SOURCE_DIR + "/"):
+            continue
+        mode = meta.split(" ", 1)[0]
+        if mode in _REGULAR_FILE_MODES:
+            files.add(path)
+        else:  # 120000 is a symbolic link, 160000 a submodule: neither has one unambiguous source identity
+            problems.append(f"{path} in the committed tree has mode {mode}, not a regular file")
+    return files, problems
+
+
+def _reportable(path: str, packages: set[str]) -> bool:
+    """coverage.py's ``find_python_files`` rule: a plainly named file in a chain of packages below the source dir."""
+    directory, _, name = path.rpartition("/")
+    if _SOURCE_FILE_NAME.match(name) is None:
+        return False
+    while directory != plan.SOURCE_DIR:
+        if directory not in packages:
+            return False
+        directory = directory.rpartition("/")[0]
+    return True
+
+
+def _line_count(path: Path) -> int:
+    """Physical lines of a Python source file, numbered as the interpreter numbers them."""
+    with tokenize.open(path) as handle:  # the source encoding, and universal newlines like the tokenizer
+        text = handle.read()
+    return text.count("\n") + (1 if text and not text.endswith("\n") else 0)
+
+
+def source_universe(ctx: Context) -> tuple[SourceUniverse | None, list[str]]:
+    """The reportable Python files of ``src/crypto_core`` in the tested commit, from the gate's own checkout alone.
+
+    Besides every file a test executes, coverage measures every file its own discovery finds under the source
+    directory, executed or not, so each shard's coverage must name exactly these files.  They are the committed
+    tree's files under coverage's discovery rule, and coverage's discovery in this checkout must find exactly them.
+    """
+    try:
+        committed, problems = _committed_files(ctx)
+    except GateError as error:
+        return None, [str(error)]
+    packages = {path.rpartition("/")[0] for path in committed if path.rpartition("/")[2] == "__init__.py"}
+    files = sorted(path for path in committed if _reportable(path, packages))
+    if not files:
+        problems.append(f"the committed tree {ctx.tree} holds no reportable Python file under {plan.SOURCE_DIR}")
+    source_root = ctx.root.joinpath(*plan.SOURCE_DIR.split("/"))
+    discovered = {Path(name).relative_to(ctx.root).as_posix() for name in find_python_files(str(source_root), False)}
+    extra = sorted(discovered - set(files))
+    if extra:
+        problems.append(
+            f"coverage's own discovery in this checkout finds {len(extra)} source files that the committed tree "
+            f"does not hold, e.g. {extra[0]}"
+        )
+    absent = sorted(set(files) - discovered)
+    if absent:
+        problems.append(
+            f"coverage's own discovery in this checkout misses {len(absent)} committed source files, e.g. {absent[0]}"
+        )
+    paths: dict[str, str] = {}
+    line_counts: dict[str, int] = {}
+    for relative in files:
+        path = ctx.root.joinpath(*relative.split("/"))
+        # The checkout's file is the committed file only at its own path: no link, junction or alias in between.
+        resolved = os.path.realpath(path)
+        if resolved != str(path) or not os.path.isfile(resolved):
+            problems.append(f"{relative} is not a regular file at its own path in this checkout ({resolved})")
+            continue
+        try:
+            line_counts[relative] = _line_count(path)
+        except (OSError, SyntaxError, ValueError) as error:
+            problems.append(f"{relative} is not readable Python source ({type(error).__name__})")
+            continue
+        paths[str(path)] = relative
+    if problems:
+        return None, problems
+    return SourceUniverse(files=tuple(files), paths=paths, line_counts=line_counts), []
+
+
+def _shard_coverage_problems(index: int, executed: dict[str, set[int]], universe: SourceUniverse) -> list[str]:
+    """A shard's coverage must name exactly the source universe, by exact path, with lines inside each file."""
+    problems: list[str] = []
+    foreign = sorted(name for name in executed if name not in universe.paths)
+    if foreign:
+        problems.append(
+            f"shard {index}: coverage names {len(foreign)} paths that are not the canonical path of a source file of "
+            f"this checkout, e.g. {foreign[0]!r}"
+        )
+    missing = sorted(relative for name, relative in universe.paths.items() if name not in executed)
+    if missing:
+        problems.append(
+            f"shard {index}: coverage omits {len(missing)} of the {len(universe.files)} source files of "
+            f"{plan.SOURCE_DIR}, e.g. {missing[0]}"
+        )
+    for name, relative in sorted(universe.paths.items(), key=lambda item: item[1]):
+        count = universe.line_counts[relative]
+        # Line 0 is the module prologue on Python 3.11+; any line past the end is data of another source.
+        beyond = sorted(number for number in executed.get(name, ()) if not 0 <= number <= count)
+        if beyond:
+            problems.append(
+                f"shard {index}: coverage records line {beyond[-1]} of {relative}, which has {count} lines "
+                "in this checkout"
+            )
+            break
+    if not any(executed.values()):
+        problems.append(f"shard {index}: coverage recorded no executed line")
+    return problems
+
+
+def _merge_shard(
+    index: int, path: Path, universe: SourceUniverse, union: CoverageData, lines: dict[str, set[int]]
+) -> list[str]:
+    """Verify one shard's coverage against the source universe; merge it into the union only when it is complete."""
     data = CoverageData(basename=str(path))
     try:
         data.read()
         if data.has_arcs():
-            return f"shard {index}: coverage holds branch data; the serial gate measured statements"
-        files = data.measured_files()
-        if not files:
-            return f"shard {index}: coverage measured no files"
-        outside = sorted(name for name in files if not os.path.normcase(name).startswith(prefix))
-        if outside:
-            return f"shard {index}: coverage measured {len(outside)} files outside {plan.SOURCE_DIR}, e.g. {outside[0]}"
-        absent = sorted(name for name in files if not os.path.isfile(name))
-        if absent:
-            return f"shard {index}: coverage names {len(absent)} files absent from this checkout, e.g. {absent[0]}"
-        measured = {name: set(data.lines(name) or ()) for name in files}
-        if not any(measured.values()):
-            return f"shard {index}: coverage recorded no executed line"
-        for name, executed in measured.items():
-            lines.setdefault(name, set()).update(executed)
-        union.update(data)
+            return [f"shard {index}: coverage holds branch data; the serial gate measured statements"]
+        executed = {name: set(data.lines(name) or ()) for name in data.measured_files()}
+        problems = _shard_coverage_problems(index, executed, universe)
+        if not problems:
+            for name, numbers in executed.items():
+                lines.setdefault(name, set()).update(numbers)
+            union.update(data)
+        return problems
     except (CoverageException, sqlite3.Error) as error:
-        return f"shard {index}: coverage data is unreadable: {error}"
+        return [f"shard {index}: coverage data is unreadable: {error}"]
     finally:
         data.close()
-    return None
 
 
-def _report_union(union_file: str, out: TextIO) -> tuple[float, int] | str:
-    """Coverage's own statement report over the union file: ``(total, precision)`` or an error."""
+def _report_union(union_file: str, universe: SourceUniverse, out: TextIO) -> tuple[float, int, int, int] | str:
+    """Coverage's own statement report over exactly the source universe: ``(total, precision, statements, missed)``."""
     reporter = Coverage(data_file=union_file, source=[plan.SOURCE_DIR], config_file=True)
+    morfs = sorted(universe.paths)
     try:
         reporter.load()
         precision = int(reporter.get_option("report:precision"))
-        return reporter.report(ignore_errors=True, file=out, precision=precision), precision
-    except CoverageException as error:
-        return f"the coverage report over the verified union failed: {error}"
+        # ignore_errors=False: a source file coverage cannot analyse fails the gate instead of leaving the denominator.
+        total = reporter.report(morfs=morfs, ignore_errors=False, file=out, precision=precision)
+        statements = missed = 0
+        for morf in morfs:
+            _, executable, _, missing, _ = reporter.analysis2(morf)
+            statements += len(executable)
+            missed += len(missing)
+        return total, precision, statements, missed
+    except (CoverageException, OSError, ValueError) as error:
+        return f"the coverage report over the verified union failed: {type(error).__name__}: {error}"
     finally:
         with contextlib.suppress(CoverageException):
             reporter.get_data().close()
 
 
-def check_coverage(coverage_files: dict[int, Path], ctx: Context, fail_under: float, out: TextIO) -> list[str]:
-    """Rebuild and verify the exact line union of the verified shards, then apply the floor to that union."""
-    prefix = os.path.normcase(os.path.join(str(ctx.root), *plan.SOURCE_DIR.split("/"))) + os.sep
+def check_coverage(
+    coverage_files: dict[int, Path], universe: SourceUniverse, fail_under: float, out: TextIO
+) -> list[str]:
+    """Verify every shard's coverage against the source universe, rebuild their exact union, apply the floor to it."""
     lines: dict[str, set[int]] = {}
-    reported: tuple[float, int] | str = "the coverage union was not reported"
+    problems: list[str] = []
+    reported: tuple[float, int, int, int] | str = "the coverage union was not reported"
     with tempfile.TemporaryDirectory(prefix="crypto-core-coverage-union-", ignore_cleanup_errors=True) as work:
         union_file = os.path.join(work, "union.coverage")
         union = CoverageData(basename=union_file)
         try:
             for index, path in sorted(coverage_files.items()):
-                problem = _merge_shard(index, path, union, lines, prefix)
-                if problem is not None:
-                    return [problem]
-            if union.measured_files() != set(lines):
-                return ["the coverage union lists other files than the shards measured"]
-            differing = sorted(name for name, executed in lines.items() if set(union.lines(name) or ()) != executed)
+                problems += _merge_shard(index, path, universe, union, lines)
+            if problems:
+                return problems
+            if union.measured_files() != set(universe.paths):
+                return ["the coverage union lists other files than the source universe"]
+            differing = sorted(
+                universe.paths[name] for name, executed in lines.items() if set(union.lines(name) or ()) != executed
+            )
             if differing:
                 return [f"the coverage union differs from the shards' line union in {differing[0]}"]
         finally:
             union.close()
-        reported = _report_union(union_file, out)
+        reported = _report_union(union_file, universe, out)
     if isinstance(reported, str):
         return [reported]
-    total, precision = reported
+    total, precision, statements, missed = reported
+    analysed = 100.0 * (statements - missed) / statements if statements else 100.0
+    if not math.isclose(total, analysed, rel_tol=0.0, abs_tol=1e-9):
+        return [
+            f"coverage's report total {total!r} is not its own analysis of the {len(universe.files)} source files "
+            f"({statements} statements, {missed} missed)"
+        ]
+    out.write(
+        f"Coverage union of all {len(universe.files)} source files of {plan.SOURCE_DIR}: "
+        f"{statements} statements, {missed} missed\n"
+    )
     failed = should_fail_under(total, fail_under, precision)
     out.write(
         f"{'FAIL ' if failed else ''}Required test coverage of {fail_under:g}% "
@@ -617,10 +771,16 @@ def run(evidence_dir: Path, shards: int, fail_under: float, environ: Mapping[str
         summary = f"{len(evidence[1][0]['collection'])} tests collected identically; ran {sizes}; {dict(sorted(tally.items()))}"
         _section(out, "suite", suite, summary)
         violations += suite
-    if violations:
-        return _verdict(out, [*violations, "coverage was not evaluated: the shard evidence is not fully verified"])
-    coverage = check_coverage({index: path for index, (_, path) in evidence.items()}, ctx, fail_under, out)
-    _section(out, "coverage", coverage, "the verified union of all shards reaches the floor")
+    universe, source_problems = source_universe(ctx)
+    found = f"{len(universe.files)} reportable files of {plan.SOURCE_DIR} in tree {ctx.tree}" if universe else ""
+    _section(out, "source", source_problems, f"{found}, exactly as coverage itself discovers them in this checkout")
+    violations += source_problems
+    if violations or universe is None:
+        return _verdict(
+            out, [*violations, "coverage was not evaluated: the shard evidence or the source universe is not verified"]
+        )
+    coverage = check_coverage({index: path for index, (_, path) in evidence.items()}, universe, fail_under, out)
+    _section(out, "coverage", coverage, "the verified union over every source file reaches the floor")
     return _verdict(out, coverage)
 
 

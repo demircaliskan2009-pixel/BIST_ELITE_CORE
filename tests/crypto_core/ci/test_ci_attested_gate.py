@@ -3,15 +3,21 @@
 Real evidence comes from real pytest shards (the helpers of ``test_ci_shard_evidence``) sealed in a throwaway git
 project for attempts 1 and 2 of one workflow run.  The GitHub Actions API is a deterministic loopback test double
 serving the jobs of the judged run attempt.  Every case runs the real gate CLI (``ci_attested_gate.main`` in
-process, or the module as a subprocess) and asserts its exit code and verdict line.
+process, or the module as a subprocess) and asserts its exit code and verdict line.  Coverage cases edit the real
+shard databases the way a forged artifact would, reseal the reports' digests, and require the gate to judge them
+against the source universe of its own checkout.
 """
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import io
 import json
+import os
+import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -37,8 +43,21 @@ SUCCESS_NEEDS = json.dumps(
     {"lint": {"result": "success", "outputs": {}}, "test-shard": {"result": "success", "outputs": {}}}
 )
 UNION_COVERAGE = "Total coverage: 88.89%"  # 16 of the fixture's 18 statements; idle.py never runs
+# The fixture's empty src/crypto_core/__init__.py is one of the five files: a legitimate zero-statement source.
+UNION_SOURCES = "Coverage union of all 5 source files of src/crypto_core: 18 statements, 2 missed"
 PASS_LINE = f"{gate.VERDICT}=PASS"
 FAIL_LINE = f"{gate.VERDICT}=FAIL"
+NONCANONICAL = "that are not the canonical path of a source file of this checkout"
+
+# REGRESSION_1's project: idle.py holds 32 statements no test runs (16 functions of two), so the authentic union is
+# 48 statements with 32 missed, 33.33%.  Two more committed files are never measured by coverage's own discovery.
+DORMANT_FILES = {
+    "src/crypto_core/idle.py": "".join(
+        f"def unused_{number:02d}():\n    return {number}\n\n\n" for number in range(16)
+    ),
+    "src/crypto_core/templates/snippet.py": "VALUE = 1\n",  # templates/ has no __init__.py: not a package
+    "src/crypto_core/draft.v2.py": "VALUE = 2\n",  # a dotted name is no importable module
+}
 
 
 def _listing(total: int, jobs: list[dict]) -> bytes:
@@ -58,6 +77,13 @@ def world(tmp_path_factory: pytest.TempPathFactory) -> World:
     head = shards.make_project(root)
     store = tmp_path_factory.mktemp("gate_store")
     return World(root, head, {attempt: shards.seal_shards(root, head, RUN_ID, attempt, store) for attempt in (1, 2)})
+
+
+@pytest.fixture(scope="module")
+def dormant_world(tmp_path_factory: pytest.TempPathFactory) -> World:
+    root = tmp_path_factory.mktemp("gate_dormant_project")
+    head = shards.make_project(root, DORMANT_FILES)
+    return World(root, head, {1: shards.seal_shards(root, head, RUN_ID, 1, tmp_path_factory.mktemp("gate_dormant"))})
 
 
 class _QuietServer(ThreadingHTTPServer):
@@ -230,9 +256,17 @@ def base_env(world: World, api: FakeActionsApi, attempt: int) -> dict[str, str]:
 def run_gate(world: World, api: FakeActionsApi, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
     monkeypatch.setattr(gate, "RETRY_DELAYS_SECONDS", (0, 0))
 
-    def run(evidence: Path, attempt: int, *, env: dict[str, str | None] | None = None, fail_under: str = "70"):
-        monkeypatch.chdir(world.root)
-        for name, value in {**base_env(world, api, attempt), **(env or {})}.items():
+    def run(
+        evidence: Path,
+        attempt: int,
+        *,
+        env: dict[str, str | None] | None = None,
+        fail_under: str = "70",
+        project: World | None = None,
+    ):
+        checkout = project or world
+        monkeypatch.chdir(checkout.root)
+        for name, value in {**base_env(checkout, api, attempt), **(env or {})}.items():
             if value is None:
                 monkeypatch.delenv(name, raising=False)
             else:
@@ -258,6 +292,22 @@ def assert_fail(code: int, out: str, *markers: str) -> None:
         assert marker in out, f"{marker!r} missing from:\n{out}"
 
 
+def cli_gate(project: World, api: FakeActionsApi, evidence: Path, attempt: int, fail_under: str = "70"):
+    """The gate exactly as CI runs it: ``python -m scripts.crypto_core.ci_attested_gate`` in the project checkout."""
+    args = ["--evidence-dir", str(evidence), "--shards", str(SHARDS), "--fail-under", fail_under]
+    completed = subprocess.run(  # noqa: S603 - this interpreter running the gate module in a test project, no shell
+        [sys.executable, "-m", "scripts.crypto_core.ci_attested_gate", *args],
+        cwd=project.root,
+        env={**shards.shard_env(project.head, RUN_ID, attempt), **base_env(project, api, attempt)},
+        capture_output=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=300,
+        check=False,
+    )
+    return completed.returncode, completed.stdout
+
+
 # --- passing runs ------------------------------------------------------------------------------------------------
 
 
@@ -266,6 +316,8 @@ def test_a_complete_attempt_with_every_producer_attested_passes(world, api, run_
     api.serve_jobs(attempt, attempt_jobs(attempt))
     code, out = run_gate(lay_out(tmp_path, current(world, attempt)), attempt)
     assert_pass(code, out)
+    assert "[source] ok: 5 reportable files of src/crypto_core" in out
+    assert UNION_SOURCES in out, "the empty __init__.py is a source file with zero statements"
     assert f"Required test coverage of 70% reached. {UNION_COVERAGE}" in out
     assert "12 tests collected identically; ran 3 / 6 / 3" in out, "legitimate skip, xfail and xpass are accepted"
     assert api.requests, "the producers were attested through the API"
@@ -666,47 +718,297 @@ def test_damaged_or_incomplete_artifacts_fail(world, api, run_gate, tmp_path, da
     assert_fail(code, out, marker)
 
 
-# --- coverage integrity and the floor ----------------------------------------------------------------------------
+# --- the source universe and the coverage denominator --------------------------------------------------------------
 
 
-def _replace_coverage(path: Path, root: Path, kind: str) -> None:
-    path.unlink()
-    if kind == "corrupt":
-        path.write_bytes(b"SQLite format 3\x00" + b"\x00" * 64)
-        return
+def source_dir(project: World) -> Path:
+    return project.root.resolve() / "src" / "crypto_core"
+
+
+def coverage_entries(path: Path) -> dict[str, set[int]]:
+    """Measured path -> executed lines of one coverage file."""
     data = CoverageData(basename=str(path))
-    source = root.resolve() / "src" / "crypto_core"
     try:
-        if kind == "branch":
-            data.add_arcs({str(source / "beta.py"): {(1, 2), (2, -1)}})
-        elif kind == "outside":
-            data.add_lines({str(source / "beta.py"): {1}, str(root.resolve() / "tests" / "crypto_core" / "x.py"): {1}})
-        elif kind == "absent":
-            data.add_lines({str(source / "beta.py"): {1}, str(source / "deleted.py"): {1}})
-        else:
-            data.add_lines({str(source / "beta.py"): set()})
-            data.touch_files([str(source / "gamma.py")])
+        data.read()
+        return {name: set(data.lines(name) or ()) for name in data.measured_files()}
     finally:
         data.close()
+
+
+def rewrite_coverage(path: Path, entries: dict[str, set[int]]) -> None:
+    """Replace a coverage file with statement data holding exactly ``entries``, files without lines included."""
+    path.unlink()
+    data = CoverageData(basename=str(path))
+    try:
+        data.add_lines(entries)
+    finally:
+        data.close()
+
+
+def strip_coverage_record(path: Path, name: str) -> None:
+    """Delete one file's record from a coverage SQLite file in place, as a forged artifact would."""
+    with contextlib.closing(sqlite3.connect(path)) as db, db:
+        row = db.execute("select id from file where path = ?", (name,)).fetchone()
+        assert row is not None, f"{name} is not recorded in {path}"
+        db.execute("delete from line_bits where file_id = ?", row)
+        db.execute("delete from tracer where file_id = ?", row)
+        db.execute("delete from file where id = ?", row)
+
+
+def plain_union_percent(coverage_files: list[Path], work: Path) -> float:
+    """Coverage's own total for these files' union alone: the artifacts defining their own denominator."""
+    union_file = work / "plain-union.coverage"
+    union = CoverageData(basename=str(union_file))
+    try:
+        for path in coverage_files:
+            shard = CoverageData(basename=str(path))
+            shard.read()
+            union.update(shard)
+            shard.close()
+    finally:
+        union.close()
+    return _coverage_percent(union_file)
+
+
+def serial_gate_total(project: World) -> tuple[int, int, int]:
+    """``(statements, missed, exit code)`` of the serial gate the shards replaced, run in the project checkout."""
+    completed = shards.run_pytest(project.root, shards.SERIAL_GATE_ARGS, shards.shard_env(project.head, RUN_ID, 1))
+    total = re.search(r"^TOTAL\s+(\d+)\s+(\d+)\s", completed.stdout, re.MULTILINE)
+    assert total is not None, completed.stdout + completed.stderr
+    return int(total.group(1)), int(total.group(2)), completed.returncode
+
+
+def test_regression_1_a_source_file_stripped_from_every_shard_never_leaves_the_denominator(
+    dormant_world, api, tmp_path, monkeypatch
+):
+    """P2-COVERAGE-DENOMINATOR-OMISSION.  idle.py's 32 statements never run: the authentic union is 48 statements with
+    32 missed, 33.33%, below the floor.  Deleting idle.py's record from every shard database and resealing every
+    report leaves artifacts whose own file list makes a self-consistent 16 of 16 statements, 100%."""
+    api.serve_jobs(1, attempt_jobs(1))
+    code, out = cli_gate(dormant_world, api, lay_out(tmp_path / "control", current(dormant_world, 1)), 1)
+    assert_fail(
+        code,
+        out,
+        "[source] ok: 5 reportable files of src/crypto_core",  # never templates/snippet.py or draft.v2.py
+        "Coverage union of all 5 source files of src/crypto_core: 48 statements, 32 missed",
+        "FAIL Required test coverage of 70% not reached. Total coverage: 33.33%",
+    )
+    attack = lay_out(tmp_path / "attack", current(dormant_world, 1))
+    idle = str(source_dir(dormant_world) / "idle.py")
+    forged = []
+    for index in range(1, SHARDS + 1):
+        artifact = plan.artifact_name(RUN_ID, 1, index, SHARDS)
+        strip_coverage_record(attack / artifact / plan.COVERAGE_FILE, idle)
+        reseal(attack, artifact)
+        forged.append(attack / artifact / plan.COVERAGE_FILE)
+    monkeypatch.chdir(dormant_world.root)
+    assert plain_union_percent(forged, tmp_path) == 100.0, "the forged artifacts alone claim 100%"
+    code, out = cli_gate(dormant_world, api, attack, 1)
+    omitted = "coverage omits 1 of the 5 source files of src/crypto_core, e.g. src/crypto_core/idle.py"
+    assert_fail(code, out, *(f"shard {index}: {omitted}" for index in range(1, SHARDS + 1)))
+    assert "Total coverage" not in out
+
+
+def test_regression_2_a_real_file_spelled_through_the_source_directory_is_foreign(world, api, tmp_path):
+    """``<root>/src/crypto_core/../../foreign.py`` begins with the source directory's spelling and names a real file
+    of the checkout, so neither a text-prefix nor an existence check rejects it; it is no source of this checkout."""
+    foreign = world.root / "foreign.py"
+    foreign.write_bytes(b"".join(b"VALUE_%d = %d\n" % (number, number) for number in range(100)))
+    try:
+        spelled = str(source_dir(world) / ".." / ".." / "foreign.py")
+        assert spelled.startswith(str(source_dir(world))) and os.path.isfile(spelled)
+        api.serve_jobs(2, attempt_jobs(2))
+        evidence = lay_out(tmp_path, current(world, 2))
+        coverage_file = evidence / SHARD_2 / plan.COVERAGE_FILE
+        rewrite_coverage(coverage_file, {**coverage_entries(coverage_file), spelled: set(range(1, 101))})
+        reseal(evidence, SHARD_2)
+        code, out = cli_gate(world, api, evidence, 2)
+        assert_fail(code, out, f"shard 2: coverage names 1 paths {NONCANONICAL}, e.g. {spelled!r}")
+        assert "Total coverage" not in out
+    finally:
+        foreign.unlink()
+
+
+OTHER_SEPARATOR = "/" if os.sep == "\\" else "\\"
+NONCANONICAL_PATHS = {
+    "parent-traversal": lambda source, outside: str(source / ".." / ".." / "foreign.py"),
+    "nested-traversal": lambda source, outside: str(source / ".." / "crypto_core" / ".." / ".." / "foreign.py"),
+    "checkout-file-outside-the-source-dir": lambda source, outside: str(source.parent.parent / "foreign.py"),
+    "absolute-path-outside-the-checkout": lambda source, outside: str(outside),
+    "alias-with-a-dot-segment": lambda source, outside: f"{source}{os.sep}.{os.sep}beta.py",  # pathlib drops "."
+    "alias-with-a-doubled-separator": lambda source, outside: f"{source}{os.sep}{os.sep}beta.py",
+    "alias-with-the-other-separator": lambda source, outside: f"{source}{OTHER_SEPARATOR}beta.py",
+    "alias-in-another-case": lambda source, outside: str(source / "BETA.py"),
+    "file-never-committed": lambda source, outside: str(source / "stray.py"),
+}
+
+
+@pytest.mark.parametrize("spelling", list(NONCANONICAL_PATHS), ids=list(NONCANONICAL_PATHS))
+def test_foreign_traversing_or_aliased_coverage_paths_fail(world, api, run_gate, tmp_path, spelling):
+    """Each path, recorded with beta.py's executed lines, would add to the union if it were accepted."""
+    foreign = world.root / "foreign.py"
+    foreign.write_bytes(b"VALUE = 1\n")
+    outside = tmp_path / "outside" / "foreign.py"
+    outside.parent.mkdir()
+    outside.write_bytes(b"VALUE = 1\n")
+    try:
+        api.serve_jobs(2, attempt_jobs(2))
+        evidence = lay_out(tmp_path, current(world, 2))
+        coverage_file = evidence / SHARD_2 / plan.COVERAGE_FILE
+        entries = coverage_entries(coverage_file)
+        path = NONCANONICAL_PATHS[spelling](source_dir(world), outside)
+        assert path not in entries
+        rewrite_coverage(coverage_file, {**entries, path: entries[str(source_dir(world) / "beta.py")]})
+        reseal(evidence, SHARD_2)
+        code, out = run_gate(evidence, 2)
+        assert_fail(code, out, f"shard 2: coverage names 1 paths {NONCANONICAL}, e.g. {path!r}")
+        assert "Total coverage" not in out
+    finally:
+        foreign.unlink()
+
+
+def test_coverage_recorded_under_another_checkout_root_names_no_source_of_this_one(world, api, run_gate, tmp_path):
+    api.serve_jobs(2, attempt_jobs(2))
+    evidence = lay_out(tmp_path, current(world, 2))
+    coverage_file = evidence / SHARD_2 / plan.COVERAGE_FILE
+    root = str(world.root.resolve())
+    moved = {root + "-copy" + name[len(root) :]: lines for name, lines in coverage_entries(coverage_file).items()}
+    rewrite_coverage(coverage_file, moved)
+    reseal(evidence, SHARD_2)
+    code, out = run_gate(evidence, 2)
+    assert_fail(code, out, f"shard 2: coverage names 5 paths {NONCANONICAL}", "shard 2: coverage omits 5 of the 5")
+
+
+@pytest.mark.parametrize("removed", ["idle.py", "__init__.py"], ids=["unexecuted-module", "zero-statement-file"])
+def test_a_source_file_missing_from_one_shard_fails(world, api, run_gate, tmp_path, removed):
+    """Coverage records every file of the source universe in every shard, executed or not and with or without
+    statements, so a shard without one is not authentic coverage of this checkout."""
+    api.serve_jobs(2, attempt_jobs(2))
+    evidence = lay_out(tmp_path, current(world, 2))
+    strip_coverage_record(evidence / SHARD_2 / plan.COVERAGE_FILE, str(source_dir(world) / removed))
+    reseal(evidence, SHARD_2)
+    code, out = run_gate(evidence, 2)
+    assert_fail(
+        code, out, f"shard 2: coverage omits 1 of the 5 source files of src/crypto_core, e.g. src/crypto_core/{removed}"
+    )
+
+
+def test_line_data_that_does_not_fit_the_committed_source_fails(world, api, run_gate, tmp_path):
+    api.serve_jobs(2, attempt_jobs(2))
+    evidence = lay_out(tmp_path, current(world, 2))
+    coverage_file = evidence / SHARD_2 / plan.COVERAGE_FILE
+    entries = coverage_entries(coverage_file)
+    beta = str(source_dir(world) / "beta.py")
+    rewrite_coverage(coverage_file, {**entries, beta: entries[beta] | {7}})
+    reseal(evidence, SHARD_2)
+    code, out = run_gate(evidence, 2)
+    assert_fail(code, out, "shard 2: coverage records line 7 of src/crypto_core/beta.py, which has 6 lines")
 
 
 @pytest.mark.parametrize(
     ("kind", "marker"),
     [
         ("corrupt", "shard 2: coverage data is unreadable"),
+        ("not-coverage-data", "shard 2: coverage data is unreadable"),
         ("branch", "shard 2: coverage holds branch data"),
-        ("outside", "shard 2: coverage measured 1 files outside src/crypto_core"),
-        ("absent", "shard 2: coverage names 1 files absent from this checkout"),
         ("nothing-executed", "shard 2: coverage recorded no executed line"),
     ],
 )
-def test_resealed_but_invalid_coverage_data_fails(world, api, run_gate, tmp_path, kind, marker):
+def test_resealed_but_unreadable_or_unusable_coverage_data_fails(world, api, run_gate, tmp_path, kind, marker):
     api.serve_jobs(2, attempt_jobs(2))
     evidence = lay_out(tmp_path, current(world, 2))
-    _replace_coverage(evidence / SHARD_2 / plan.COVERAGE_FILE, world.root, kind)
+    coverage_file = evidence / SHARD_2 / plan.COVERAGE_FILE
+    if kind == "corrupt":
+        coverage_file.write_bytes(b"SQLite format 3\x00" + b"\x00" * 64)
+    elif kind == "not-coverage-data":
+        coverage_file.unlink()
+        with contextlib.closing(sqlite3.connect(coverage_file)) as db, db:
+            db.execute("create table file (id integer primary key, path text)")
+    elif kind == "branch":
+        coverage_file.unlink()
+        data = CoverageData(basename=str(coverage_file))
+        try:
+            data.add_arcs({str(source_dir(world) / "beta.py"): {(1, 2), (2, -1)}})
+        finally:
+            data.close()
+    else:
+        rewrite_coverage(coverage_file, {name: set() for name in coverage_entries(coverage_file)})
     reseal(evidence, SHARD_2)
     code, out = run_gate(evidence, 2)
     assert_fail(code, out, marker)
+
+
+def symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        os.symlink(target, link)
+    except (OSError, NotImplementedError) as error:
+        pytest.skip(f"symbolic links are not available here: {error}")
+
+
+def test_an_untracked_file_in_the_gates_source_directory_fails(world, api, run_gate, tmp_path):
+    stray = source_dir(world) / "stray.py"
+    stray.write_bytes(b"VALUE = 1\n")
+    try:
+        api.serve_jobs(2, attempt_jobs(2))
+        code, out = run_gate(lay_out(tmp_path, current(world, 2)), 2)
+        assert_fail(
+            code,
+            out,
+            "[source] FAIL: coverage's own discovery in this checkout finds 1 source files that the committed tree "
+            "does not hold, e.g. src/crypto_core/stray.py",
+            "coverage was not evaluated",
+        )
+    finally:
+        stray.unlink()
+
+
+def test_a_symbolic_link_escaping_the_source_directory_fails(world, api, run_gate, tmp_path):
+    foreign = world.root / "foreign.py"
+    foreign.write_bytes(b"VALUE = 1\n")
+    link = source_dir(world) / "escape.py"
+    try:
+        symlink_or_skip(link, foreign)
+        api.serve_jobs(2, attempt_jobs(2))
+        evidence = lay_out(tmp_path, current(world, 2))
+        coverage_file = evidence / SHARD_2 / plan.COVERAGE_FILE
+        rewrite_coverage(coverage_file, {**coverage_entries(coverage_file), str(link): {1}})
+        reseal(evidence, SHARD_2)
+        code, out = run_gate(evidence, 2)
+        assert_fail(
+            code, out, "finds 1 source files that the committed tree does not hold, e.g. src/crypto_core/escape.py"
+        )
+        assert "Total coverage" not in out
+    finally:
+        if link.is_symlink():
+            link.unlink()
+        foreign.unlink()
+
+
+def test_a_symbolic_link_committed_under_the_source_directory_fails(run_gate, api, tmp_path):
+    """A committed link is a second name for another file: no unique source identity, so the universe refuses it."""
+    root = tmp_path / "linked_project"
+    root.mkdir()
+    shards.make_project(root)
+    symlink_or_skip(root / "src" / "crypto_core" / "linked.py", Path("alpha.py"))
+    shards.git(root, "add", "src/crypto_core/linked.py")
+    if not shards.git(root, "ls-files", "-s", "src/crypto_core/linked.py").startswith("120000 "):
+        pytest.skip("git does not record symbolic links here")
+    shards.git(root, "-c", "user.name=ci-fixture", "-c", "user.email=ci-fixture@example.invalid", "commit", "-qm", "l")
+    linked = World(root, shards.git(root, "rev-parse", "HEAD"), {})
+    api.serve_jobs(2, attempt_jobs(2))
+    code, out = run_gate(tmp_path / "no-evidence", 2, project=linked)
+    assert_fail(code, out, "src/crypto_core/linked.py in the committed tree has mode 120000, not a regular file")
+
+
+@pytest.mark.parametrize("project", ["world", "dormant_world"])
+def test_the_union_denominator_and_verdict_equal_the_serial_gates(project, api, run_gate, tmp_path, request):
+    """The serial ``pytest --cov=src/crypto_core --cov-fail-under=70`` gate the shards replaced, on the same project."""
+    checkout = request.getfixturevalue(project)
+    statements, missed, serial_exit = serial_gate_total(checkout)
+    api.serve_jobs(1, attempt_jobs(1))
+    code, out = run_gate(lay_out(tmp_path, current(checkout, 1)), 1, project=checkout)
+    assert f"source files of src/crypto_core: {statements} statements, {missed} missed" in out, out
+    assert (code == 0) == (serial_exit == 0), (serial_exit, out)
 
 
 def test_a_union_below_the_floor_fails(world, api, run_gate, tmp_path):
