@@ -48,7 +48,10 @@ Six invariants govern all system behavior. No subsystem, edge, strategy, or oper
 nothing by itself. It applies only while a separately human-approved PAPER_INCUBATION_V1 record (§1.21) is ACTIVE
 for one governed paper lineage and one edge. Under such a record, a reading on the record's closed list (§1.21) that
 is undefined only because the lineage's or the edge's own governed-paper history is shorter than the reading's
-window resolves to `COLD_START_EXCEPTED` instead of HOLD. `COLD_START_EXCEPTED` is never PASS. It admits a governed
+window resolves to `COLD_START_EXCEPTED` instead of HOLD. For the edge's §1.28 Kelly estimate the reading's window is
+the edge's closed governed-paper trades, and it is shorter than the reading needs while those trades do not yet
+include at least one closed win and at least one closed loss (§1.21); a Kelly estimate undefined for any other reason
+is not covered. `COLD_START_EXCEPTED` is never PASS. It admits a governed
 paper entry only on the separate incubation basis of §1.21; ordinary admission is unchanged. A condition proven to
 fail is FAIL and dominates any exception. The exception never applies to shadow, live or capital, or to any
 market-data, data-integrity, risk, margin, liquidation, regime, exchange-health (latency, API availability,
@@ -1313,13 +1316,23 @@ capital, §1.13 Stages 4–5 or §1.22 promotion, and it relaxes no other requir
 
 - Covered readings (closed list): the edge's own Sharpe_30d and Sharpe_90d with DECAY_ALERT (§1.6); the lineage's
   last-10 and last-20 governed-paper order fill rates on the exchange (NT-X02; §1.5 Execution Conditions); and the
-  edge's §1.28 Kelly estimate while the edge has no closed governed-paper trade. No other reading is ever covered:
-  not calibration (§1.24), exchange health, CTR or depth, CVaR, margin, liquidation, data integrity, any other risk
-  limit, or any protective obligation.
+  edge's §1.28 Kelly estimate while the edge's known closed governed-paper trades do not yet include at least one win
+  and at least one loss. No other reading is ever covered: not calibration (§1.24), exchange health, CTR or depth,
+  CVaR, margin, liquidation, data integrity, any other risk limit, or any protective obligation.
 - A reading is covered only while its window holds fewer of the lineage's or the edge's own governed-paper
   observations than it needs. The counts come from the sealed lineage and are recomputed by an independent verifier;
   offline, simulated or replayed observations never count. A reading whose window has filled is an ordinary reading
   from then on.
+- Kelly coverage. A closed trade counts once its closing fill is in the sealed lineage and every funding settlement
+  it carries is published; until then the count is unproven and the Kelly reading is BLOCKED. A trade is a win when
+  its realized net PnL is strictly positive and a loss when strictly negative. Kelly coverage ends at the first
+  instant both a win and a loss are known and never returns. It never covers a Kelly reading undefined because a
+  method is unapproved or an outcome is unproven. A Kelly component that is defined and fails — f* <= 0, the Kelly
+  fit, a known outcome R_j with 1 + rho_t * R_j <= 0, or the log-utility verification G(f) <= 0 — is FAIL, covered or
+  not; and sum f <= 0.04 on the actual risk at the stop is never covered. In the solvency condition rho_t is the
+  candidate's actual FCD-01 stop-risk fraction, never the unconstrained f* or the fractional Kelly allocation f, and
+  1 + rho_t * R_j <= 0 is FAIL (`KELLY_LOG_DOMAIN_RUIN`) from the first known trade, including while the Kelly
+  estimate is covered.
 - A covered reading resolves to `COLD_START_EXCEPTED`, never PASS, and only when every non-history component of its
   check passes. A reading that fails under every completion of its missing history is FAIL. Any other undefined input
   is BLOCKED.
