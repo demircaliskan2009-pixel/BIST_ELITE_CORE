@@ -20,8 +20,9 @@
   doctrine reading KD-0 (section 4), the approved construction methodology KD-1..KD-13 (section 5) and the decision
   record (section 1). It adds no doctrine beyond the approved items. Between this document and PRDV4, PRDV4 governs,
   and between two safety rules the stricter one applies.
-- **Tiers.** I constitutional: A1.1, A1.2 and A1.3. II doctrine reading: KD-0. III methodology: KD-1..KD-13 with the
-  approved delta D-A1, approved for construction only. IV implementation: not authorized.
+- **Tiers.** I constitutional: A1.1, A1.2 and A1.3. II doctrine reading: KD-0. III methodology: KD-1..KD-13 as
+  written in RECORD A, approved for construction only; the exact variant of the relayed delta D-A1 is
+  PENDING_HUMAN_DECISION (section 5.2). IV implementation: not authorized.
 - **Forward-only.** The companion is not edited. From the adoption merge the companion clauses of section 3.1 are
   superseded and have no force; they stay in the companion as history, and nothing earlier is erased or re-dated.
 
@@ -65,7 +66,10 @@ FORM              A1 [constitutional]: texts A1.1, A1.2 and A1.3, effective only
                   A3 [methodology]: KD-1..KD-13 for construction only, deciding companion items 5.1 and 5.2
                   (HC-16b = KD-4). The bootstrap at n_w = 100 stays pending and reads BLOCKED; HC-16a, HC-16c and
                   HC-16d stay pending.
-DECISION          A1, A2 and A3 approved, with the approved additional delta D-A1 (section 5.2).
+DECISION          A1, A2 and A3 approved. The 2026-11-15 packet also lists the label D-A1 under
+                  APPROVED_ADDITIONAL_DELTAS, quoted below. No relayed record states in exact text which of D-A1's
+                  two alternatives was approved, so the exact variant is UNPROVEN and PENDING_HUMAN_DECISION
+                  (section 5.2).
 DECIDED BY        The human, as relayed by the ChatGPT controller. Approver identity: not recorded here (UNKNOWN).
 CHANNEL           Controller packet of 2026-11-15, which states:
                     "HUMAN_APPROVED_NOT_YET_ADOPTED: RECORD_A=S1_KELLY_CLASS_COMPLETION_DECISION_V3"
@@ -109,10 +113,11 @@ C-2  KD-0 (S1 fixed-unit sizing).
 | A1.3, section 2.1, "Covered components" | `1 + f*R > 0 for every known outcome at the candidate's risk fraction` and `is checked from the first known trade.` | `1 + rho_t * R_j > 0 for every known outcome R_j at the candidate's actual FCD-01 stop-risk fraction rho_t, never the unconstrained f* or the fractional Kelly allocation f` and `is checked from the first known trade, including under U5 coverage; 1 + rho_t * R_j <= 0 is FAIL (KELLY_LOG_DOMAIN_RUIN).` | C-1 |
 | T-KCW-11 | `one known outcome with 1 + rho*R <= 0 under coverage` | `one known outcome R_j with 1 + rho_t * R_j <= 0 under coverage` | C-1 |
 | KD-0 | The RECORD A text | The RECORD A text, then the C-2 lines and the C-1 notation line (section 4.1) | C-1, C-2 |
-| KD-9 | `rho <= f_cap` | Read with D-A1 (section 5.2) | D-A1 |
 
 PRDV4 does not use the companion's class identifiers, so its added sentence says "including while the Kelly estimate
-is covered" where C-1 says "including under U5 coverage". No other word of an approved text changes.
+is covered" where C-1 says "including under U5 coverage". No other word of an approved text changes. KD-9 and KD-12
+keep their RECORD A wording (section 5.1); the relayed delta D-A1 changes no approved wording, and its exact variant
+is PENDING_HUMAN_DECISION (section 5.2).
 
 ## 2. KELLY_CLASS_COMPLETION_WINDOW_V1 (A1.3)
 
@@ -255,8 +260,9 @@ KD-0 Units (resolves C-K1). Every Kelly quantity is in RISK units.
 
 - **Coverage and the cap.** While U5 covers the reading, f\* and the Kelly fit's f_cap are covered components (section
   2.1), so KD-13 applies `rho_t <= 0.04` at the decision and at the fill; sum f ≤ 0.04 on the actual risk at the stop
-  is never covered (PRDV4 §1.21). Once the reading is defined, KD-9 (with D-A1) and KD-12 apply
-  `rho_t <= min(f, 0.04)`.
+  is never covered (PRDV4 §1.21). Once the reading is defined, KD-0 requires `rho_t <= min(f, 0.04)` at the decision
+  and at the exposure-increasing fill. The Kelly fit of KD-9, and with it a KD-12 PASS, is not construction-ready
+  while the exact D-A1 variant is pending (section 5.2).
 - **No resize.** The fixed unit's notional single-position limit stays HZ-LIMITS' 8%. A proven state-triggered
   multiplier below 1 refuses the entry, as companion section 4.7 (A9′) already requires, and a Kelly-fit failure at
   the fill is a FAIL with no resize (KD-9).
@@ -270,6 +276,9 @@ KD-0 Units (resolves C-K1). Every Kelly quantity is in RISK units.
 > **Status: APPROVED_METHODOLOGY** — for construction only; it decides companion items 5.1 and 5.2 (HC-16b = KD-4).
 > Not implemented: every accepted rule set, schedule, seal and module stays unchanged, and the accepted SCALE-1
 > reading keeps the Kelly fit unproven until a separately authorized implementation contract builds this methodology.
+> The Kelly fit of KD-9 is not construction-ready while the exact variant of the relayed delta D-A1 is pending
+> (section 5.2): no implementation builds either alternative of section 5.2, or KD-9's RECORD A wording alone, as a
+> final Kelly fit. KD-12 needs KD-9 to hold, so it cannot PASS until a human decision resolves D-A1.
 
 ### 5.1 Text
 
@@ -308,23 +317,29 @@ HC-16 MAPPING Only HC-16b is defined in the repo (companion :1210) = KD-4. HC-16
       and KD-11 decide only what they state.
 ```
 
-### 5.2 Approved delta D-A1 (KD-9)
+### 5.2 Delta D-A1 — exact variant pending
+
+> **Status: PENDING_HUMAN_DECISION** — no force. Nothing in this subsection is approved methodology, a default or a
+> fallback, and no implementation reads it.
+
+The controller packet of 2026-11-15 lists the label D-A1 under "APPROVED_ADDITIONAL_DELTAS" (section 1.1). The label
+names a decision item that offered two alternatives, and no relayed record states in exact text which one was
+selected, so the exact variant is UNPROVEN and PENDING_HUMAN_DECISION. The decision item and its two alternatives,
+quoted from their non-authoritative advisory source (`FABLE52_EXTERNAL_ADVISORY_REPORT_V1`, finding RT-4) as
+historical text with no operative authority:
 
 ```text
-KD-9 (D-A1) Kelly fit: rho*max(1, Lbar) <= f_cap, with Lbar = mean_losses(|R|) of the KD-1 window, at decision (R-4)
-            and at fill (R-5); otherwise FAIL (no resize).
+D-A1 Choose the RT-4 correction: the minimal max(1, Lbar) factor, or the entry-to-stop stake.
+Alternative 1: KD-9 "rho*max(1, Lbar) <= f_cap, with Lbar = mean_losses(|R|) of the KD-1 window"
+Alternative 2: Kelly stake = entry-price-to-stop plus exit cost, leaving FCD-01's NT-R03 measure unchanged.
 ```
 
-- **Effect.** It never loosens the gate: max(1, Lbar) ≥ 1, so a fit that holds with D-A1 also holds without it. KD-12
-  reads KD-9 with D-A1.
-- **Provenance.** The human approved D-A1 by its label (section 1.1). Its source item offered two corrections of one
-  finding: this minimal factor, or a Kelly stake measured from the entry price to the stop. Only the minimal factor is
-  consistent with KD-0 and C-2, under which rho_t and every R_j are in FCD-01 risk units. The wording above is the
-  minimal factor's exact source text; that source is a non-authoritative advisory, and the authority is the human
-  approval.
-- **Rationale (REFERENCE).** f\* = (p·b − q)/b is the equity fraction lost on an average losing trade. With an average
-  loss of Lbar risk units, the growth-optimal stop-risk fraction is f\*/Lbar, so without the factor the fit could admit
-  up to Lbar times the fractional-Kelly cap.
+- **Neither alternative is approved.** Neither is adopted, a default or a fallback, and this document selects neither.
+- **While pending.** No implementation builds either alternative, or KD-9's RECORD A wording alone, as a final Kelly
+  fit; the Kelly fit of KD-9 is not construction-ready, and KD-12 cannot PASS (section 5). The adopted KD-0
+  requirements of section 4.1 are unchanged.
+- **Resolution.** Only a later human decision that records the selected variant in exact text resolves this item,
+  through its own adoption change.
 
 ### 5.3 Still pending inside the methodology
 
@@ -333,6 +348,8 @@ KD-9 (D-A1) Kelly fit: rho*max(1, Lbar) <= f_cap, with Lbar = mean_losses(|R|) o
 - **HC-16a, HC-16c and HC-16d.** Identifiers only (companion lines 1154 and 1213); their mapping is UNKNOWN, and
   nothing here decides them.
 - **FCD-01.** Every Kelly reading needs FCD-01 risk evidence (KD-0); RECORD B is not implemented.
+- **D-A1.** The exact variant of the relayed delta to KD-9 is PENDING_HUMAN_DECISION (section 5.2). Until a human
+  decision records it, the Kelly fit of KD-9 is not construction-ready.
 
 ## 6. Non-claims and admission effect
 
@@ -361,7 +378,7 @@ KD-9 (D-A1) Kelly fit: rho*max(1, Lbar) <= f_cap, with Lbar = mean_losses(|R|) o
 
 | Id | Risk | Pending decision or dependency |
 |---|---|---|
-| LR-1 | Kelly absorption after class completion. Once coverage ends, a refusal that depends only on the sealed history cannot clear without a new trade, and no trade follows a refusal: f\* ≤ 0 (KD-6); a non-positive log-utility verification whose G-window R values do not sum to a positive number (KD-10c); five consecutive losing trades (T5 gives KS-1, which refuses the fixed unit under A9′). Under RECORD A with D-A1, in the advisory's five illustrative synthetic edges, these refusals and the covered failures of section 2.1 together end 46% to 99% of lineages before 50 closed trades. | V-1 of the advisory (not adopted) |
+| LR-1 | Kelly absorption after class completion. Once coverage ends, a refusal that depends only on the sealed history cannot clear without a new trade, and no trade follows a refusal: f\* ≤ 0 (KD-6); a non-positive log-utility verification whose G-window R values do not sum to a positive number (KD-10c); five consecutive losing trades (T5 gives KS-1, which refuses the fixed unit under A9′). Under RECORD A's rules with losses of exactly 1R, in the advisory's five illustrative synthetic edges, these refusals and the covered failures of section 2.1 together end 46% to 99% of lineages before 50 closed trades. | V-1 of the advisory (not adopted) |
 | LR-2 | Incubation bounds. Under the proposals A_max = 20 and T_max = 90 UTC days (companion §3.6, not values), with U2 needing 90 UTC days and U4 20 orders, the advisory found that every entry before day 90 stays on the incubation basis, so ordinary admission needs the A_max-th attempt inside a narrow window of days. | Items 1.4, 1.5 and 1.7 |
 | LR-3 | Refusal instead of reduction. Under A9′ (companion §4.7) a proven multiplier below 1 refuses the fixed unit, so an edge-health dip (α_edge < 1 below EHS 0.70), a DECAY_ALERT or KS-1 stops trading. A 30-day window of zero own returns has zero variance and is BLOCKED (F-4; companion T-INC-12), so a fully idle window does not clear by itself. | FCD-13, HC-13a and item 1.8 |
 | LR-4 | The 100-trade bootstrap is undecided: BLOCKED from 100 known closed trades in the window (KD-7). | The bootstrap method |
@@ -382,6 +399,7 @@ table, and no implementation reads one. Each would need its own human decision a
 |---|---|
 | Companion item 1.3 (U5 boundary) | Replaced by A1.3 (section 2) |
 | Companion items 5.1 and 5.2 (HC-16b) | Decided by A3, for construction only (section 5) |
+| Delta D-A1 to KD-9, exact variant | PENDING_HUMAN_DECISION (section 5.2): the label is relayed as approved, but no relayed record states the selected alternative in exact text; until a human decision does, the Kelly fit of KD-9 is not construction-ready |
 | Companion §3.6, HD-K1 row | Superseded (section 3.1); coverage after the first closed trade exists only as the class-completion window of section 2 |
 | Bootstrap at n_w = 100 | Pending; BLOCKED (KD-7) |
 | HC-16a, HC-16c, HC-16d | Pending; mapping UNKNOWN |

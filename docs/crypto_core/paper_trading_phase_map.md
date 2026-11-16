@@ -573,7 +573,9 @@ Contract `S1_KELLY_CLASS_COMPLETION_DOCTRINE_ADOPTION_V1` adopts the human-appro
   actual FCD-01 stop-risk fraction, is checked from the first known trade. KD-0: Kelly quantities are in FCD-01 risk
   units, `rho_t <= min(f, 0.04)` at the decision and at the exposure-increasing fill, and the fixed unit is never
   resized;
-- approved for construction only, not implemented: KD-1..KD-13 with the delta D-A1 (companion items 5.1 and 5.2);
+- approved for construction only, not implemented: KD-1..KD-13 as written in RECORD A (companion items 5.1 and 5.2).
+  The exact variant of the relayed delta D-A1 to KD-9 is pending a human decision, so the Kelly fit of KD-9 is not
+  construction-ready;
 - unchanged: every rule set, schedule, seal and module. No incubation record can exist (items 1.4–1.7 pending) and no
   FCD-01 risk evidence exists, so the Kelly reading stays BLOCKED and every S1 entry is still refused.
   REAL_PAPER_EXECUTION stays BLOCKED;
