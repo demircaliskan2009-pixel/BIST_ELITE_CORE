@@ -560,3 +560,23 @@ Protective obligation ledger v2 (`S1_PROTECTIVE_OBLIGATION_LEDGER_V2_ENGINE_CONS
   test-only permissive entry and sizing tables. Of the KS-4 action (cancel all open orders, disable all engines) only the
   halt is represented: it refuses every exposure-increasing intent and fill, an entry in flight included, and no other
   order is cancelled. REAL_PAPER_EXECUTION stays BLOCKED. Every value, anchor and proof in the tests is synthetic.
+
+## 13. S1 Kelly class completion — doctrine adoption (recorded 2026-11-16)
+
+Contract `S1_KELLY_CLASS_COMPLETION_DOCTRINE_ADOPTION_V1` adopts the human-approved RECORD A
+(`S1_KELLY_CLASS_COMPLETION_DECISION_V3`), effective only through its own adoption merge
+(`docs/crypto_core/s1_kelly_class_completion_amendment_v1.md` section 0.1):
+
+- adopted doctrine: A1 in PRDV4 §0.3 and §1.21, and `KELLY_CLASS_COMPLETION_WINDOW_V1`, which replaces the companion's
+  §8.2. Under an ACTIVE PAPER_INCUBATION_V1 record the Kelly reading stays covered until the edge's known closed trades
+  include a win and a loss, and never after that. The solvency condition `1 + rho_t * R_j > 0`, at the candidate's
+  actual FCD-01 stop-risk fraction, is checked from the first known trade. KD-0: Kelly quantities are in FCD-01 risk
+  units, `rho_t <= min(f, 0.04)` at the decision and at the exposure-increasing fill, and the fixed unit is never
+  resized;
+- approved for construction only, not implemented: KD-1..KD-13 with the delta D-A1 (companion items 5.1 and 5.2);
+- unchanged: every rule set, schedule, seal and module. No incubation record can exist (items 1.4–1.7 pending) and no
+  FCD-01 risk evidence exists, so the Kelly reading stays BLOCKED and every S1 entry is still refused.
+  REAL_PAPER_EXECUTION stays BLOCKED;
+- not claimed: ordinary admission, Kelly survival, Stage-4 eligibility or credit, readiness, profitability or edge;
+- pending: the remaining lifecycle risks of the amendment's section 7, and RECORD B with HZB-1. No advisory proposal or
+  value is adopted.
