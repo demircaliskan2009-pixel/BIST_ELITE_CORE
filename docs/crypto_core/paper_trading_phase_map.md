@@ -605,3 +605,44 @@ its own adoption merge (`docs/crypto_core/s1_native_risk_measurement_doctrine_ad
 - pending: FCD-17 (K_max, external ADV) and H^(e), so EDGE-CVAR and MARGINAL-CVAR stay BLOCKED; the D-B2 depth
   definition for an instrument whose depth-50 does not cover the band; the advisory items D-B4 and D-B5;
   MONITORING_CADENCE; M1, D1, C1-C9 and DEC-1; and RECORD A's D-A1. No advisory proposal or value is adopted.
+
+## 15. S1 native risk measurement — construction (recorded 2026-11-17)
+
+Contract `S1_NATIVE_RISK_MEASUREMENT_CONSTRUCTION_V1` constructs the RECORD B methods approved in §14 inside the existing
+governed paper substrate: no new risk engine, admission system, policy artifact or approval-table entry.
+
+- `governed_paper_risk_measurement.py` derives, and never accepts, the risk evidence of one evaluation. Its inputs are a
+  risk policy that fixes every RECORD B constant (V1 = 172,800 s, V2 = 600 s, V3 = V4 = 300 s; the builder takes only the
+  policy id, the instrument, the MARK source and the bar interval), the policy's approval, its daily MARK archive, the
+  re-proven dataset and the engine re-run. FCD-02 reads the C-1 spans of 253 consecutive closes visible within V1, the
+  exact lambda-weighted ES of C-4..C-7 and, below 50 tail scenarios, MC-8a `max(ES, CVaR_MC)` over the 10,000 D-B3-seeded
+  paths, in exact fractions. FCD-03 reads one L-2 observation per 300 s grid instant: the D-B1 as-of tip, the D-B2 depth
+  only when the minimum is attained on an exact side (else UNKNOWN), and arrivals only through one contiguous declared
+  trade run, known at the latest visibility of its proving chain. LIQ needs exactly 8,640 baseline members, and NT-M01
+  and T8 follow from it. FCD-10 gives NT-X03 and OB-SPREAD, FCD-08 the turnover reading T-1..T-6, and FCD-01 the open
+  risk R-1..R-8 at the armed R-1 stop;
+- the one engine's schedule v7 is schedule v6 with fill-time CVaR bounds: one per C-1 readable span, with the exact unit
+  CVaR99* of each side. It refuses an exposure-increasing fill whole, never resized, when its FCD-01 open risk at the
+  armed stop exceeds 4% of equity (R-5), when its CVaR99* would reach 5% of equity (C-10), or when no stop is armed or no
+  span is readable;
+- entry gate rule set v10 (on top of v9) reads NT-R03, NT-R05, NT-M01, NT-X03 and HZ-LIMITS (T-5) on the risk evidence.
+  It consumes the kill-switch ladder v2 (T8) and the system state v2 (S3, S6), and appends HZ-CVAR (HZB-1), EDGE-CVAR,
+  MARGINAL-CVAR, STRESS-HV, STRESS-CORR, STRESS-LIQ (LS-A on the engine's own fill model) and OB-SPREAD. Day seal v11
+  and lineage evidence v11 bind the risk policy, approval and archive, the risk evidence, and its prefix before `E_k` and
+  `E_k+1` (X1 for the risk evidence). A lineage keeps one policy and one approval; its archive is known at each seal and
+  is never rewritten or backfilled. Every v1-v10 artifact, schedules v2-v6, outcomes v2-v4, ladder v1, system state v1
+  and rule sets v1-v9 stay byte-identical;
+- engineering readings of this construction, to be confirmed by the independent audit (not doctrine): C-12, C-15 and
+  C-17 use the holdings and NAV of C-9; the LS-A exit cost is the stressed fill's slippage from the mid plus its taker
+  fee; an order in flight counts toward T-3; an entry that does not start from flat leaves NT-R03 BLOCKED; a malformed
+  trade record blocks every L-2 window proven at or after its visibility, and an event-time regression invalidates the
+  whole trade series;
+- admission effect: none. The production risk table admits no policy, and even a listed policy would need an
+  M1-qualified archive, which no archive is. In production every risk reading is therefore BLOCKED, the schedule carries
+  no CVaR bound (C-10 refuses every entry fill), and T8, S3 and S6 stay unmeasured. World G, sealed under the TEST-ONLY
+  table, still refuses every entry, first by NT-D01. REAL_PAPER_EXECUTION stays BLOCKED. Every policy, approval, archive
+  and reading in the tests is synthetic;
+- pending, so BLOCKED or UNKNOWN: FCD-17 (K_max, external ADV) and H^(e), so EDGE-CVAR and MARGINAL-CVAR stay BLOCKED;
+  the D-B2 alternative depth definition; D-B4 and D-B5; MONITORING_CADENCE, so nothing is measured between decisions;
+  FCD-05, FCD-13, FCD-14 and HD-07; M1, D1, C1-C9 and DEC-1, so the §1.18 de-risk duty stays unrepresentable; RECORD A's
+  D-A1; risk-policy production approval; incubation and the 100-trade Kelly bootstrap; and Stage-4.

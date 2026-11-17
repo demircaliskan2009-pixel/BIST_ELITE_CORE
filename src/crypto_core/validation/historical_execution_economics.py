@@ -216,6 +216,25 @@ A refusal is ``REJECTED`` like every fill refusal: no fee, no transition and no 
 bounds never reach a reduction, a close or a protective close-only fill, and a schedule v2-v4 carries neither bound,
 so its payload, digest and re-run are exactly the accepted ones.
 
+Fill-time risk bounds (``S1_NATIVE_RISK_MEASUREMENT_CONSTRUCTION_V1``, schedule v7). Schedule v7 is schedule v6 with the
+declared CVaR bounds, each an ordered, disjoint window with the exact CVaR99* of a unit LONG and a unit SHORT holding
+(canonical ``str(Fraction)`` texts); its re-run's outcome is v4. After every earlier rule admitted it, an
+exposure-increasing fill is
+
+* refused (``governed_paper_open_risk_exceeded_at_fill``) when its FCD-01 open risk at the stop strictly exceeds 4% of the
+  publication-visible candidate equity (PRDV4 §1.21 NT-R03, §8.2; RECORD B R-5, equality admits): on the exact post-fill
+  position, the stop the fill arms (basis = its executed price; distance = the lesser of 1.5 x the opening decision's
+  ATR_4h and 1.5% of the basis, the policy v2's milestone-0 stop), the fill mark and the policy's taker fee plus slippage
+  floor. A fill without such a stop (a policy v1, no ATR reading) is refused (``governed_paper_open_risk_unproven_at_fill``);
+* refused (``governed_paper_cvar_budget_exhausted_at_fill``) when its post-fill CVaR99*, the declared unit value of its
+  side times ``|q| x fill mark / candidate equity``, is at or above 5% (§1.21 NT-R05, §1.18; RECORD B C-10), and
+  (``governed_paper_cvar_unproven_at_fill``) when no declared bound contains its instant.
+
+A refusal is whole, never a resize; the bounds never reach a reduction, a close or a protective close-only fill, and a
+schedule v2-v6 carries no CVaR bound, so its payload, digest and re-run are exactly the accepted ones.
+``historical_execution_close_only_exit_quote`` exposes this fill model, pure, for one close-only order of a whole position
+against one book with its visible quantities scaled as the LOW_LIQUIDITY transform scales them (RECORD B LS-A).
+
 Governed decision portfolio. ``simulate_historical_execution_governed_paper_decision_portfolio`` (schedule v4 only) is the
 same governed re-run, which also records, at every decision of the frozen trace, the portfolio as known at that instant
 BEFORE the decision is admitted (after the funding settlements and protective rules of the same nanosecond, before its
@@ -1816,6 +1835,21 @@ class _Simulation:
 
         return None
 
+    def _risk_fill_admission(  # noqa: PLR0913 - the exact facts of one exposure-increasing fill
+        self,
+        order: object,
+        post_quantity: Fraction,
+        price: Fraction,
+        mark_price: Fraction,
+        equity: Fraction,
+        time_ns: int,
+    ) -> str | None:
+        """Admission hook of an exposure-increasing fill past every sizing rule: the order, its exact post-fill position,
+        its executed price, the fill mark, its positive publication-visible candidate equity and its instant. A refusal
+        reason, or None (the historical model admits every one)."""
+
+        return None
+
     def _unpublished_funding(self, time_ns: int) -> Fraction:
         """The booked cashflow of every settlement whose final rate is not visible at ``time_ns``.
 
@@ -2480,8 +2514,14 @@ class _Simulation:
             notional = abs(transition.post.quantity) * mark.price
             if candidate_equity <= 0 or notional > self.max_leverage * candidate_equity:
                 return reject("risk_limit_exceeded", **quoted)
-            refused = self._exposure_fill_admission(notional, candidate_equity) or self._sizing_fill_admission(
-                record.side, book.record.record_digest, book.visibility, requested, notional, candidate_equity
+            refused = (
+                self._exposure_fill_admission(notional, candidate_equity)
+                or self._sizing_fill_admission(
+                    record.side, book.record.record_digest, book.visibility, requested, notional, candidate_equity
+                )
+                or self._risk_fill_admission(
+                    record, transition.post.quantity, price, mark.price, candidate_equity, book.visibility
+                )
             )
             if refused is not None:
                 return reject(refused, **quoted)
@@ -2806,6 +2846,80 @@ def _scaled_depth(value: Fraction, multiplier: Fraction) -> Fraction:
     if quantized is None:
         raise _EconomicFailure("economic_value_out_of_representation:stress_depth")
     return quantized[0]
+
+
+def historical_execution_close_only_exit_quote(  # noqa: PLR0911, PLR0913 - one fill model, every rejection named
+    policy: HistoricalExecutionEconomicsPolicy,
+    *,
+    position_quantity: Fraction,
+    best_bid_price: Fraction,
+    best_ask_price: Fraction,
+    best_bid_quantity: Fraction,
+    best_ask_quantity: Fraction,
+    depth_multiplier: Fraction,
+) -> tuple[str, Fraction | None]:
+    """The whole position as ONE close-only order under this engine's fill model (``_fill_core``) against one book.
+
+    The book's visible quantities are first multiplied by ``depth_multiplier`` and truncated toward zero on the quantity
+    grid, exactly as the LOW_LIQUIDITY stress transform does; the effective slippage is not multiplied. The order closes a
+    LONG against the bids and a SHORT against the asks. The fill model's own gates apply unchanged (positive book, ask
+    above bid, the governed maximum spread, positive visible depth, the fill-ratio cap ``min(|q|, cap x depth)``
+    truncated, slippage ``max(floor, half_spread + coefficient x participation)``, the price grid and the taker fee).
+
+    Returns ``("", exit cost)`` when the order fills the whole position, the exit cost being its slippage from the mid
+    plus its taker fee as a fill record of that order would carry them (exact). Otherwise ``(reason, None)``: the fill
+    model's rejection reason, or ``stressed_book_cannot_fill_the_whole_position`` for a partial fill. A flat position has
+    nothing to exit (``("", 0)``). Pure, exact, no state.
+    """
+
+    if position_quantity == 0:
+        return "", Fraction(0)
+    if best_bid_price <= 0 or best_ask_price <= 0 or best_bid_quantity < 0 or best_ask_quantity < 0:
+        return "book_invalid", None
+    if best_ask_price <= best_bid_price:
+        return "book_crossed", None
+    mid = (best_bid_price + best_ask_price) / 2
+    spread_bps = (best_ask_price - best_bid_price) / mid * _BPS
+    if spread_bps > Fraction(policy.max_spread_bps):
+        return "spread_exceeds_max", None
+    selling = position_quantity > 0  # a LONG closes by selling against the bids, a SHORT by buying the asks
+    visible = historical_execution_quantize_quantity(
+        (best_bid_quantity if selling else best_ask_quantity) * depth_multiplier
+    )
+    if visible is None:
+        return "economic_value_out_of_representation:stress_depth", None
+    depth = visible[0]
+    if depth <= 0:
+        return "insufficient_depth", None
+    requested = abs(position_quantity)
+    maximum = historical_execution_quantize_quantity(Fraction(policy.visible_depth_cap_fraction) * depth)
+    if maximum is None:
+        return "economic_value_out_of_representation:max_executable_quantity", None
+    filled_grid = historical_execution_quantize_quantity(min(requested, maximum[0]))
+    if filled_grid is None:
+        return "economic_value_out_of_representation:filled_quantity", None
+    filled = filled_grid[0]
+    if filled <= 0:
+        return "insufficient_depth", None
+    if filled != requested:
+        return "stressed_book_cannot_fill_the_whole_position", None
+    participation = filled / depth * _HUNDRED
+    effective = max(
+        Fraction(policy.slippage_floor_bps),
+        spread_bps / 2 + Fraction(policy.impact_coefficient_bps_per_participation_pct) * participation,
+    )
+    raw_price = mid * (1 - effective / _BPS) if selling else mid * (1 + effective / _BPS)
+    if raw_price <= 0:
+        return "fill_price_non_positive", None
+    quantized = historical_execution_quantize_price(raw_price)
+    if quantized is None:
+        return "economic_value_out_of_representation:fill_price", None
+    price = quantized[0]
+    if price <= 0:
+        return "fill_price_non_positive", None
+    fee = price * filled * Fraction(policy.taker_fee_bps) / _BPS
+    slippage = filled * (mid - price) if selling else filled * (price - mid)
+    return "", slippage + fee
 
 
 class _ShockedMarks:
@@ -3203,19 +3317,38 @@ HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION = (
 _PROTECTIVE_LEDGER_GOVERNED_SCHEMA_VERSION = (
     HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION
 )
+# Schedule v7: the v6 schedule with the declared fill-time CVaR bounds and the FCD-01 stop-risk bound
+# (S1_NATIVE_RISK_MEASUREMENT_CONSTRUCTION_V1, module docstring); its re-run's outcome is v4, like schedule v6's.
+HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v7"
+_RISK_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_SCHEDULE_SCHEMA_VERSION
 _INFORMATION_TIME_SCHEDULES = (
     _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION,
     _SIZING_SCHEDULE_SCHEMA_VERSION,
     _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
+    _RISK_SCHEDULE_SCHEMA_VERSION,
 )
-# The schedules carrying the declared fill-time sizing bounds: schedule v5 and, on top of it, schedule v6.
+# The schedules carrying the declared fill-time sizing bounds: schedule v5 and, on top of it, schedules v6 and v7.
 HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS = (
     _SIZING_SCHEDULE_SCHEMA_VERSION,
     _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
+    _RISK_SCHEDULE_SCHEMA_VERSION,
 )
 _SIZING_BOUND_SCHEDULES = HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS
+# The schedules carrying the declared protective-ledger bounds (exposure halt, flatten windows): schedule v6 and v7.
+HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS = (
+    _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
+    _RISK_SCHEDULE_SCHEMA_VERSION,
+)
+_PROTECTIVE_LEDGER_SCHEDULES = HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS
 # PRDV4 §1.21 NT-R04 and §8.2: no single position strictly above 25% of NAV; schedule v4 enforces it at every fill.
 HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP = Fraction(25, 100)
+# PRDV4 §1.21 NT-R03 and §8.2 (FCD-01 R-5): the total open risk at the stop strictly above 4% of equity refuses the fill.
+HISTORICAL_EXECUTION_OPEN_RISK_CAP = Fraction(4, 100)
+# PRDV4 §1.21 NT-R05 and §1.18 (FCD-02 C-10): a post-fill CVaR99* at or above 5% of NAV refuses the fill.
+HISTORICAL_EXECUTION_CVAR_BUDGET = Fraction(5, 100)
+# A v7 CVaR bound is an exact rational of at most this many decimal digits per part (below CPython's int-to-text limit).
+_RISK_RATIONAL_DIGITS = 4_000
+_RISK_RATIONAL_BOUND = 10**_RISK_RATIONAL_DIGITS
 _GOVERNED_DIGEST_FIELD = "outcome_digest"
 _PORTFOLIO_DIGEST_FIELD = "portfolio_digest"
 _GOVERNED_REASON_PREFIX = "governed_paper_"
@@ -3295,6 +3428,22 @@ class HistoricalExecutionFlattenWindow:
 
 
 @dataclass(frozen=True)
+class HistoricalExecutionCvarBound:
+    """One declared fill-time CVaR bound ``[window_start_ns, window_end_ns)`` (schema v7 only).
+
+    ``long_unit_cvar`` and ``short_unit_cvar`` are canonical exact rational texts (``str(Fraction)``) of the CVaR99* of a
+    unit LONG and a unit SHORT holding (``|q| x mark / equity = 1``) readable inside the window. An exposure-increasing
+    fill executing inside the window is refused when its post-fill CVaR99*, the unit value of its side times
+    ``|q| x fill mark / candidate equity``, is at or above 5%; one executing outside every window is refused as unproven.
+    """
+
+    window_start_ns: int
+    window_end_ns: int
+    long_unit_cvar: str
+    short_unit_cvar: str
+
+
+@dataclass(frozen=True)
 class HistoricalExecutionAdmissionSchedule:
     """One neutral declared admission schedule: ordered, disjoint windows and an optional invalidation instant.
 
@@ -3306,7 +3455,8 @@ class HistoricalExecutionAdmissionSchedule:
     with ``exposure_envelopes`` (ordered, disjoint) and ``depth_caps`` (one per book record and side, ordered by digest
     then side), the declared fill-time sizing bounds; schema v6 carries them too. Schema v6 is schema v5 with
     ``exposure_halt_from_ns`` (the instant from which no exposure may increase) and ``flatten_windows`` (ordered, disjoint,
-    each at or after the halt), the declared protective-ledger bounds; no other schema carries them.
+    each at or after the halt), the declared protective-ledger bounds; schema v7 carries them too. Schema v7 is schema v6
+    with ``cvar_bounds`` (ordered, disjoint), the declared fill-time CVaR bounds; no other schema carries them.
     """
 
     schema_version: str
@@ -3319,6 +3469,7 @@ class HistoricalExecutionAdmissionSchedule:
     depth_caps: tuple[HistoricalExecutionDepthCap, ...] = ()
     exposure_halt_from_ns: int | None = None
     flatten_windows: tuple[HistoricalExecutionFlattenWindow, ...] = ()
+    cvar_bounds: tuple[HistoricalExecutionCvarBound, ...] = ()
 
 
 HISTORICAL_EXECUTION_GOVERNED_PAPER_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
@@ -3531,6 +3682,7 @@ _GOVERNED_V4_FIELDS = (
 )
 _SCHEDULE_V5_FIELDS = ("exposure_envelopes", "depth_caps")
 _SCHEDULE_V6_FIELDS = ("exposure_halt_from_ns", "flatten_windows")
+_SCHEDULE_V7_FIELDS = ("cvar_bounds",)
 # Per versioned artifact: the legacy schema versions and the extension fields their legacy payloads never carry.
 _VERSIONED_PAYLOADS: dict[type, tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]] = {
     HistoricalExecutionEconomicsResult: (((_SCHEMA_VERSION,), _RESULT_V2_FIELDS),),
@@ -3548,6 +3700,16 @@ _VERSIONED_PAYLOADS: dict[type, tuple[tuple[tuple[str, ...], tuple[str, ...]], .
                 _SIZING_SCHEDULE_SCHEMA_VERSION,
             ),
             _SCHEDULE_V6_FIELDS,
+        ),
+        (
+            (
+                _SCHEDULE_SCHEMA_VERSION,
+                _PROTECTIVE_SCHEDULE_SCHEMA_VERSION,
+                _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION,
+                _SIZING_SCHEDULE_SCHEMA_VERSION,
+                _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
+            ),
+            _SCHEDULE_V7_FIELDS,
         ),
     ),
     HistoricalExecutionGovernedPaperOutcome: (
@@ -3603,6 +3765,13 @@ class _GovernedPaperSimulation(_Simulation):
         self.depth_caps = {
             (item.book_record_digest, item.side): Fraction(item.max_order_quantity) for item in schedule.depth_caps
         }
+        # Schedule v7: the declared CVaR bounds (FCD-02 C-10) and the FCD-01 stop-risk bound (R-5) of every entry fill.
+        self.risk_bounds = schedule.schema_version == _RISK_SCHEDULE_SCHEMA_VERSION
+        self.cvar_bounds = tuple(
+            (item.window_start_ns, item.window_end_ns, Fraction(item.long_unit_cvar), Fraction(item.short_unit_cvar))
+            for item in schedule.cvar_bounds
+        )
+        self.cvar_starts = [item[0] for item in self.cvar_bounds]
         super().__init__(**arguments)  # type: ignore[arg-type]
         self.information_time = schedule.schema_version in _INFORMATION_TIME_SCHEDULES
         if record_decision_portfolio:
@@ -3738,6 +3907,65 @@ class _GovernedPaperSimulation(_Simulation):
             return "governed_paper_depth_cap_exceeded_at_fill"
         return None
 
+    def _risk_fill_admission(  # noqa: PLR0913 - the exact facts of one exposure-increasing fill
+        self,
+        order: object,
+        post_quantity: Fraction,
+        price: Fraction,
+        mark_price: Fraction,
+        equity: Fraction,
+        time_ns: int,
+    ) -> str | None:
+        """Schedule v7: the FCD-01 open risk at the stop (R-5) and the FCD-02 CVaR99* (C-10) of an exposure-increasing
+        fill, each on its exact post-fill position, the fill mark and the publication-visible candidate equity.
+
+        R-5: the stop is the one this fill arms (an opening fill: basis = its executed price, distance = min(1.5 x ATR_4h
+        of the opening decision, 1.5% of the basis), a policy v2's milestone-0 stop) or the armed stop of the open
+        excursion; risk = ``|q| x sgn(q) x (m - x) + |q| x x x c`` with ``x`` the stop while the mark is on the safe side of
+        it, else the mark, and ``c`` the policy's taker fee plus slippage floor in bps / 10,000; strictly above 4% refuses
+        (``governed_paper_open_risk_exceeded_at_fill``), and a fill without a proven R-1 stop is refused as unproven. C-10:
+        the declared bound containing the fill instant gives the unit CVaR99* of the post-fill side; at or above 5% refuses
+        (``governed_paper_cvar_budget_exhausted_at_fill``), and a fill outside every bound is refused as unproven. A
+        refusal is whole, never a resize, and never reaches a reduction, a close or a protective close-only fill.
+        """
+
+        if not self.risk_bounds:
+            return None
+        stop = self._entry_stop(order, post_quantity, price)
+        if stop is None:
+            return "governed_paper_open_risk_unproven_at_fill"
+        sign = 1 if post_quantity > 0 else -1
+        cost = (self.fee_bps + self.floor) / _BPS
+        exit_price = stop if sign * (mark_price - stop) > 0 else mark_price
+        risk = abs(post_quantity) * sign * (mark_price - exit_price) + abs(post_quantity) * exit_price * cost
+        if risk > HISTORICAL_EXECUTION_OPEN_RISK_CAP * equity:
+            return "governed_paper_open_risk_exceeded_at_fill"
+        index = bisect.bisect_right(self.cvar_starts, time_ns) - 1
+        if index < 0 or time_ns >= self.cvar_bounds[index][1]:
+            return "governed_paper_cvar_unproven_at_fill"
+        unit = self.cvar_bounds[index][2] if sign > 0 else self.cvar_bounds[index][3]
+        if unit * abs(post_quantity) * mark_price >= HISTORICAL_EXECUTION_CVAR_BUDGET * equity:
+            return "governed_paper_cvar_budget_exhausted_at_fill"
+        return None
+
+    def _entry_stop(self, order: object, post_quantity: Fraction, price: Fraction) -> Fraction | None:
+        """The R-1 stop of an exposure-increasing fill's post-fill position: the one an opening fill arms, or the armed
+        milestone-0 stop of the open excursion; None without a policy v2 or an ATR reading (no R-1 stop is proven)."""
+
+        pm = self.pm
+        if pm is None or pm.initial_stop is None:
+            return None
+        sign = 1 if post_quantity > 0 else -1
+        if self.position.quantity == 0:
+            reading = self.entry_readings.get(getattr(order, "intent_id", ""))
+            if reading is None or reading.value is None:
+                return None
+            return price - sign * pm.stop_distance(STOP_ATR_MULTIPLE * reading.value, price)
+        protection = self.protection
+        if protection is None or protection.sign != sign:
+            return None
+        return protection.levels[0][3]
+
 
 def _canonical_rational(text: object, field_name: str, *, at_most_one: bool) -> None:
     """A canonical exact rational text: ``str(Fraction(text)) == text``, non-negative (and at most 1 when asked)."""
@@ -3794,7 +4022,7 @@ def _canonical_protective_ledger_bounds(value: HistoricalExecutionAdmissionSched
     halt, windows = value.exposure_halt_from_ns, value.flatten_windows
     if type(windows) is not tuple:
         raise _fail("admission_schedule_malformed:flatten_windows")
-    if value.schema_version != _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION and (halt is not None or windows):
+    if value.schema_version not in _PROTECTIVE_LEDGER_SCHEDULES and (halt is not None or windows):
         raise _fail("admission_schedule_malformed:protective_ledger_bounds_need_schema_v6")
     if halt is not None and not historical_execution_wire_int_is_valid(halt, minimum=0):
         raise _fail("admission_schedule_malformed:exposure_halt_from_ns")
@@ -3817,6 +4045,60 @@ def _canonical_protective_ledger_bounds(value: HistoricalExecutionAdmissionSched
         previous_end = window.window_end_ns
 
 
+def historical_execution_risk_rational_text(value: Fraction) -> str | None:
+    """The canonical exact text (``str(Fraction)``) of a non-negative v7 CVaR bound, or None when either part exceeds the
+    bound's digit limit (such a value is never declared: its fill stays unproven)."""
+
+    if type(value) is not Fraction or value < 0:
+        return None
+    # a part of at most the limit's decimal digits is below 10^limit; the comparison needs no int-to-text conversion
+    if value.numerator >= _RISK_RATIONAL_BOUND or value.denominator >= _RISK_RATIONAL_BOUND:
+        return None
+    return str(value)
+
+
+def _canonical_risk_rational(text: object, field_name: str) -> None:
+    """A canonical exact non-negative rational text of at most the v7 digit limit per part."""
+
+    limit = 2 * _RISK_RATIONAL_DIGITS + 1
+    if type(text) is not str or not text or len(text) > limit or text.strip() != text:
+        raise _fail(f"admission_schedule_malformed:{field_name}")
+    numerator, _, denominator = text.partition("/")
+    if len(numerator) > _RISK_RATIONAL_DIGITS or len(denominator) > _RISK_RATIONAL_DIGITS:
+        raise _fail(f"admission_schedule_malformed:{field_name}")
+    try:
+        value = Fraction(text)
+    except (ValueError, ZeroDivisionError) as exc:
+        raise _fail(f"admission_schedule_malformed:{field_name}") from exc
+    if str(value) != text or value < 0:
+        raise _fail(f"admission_schedule_malformed:{field_name}")
+
+
+def _canonical_risk_bounds(value: HistoricalExecutionAdmissionSchedule) -> None:
+    """Schema v7's CVaR bounds (ordered, disjoint windows of canonical non-negative exact rationals); none on another
+    schema. Schema v7 may declare none: every exposure-increasing fill is then refused as unproven."""
+
+    bounds = value.cvar_bounds
+    if type(bounds) is not tuple:
+        raise _fail("admission_schedule_malformed:cvar_bounds")
+    if value.schema_version != _RISK_SCHEDULE_SCHEMA_VERSION and bounds:
+        raise _fail("admission_schedule_malformed:cvar_bounds_need_schema_v7")
+    previous_end: int | None = None
+    for bound in bounds:
+        if type(bound) is not HistoricalExecutionCvarBound:
+            raise _fail("admission_schedule_malformed:cvar_bound")
+        for name in ("window_start_ns", "window_end_ns"):
+            if not historical_execution_wire_int_is_valid(getattr(bound, name), minimum=0):
+                raise _fail(f"admission_schedule_malformed:cvar_bound_{name}")
+        if bound.window_end_ns <= bound.window_start_ns:
+            raise _fail("admission_schedule_invalid:cvar_bound_empty")
+        if previous_end is not None and bound.window_start_ns < previous_end:
+            raise _fail("admission_schedule_invalid:cvar_bounds_not_ordered_disjoint")
+        _canonical_risk_rational(bound.long_unit_cvar, "long_unit_cvar")
+        _canonical_risk_rational(bound.short_unit_cvar, "short_unit_cvar")
+        previous_end = bound.window_end_ns
+
+
 def canonical_historical_execution_admission_schedule(value: object) -> HistoricalExecutionAdmissionSchedule:
     """Validate one declared admission schedule exactly: types, canonical decimals and ordered disjoint windows."""
 
@@ -3828,11 +4110,13 @@ def canonical_historical_execution_admission_schedule(value: object) -> Historic
         _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION,
         _SIZING_SCHEDULE_SCHEMA_VERSION,
         _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
+        _RISK_SCHEDULE_SCHEMA_VERSION,
     ):
         raise _fail("admission_schedule_malformed:schema_version")
     _canonical_protective_windows(value)
     _canonical_sizing_bounds(value)
     _canonical_protective_ledger_bounds(value)
+    _canonical_risk_bounds(value)
     _require_text(value.schedule_id, "schedule_id")
     if type(value.windows) is not tuple:
         raise _fail("admission_schedule_malformed:windows")
@@ -4107,7 +4391,7 @@ def _governed_run(
         for item in schedule.windows
     ):
         raise _fail("admission_schedule_outside_evaluation_window")
-    ledger = schedule.schema_version == _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION  # outcome v4: the flatten children
+    ledger = schedule.schema_version in _PROTECTIVE_LEDGER_SCHEDULES  # outcome v4: the flatten children
     try:
         simulation = _GovernedPaperSimulation(
             schedule=schedule,
@@ -5339,6 +5623,13 @@ __all__ = [
     "HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION",
     "HISTORICAL_EXECUTION_SIZING_ADMISSION_SCHEDULE_SCHEMA_VERSION",
     "HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS",
+    "HISTORICAL_EXECUTION_CVAR_BUDGET",
+    "HISTORICAL_EXECUTION_OPEN_RISK_CAP",
+    "HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS",
+    "HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_SCHEDULE_SCHEMA_VERSION",
+    "HistoricalExecutionCvarBound",
+    "historical_execution_close_only_exit_quote",
+    "historical_execution_risk_rational_text",
     "HistoricalExecutionDepthCap",
     "HistoricalExecutionExcursionProtection",
     "HistoricalExecutionExposureEnvelope",

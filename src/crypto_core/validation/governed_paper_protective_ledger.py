@@ -97,8 +97,8 @@ from crypto_core.validation.governed_paper_system_state import (
     governed_paper_system_state_reading_digest,
 )
 from crypto_core.validation.historical_execution_economics import (
-    HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION,
+    HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS,
     HistoricalExecutionFill,
     HistoricalExecutionFillOutcome,
     HistoricalExecutionFlattenWindow,
@@ -1393,8 +1393,8 @@ def derive_governed_paper_protective_ledger(  # noqa: PLR0913, C901 - one evalua
         raise _fail("outcome_needs_the_schedule_v6_re_run")
     if historical_execution_governed_paper_outcome_digest(outcome) != outcome.outcome_digest:
         raise _fail("outcome_digest_mismatch")
-    if outcome.schedule.schema_version != HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_ADMISSION_SCHEDULE_SCHEMA_VERSION:
-        raise _fail("outcome_needs_the_schedule_v6_re_run")  # pragma: no cover - outcome v4 only under schedule v6
+    if outcome.schedule.schema_version not in HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS:
+        raise _fail("outcome_needs_the_schedule_v6_re_run")  # pragma: no cover - outcome v4 only under schedule v6/v7
     if type(ladder) is not GovernedPaperKillSwitchLadder:
         raise _fail("ladder_malformed")
     if governed_paper_kill_switch_ladder_digest(ladder) != ladder.ladder_digest:
