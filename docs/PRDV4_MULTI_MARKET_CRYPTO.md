@@ -1680,6 +1680,9 @@ Formal horizon separation framework with independent risk budgets.
 
 - Each horizon has an INDEPENDENT risk budget allocation
 - Risk limits from §1.18 (CVaR) and §1.19 (kill-switch) applied PER-HORIZON before portfolio-level
+  - The §1.18 CVaR99 limit of a horizon is its Risk Budget share of the total portfolio CVaR99 budget (MICRO 20%,
+    INTRADAY 40%, SWING 40% of 5% of NAV per day), evaluated on that horizon's positions; §1.18 per-edge budgets and
+    the marginal rule allocate that horizon limit among its edges.
 - Drawdown breach in MICRO does NOT affect INTRADAY or SWING allocations (isolation)
 - Exception: KS-3 and KS-4 override all horizons (portfolio-level emergency)
 

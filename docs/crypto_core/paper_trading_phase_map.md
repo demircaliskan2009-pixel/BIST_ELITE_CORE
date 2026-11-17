@@ -582,3 +582,26 @@ Contract `S1_KELLY_CLASS_COMPLETION_DOCTRINE_ADOPTION_V1` adopts the human-appro
 - not claimed: ordinary admission, Kelly survival, Stage-4 eligibility or credit, readiness, profitability or edge;
 - pending: the remaining lifecycle risks of the amendment's section 7, and RECORD B with HZB-1. No advisory proposal or
   value is adopted.
+
+## 14. S1 native risk measurement — doctrine adoption (recorded 2026-11-17)
+
+Contract `S1_NATIVE_RISK_MEASUREMENT_DOCTRINE_ADOPTION_V1` adopts the human-approved RECORD B
+(`S1_NATIVE_RISK_MEASUREMENT_METHOD_DECISION_V3`) with its approved deltas D-B1, D-B2 and D-B3, effective only through
+its own adoption merge (`docs/crypto_core/s1_native_risk_measurement_doctrine_adoption_v1.md` section 0.1):
+
+- adopted doctrine: the horizon CVaR reading HZB-1 in PRDV4 §1.27. A horizon's §1.18 CVaR99 limit is its Risk Budget
+  share of the daily budget of 5% of NAV, so 2% of NAV for INTRADAY; that is arithmetic on existing doctrine, not a new
+  parameter;
+- approved for construction only, not implemented: FCD-01 (NT_R03_OPEN_RISK_AT_STOP_V1); FCD-02
+  (CVAR99_WEIGHTED_HS_DAILY_V2 with CVAR99_MC_V1, MC-8a, MC-10 and the D-B3 seed); the STRESS-LIQ method LS-A; FCD-03
+  (LIQ_COMPOSITE_OBS_V3 with the D-B1 as-of tips and the D-B2 exactness rule); FCD-10 (NT_X03_AND_OB_SPREAD_V3 with the
+  D-B1 as-of baseline); FCD-08 (HZ_TURNOVER_INTRADAY_V1); and the values V1-V4, which reach production only through a
+  separately approved risk-policy digest;
+- unchanged: every rule set, schedule, seal, module, policy artifact and approval table. NT-R03, NT-R05, NT-M01 and
+  NT-X03 stay BLOCKED, HZ-LIMITS never passes, T8, S3 and S6 stay unmeasured, and the appended §1.18 and §7.2 checks do
+  not exist yet, so every S1 entry is still refused. REAL_PAPER_EXECUTION stays BLOCKED;
+- not claimed: a CVaR, liquidity, spread or turnover measurement, a qualified source, risk-policy production approval,
+  readiness, Stage-4 eligibility or credit, profitability or edge;
+- pending: FCD-17 (K_max, external ADV) and H^(e), so EDGE-CVAR and MARGINAL-CVAR stay BLOCKED; the D-B2 depth
+  definition for an instrument whose depth-50 does not cover the band; the advisory items D-B4 and D-B5;
+  MONITORING_CADENCE; M1, D1, C1-C9 and DEC-1; and RECORD A's D-A1. No advisory proposal or value is adopted.
