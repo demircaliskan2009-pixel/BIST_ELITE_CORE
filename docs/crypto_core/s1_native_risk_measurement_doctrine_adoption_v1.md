@@ -69,17 +69,21 @@ Every heading below carries one status block:
 
 ## 1. Decision record
 
-> **Status: REFERENCE** — the decision this document adopts.
+> **Status: REFERENCE** — the decisions this document adopts.
 
 ### 1.1 Record
 
+#### 1.1.1 RECORD B and its selections (controller relays)
+
 ```text
 HUMAN_GOVERNANCE_DECISION_RECORD_V1
-RECORD            S1_NATIVE_RISK_MEASUREMENT_METHOD_DECISION_V3 (RECORD B), with the approved deltas D-B1, D-B2 and D-B3
+RECORD            S1_NATIVE_RISK_MEASUREMENT_METHOD_DECISION_V3 (RECORD B). Its deltas D-B1, D-B2 and D-B3: section 1.1.2.
 FORM              B1, B2, B2-H, B2-L, B3, B4, B5 and BV, quoted in section 1.2.
 DECISION          B1-B5 approved; MC-8a chosen; MC-10 confirmed; HZB-1 approved; LS-A approved; V1-V4 approved.
-                  The deltas D-B1, D-B2 and D-B3 are approved, and each names one exact wording (section 1.3). The
-                  conditional depth-definition clause of D-B2 offers no text and stays PENDING_HUMAN_DECISION.
+                  Two of the relays below name the deltas D-B1, D-B2 and D-B3, without their wording; this record does
+                  not rely on them for any delta. The exact wording of D-B1, of D-B2's exactness rule and of D-B3 is
+                  approved by the direct human decision of 2026-11-17 (section 1.1.2).
+                  The alternative depth definition of D-B2 stays PENDING_HUMAN_DECISION.
 DECIDED BY        The human, as relayed by the ChatGPT controller. Approver identity: not recorded here (UNKNOWN).
 CHANNEL           Controller packet of 2026-11-15 for contract S1_PRE_PAPER_ARCHITECTURE_RED_TEAM_AND_CLOSURE_V1, which
                   states (line breaks joined):
@@ -103,14 +107,116 @@ SIGNATURE         None. Accepted main defines no signature mechanism for a doctr
                   transcribes a relayed decision truthfully; it is not a signed artifact and claims no signature.
 SOURCE TEXT       The RECORD B decision form that the relays above approve by its identifier: the text delivered to the
                   controller on 2026-11-15 in the handoff of contract S1_GOVERNANCE_FINAL_SAFETY_CORRECTION_V1, section
-                  EXACT_RECORD_B_HUMAN_DECISION_TEXT (extract digest in section 15.1). The deltas:
-                  FABLE52_EXTERNAL_ADVISORY_REPORT_V1 of 2026-11-15, its items D-B1, D-B2 and D-B3 and its findings
-                  RT-1, RT-2 and RT-3. Neither is a repository artifact; their approved texts are reproduced in sections
-                  1.2, 1.3 and 2-9.
+                  EXACT_RECORD_B_HUMAN_DECISION_TEXT (extract digest in section 15.1). It is not a repository artifact;
+                  its approved texts are reproduced in sections 1.2 and 2-9, with the changes of section 1.4. The
+                  original wording of the deltas is advisory text (FABLE52_EXTERNAL_ADVISORY_REPORT_V1, section 1.3);
+                  their approved wording is the decision of section 1.1.2.
 BINDING ACT       The human's separate exact-head standard-merge authorization of this change.
 OUTSIDE           RECORD A and its delta D-A1 (docs/crypto_core/s1_kelly_class_completion_amendment_v1.md); the
                   advisory's items D-B4 and D-B5; everything listed in section 13.
 ```
+
+#### 1.1.2 Direct human decision of 2026-11-17 on D-B1, D-B2 and D-B3
+
+The one consolidated repair of this change adds this record forward-only. It records the decision as given on
+2026-11-17 and does not backdate it: it does not establish that D-B1, D-B2 or D-B3 was approved in this wording on
+2026-11-15, and the relays of section 1.1.1 stay relays.
+
+```text
+DIRECT_HUMAN_DECISION_RECORD_V1
+DATE              2026-11-17, as relayed. No time of day is recorded.
+GIVEN TO          The ChatGPT controller, in its conversation with the human.
+RELAYED BY        The ChatGPT controller, verbatim, in the user-submitted repair task for pull request #439
+                  (TASK_INTENT=REPAIR, contract S1_NATIVE_RISK_MEASUREMENT_DOCTRINE_ADOPTION_V1). The text below
+                  reproduces that relay line for line.
+SUBJECT           Pull request #439 at head c8c9374ac86a4287e62f75fc3ee033b92c05e319, the adoption head before the
+                  repair.
+DECISION          D-B1 approved in its L-2 and X-2 wording; D-B2 approved for its exactness rule only; D-B3 approved
+                  in its MC-3 wording. The alternative depth definition of D-B2 stays PENDING_HUMAN_DECISION, and no
+                  substitute definition is approved.
+AUTHORIZES        One consolidated, docs-only, same-branch repair of pull request #439 that binds this decision to the
+                  exact clauses.
+NOT AUTHORIZED    Implementation, production activation, admission, real-paper, private API, live, capital mutation or
+                  merge.
+APPROVER IDENTITY Not recorded (UNKNOWN).
+SIGNATURE         None. The repository holds no signature, message identifier, message hash, session identifier or
+                  permanent URL for this decision, and this record claims none.
+```
+
+The decision as relayed, word for word with its line breaks:
+
+```text
+NEW EXPLICIT HUMAN DECISION:
+DATE=2026-11-17
+CONTEXT=ChatGPT controller conversation
+PR=439
+AUTHORIZED_OLD_HEAD=
+c8c9374ac86a4287e62f75fc3ee033b92c05e319
+
+The human directly approved the following:
+
+D-B1 — APPROVE:
+"L-2: Observation at s_i uses the latest
+depth-50 tip by native event time among tips
+visible at or before s_i, with event time at
+least s_i - 10 s. A later-visible tip never
+enters that historical observation. kappa_i
+is the visibility instant of the bounding
+trade."
+
+"X-2: Each baseline tip must be valid as of
+its own grid instant g_k, with
+visibility <= g_k."
+
+D-B2 — APPROVE EXACTNESS RULE ONLY:
+"A side's depth-band sum is exact only if
+its 50th level lies strictly beyond the
+band edge. depth_raw is defined only if
+the minimum is attained on an exact side,
+including when the opposite side's lower
+bound is at least that exact minimum.
+Otherwise the observation is UNKNOWN."
+
+The alternative depth definition for an
+instrument whose depth-50 does not cover
+the required band remains
+PENDING_HUMAN_DECISION.
+No substitute definition is approved.
+
+D-B3 — APPROVE:
+"MC-3 uses a deterministic SHA-256 seed
+over canonical JSON containing:
+
+CVAR99_MC_V1,
+risk-policy digest,
+source-declaration digest,
+interval,
+series-end day,
+the ordered 253 daily-close bar digests.
+
+The whole-archive digest is excluded.
+The seed is independent of holdings,
+decision and side."
+
+AUTHORIZATION_BOUNDARY:
+The human authorized ONE consolidated,
+docs-only, same-branch repair of PR #439
+to bind this decision to the exact clauses.
+
+The human expressly did NOT authorize:
+implementation, production activation,
+admission, real-paper, private API, live,
+capital mutation or merge.
+```
+
+#### 1.1.3 Source and authority
+
+| Record | Class | Establishes | Does not establish | Quoted in |
+|---|---|---|---|---|
+| RECORD B V3 decision form: the handoff of contract S1_GOVERNANCE_FINAL_SAFETY_CORRECTION_V1 of 2026-11-15, section EXACT_RECORD_B_HUMAN_DECISION_TEXT | Source text | The wording of B1–B5, B2-H, B2-L and BV with their options | Any human choice | Sections 1.2 and 2–9; extract digest in section 15.1 |
+| The two controller packets of 2026-11-15 and the controller's implementation packet of 2026-11-17 | Controller relays | The human's approval of RECORD B and of the selections B1–B5, MC-8a, MC-10, HZB-1, LS-A and V1–V4, as relayed | The wording of any delta: where they name D-B1, D-B2 and D-B3, they do so by label only | Section 1.1.1 |
+| FABLE52_EXTERNAL_ADVISORY_REPORT_V1 of 2026-11-15: items D-B1..D-B3 and item 5 of findings RT-1..RT-3 | Advisory text, not authoritative | The original wording of the deltas, which the decision of 2026-11-17 answers | Any approval | Section 1.3 |
+| The direct human decision of 2026-11-17 | Direct human decision, relayed verbatim by the controller | The exact wording of D-B1, of D-B2's exactness rule and of D-B3; the alternative depth definition of D-B2 stays pending | Any other approval; implementation, production activation, admission or merge | Section 1.1.2 |
 
 ### 1.2 Decision per item
 
@@ -148,7 +254,12 @@ fallback.
 
 ### 1.3 Approved deltas D-B1, D-B2 and D-B3
 
-The decision items, quoted from the advisory's list `PENDING_HUMAN_DECISIONS (exact)`:
+The direct human decision of 2026-11-17 (section 1.1.2) approves the exact wording of D-B1, of D-B2's exactness rule
+and of D-B3, and it is the only authority this document uses for them. No delta is approved here by inference from
+its label: the relays of section 1.1.1 that name D-B1, D-B2 and D-B3 are history, and the advisory texts below are
+the source the decision answers, not an approval.
+
+The advisory's decision items, quoted from its list `PENDING_HUMAN_DECISIONS (exact)`:
 
 ```text
 D-B1 Confirm the RT-1 wording for L-2 and X-2.
@@ -175,17 +286,17 @@ RT-3 [P2] The Monte Carlo seed is not stable under archive growth
     digests}; no whole-archive digest.
 ```
 
-- **D-B1** names one wording: an L-2 text and an X-2 text. Approved; applied in sections 6.1 and 7.1.
-- **D-B2** names one exactness rule. Approved; applied in section 6.1. Its second clause, "decide the depth definition
-  if depth-50 does not cover the band for the instrument", offers no text and depends on external facts that are
-  UNKNOWN (the S1 instrument and whether its depth-50 covers ±5 bps). It is PENDING_HUMAN_DECISION. Until a human
-  decides it, the exactness rule alone governs, and an observation whose minimum is not attained on an exact side is
-  UNKNOWN. No depth definition is selected or defaulted here.
-- **D-B3** names one seed composition. Approved; applied to MC-3 in section 4.2.
-- **No alternative was offered.** D-A1 asks the human to choose between two alternatives, so its relayed label selects
-  nothing (RECORD A amendment section 5.2). D-B1, D-B2 and D-B3 each confirm a single wording, so each approved label
-  selects exactly the wording quoted above. The controller's statement that the human "approved their exact conservative
-  corrections" agrees with this; it is not used to choose anything.
+- **D-B1.** Approved by the decision's L-2 and X-2 texts; applied in sections 6.1 and 7.1 (mapped in section 1.4).
+- **D-B2.** The decision approves the exactness rule only; applied in section 6.1 (mapped in section 1.4). It keeps the
+  rest pending in these words: "The alternative depth definition for an instrument whose depth-50 does not cover the
+  required band remains PENDING_HUMAN_DECISION. No substitute definition is approved." That definition is the subject
+  of the advisory's second clause ("decide the depth definition if depth-50 does not cover the band for the
+  instrument") and depends on external facts that are UNKNOWN (the S1 instrument and whether its depth-50 covers
+  ±5 bps). Until a human decides it, the exactness rule alone governs, and an observation whose minimum is not
+  attained on an exact side is UNKNOWN. No depth definition is selected or defaulted here.
+- **D-B3.** Approved by the decision's MC-3 text; applied to MC-3 in section 4.2 (mapped in section 1.4).
+- **D-A1.** Outside the decision. It stays PENDING_HUMAN_DECISION (RECORD A amendment section 5.2), and nothing here
+  selects one of its alternatives.
 
 ### 1.4 Changes to the approved wording
 
@@ -198,9 +309,24 @@ RT-3 [P2] The Monte Carlo seed is not stable under archive growth
 | X-2, second sentence | `Each needs a valid tip (L-2's depth-50 tip with event time in [g_k - 10 s, g_k], ask > bid, from the re-proven authenticated dataset) visible at t.` | `Each needs a valid tip as of g_k (visibility <= g_k) (L-2's depth-50 tip with event time in [g_k - 10 s, g_k], ask > bid, from the re-proven authenticated dataset).` | D-B1 |
 | MC-3 | `archive digest` and `in order}; independent of` | `source declaration digest` and `in order}; no whole-archive digest; independent of` | D-B3 |
 
-D-B1's L-2 text says "the latest tip"; the adopted bullet keeps RECORD B's "depth-50", which D-B1 does not address. In
-MC-3, D-B3's "contract id" is RECORD B's literal `"CVAR99_MC_V1"`, and RECORD B's "in order" stays. No other word of an
+The advisory's L-2 text says "the latest tip"; the decision of 2026-11-17 says "the latest depth-50 tip", and the
+adopted bullet keeps RECORD B's "depth-50". In MC-3, the advisory's "contract id" is RECORD B's literal
+`"CVAR99_MC_V1"`, which the decision names, and RECORD B's "in order" is the decision's "ordered". No other word of an
 approved text changes.
+
+Each changed clause against the decision of 2026-11-17 (section 1.1.2, its line breaks joined):
+
+| Adopted clause | Decision text | Check |
+|---|---|---|
+| L-2, first bullet | D-B1: "Observation at s_i uses the latest depth-50 tip by native event time among tips visible at or before s_i, with event time at least s_i - 10 s." | Same rule: the latest depth-50 tip by native event time, with visibility <= s_i and event time >= s_i - 10 s, is the tip that depth_raw and spread_raw come from. "(CL1-10), with ask > bid and mid = (bid + ask)/2" is RECORD B text that the decision leaves as it is |
+| L-2, second bullet | D-B1: "A later-visible tip never enters that historical observation." | Same rule |
+| L-2, fourth bullet | D-B2: "A side's depth-band sum is exact only if its 50th level lies strictly beyond the band edge. depth_raw is defined only if the minimum is attained on an exact side, including when the opposite side's lower bound is at least that exact minimum. Otherwise the observation is UNKNOWN." | Same rule: a side's "band value" is its depth-band sum in depth_raw, and "(both exact, or one exact and the other's lower bound >= it)" are the cases in which the minimum is attained on an exact side, the second being the decision's "including" case. The clause adds no alternative depth definition |
+| L-2, last bullet | D-B1: "kappa_i is the visibility instant of the bounding trade." | Same rule: this document uses "visibility" for the visibility instant, as in "tips whose visibility is <= s_i" |
+| X-2, second sentence | D-B1: "Each baseline tip must be valid as of its own grid instant g_k, with visibility <= g_k." | Same rule: "a valid tip as of g_k (visibility <= g_k)". The parenthesis that follows is RECORD B's definition of a valid tip, which the decision leaves as it is |
+| MC-3 | D-B3: "MC-3 uses a deterministic SHA-256 seed over canonical JSON containing: CVAR99_MC_V1, risk-policy digest, source-declaration digest, interval, series-end day, the ordered 253 daily-close bar digests. The whole-archive digest is excluded. The seed is independent of holdings, decision and side." | Same six members, the same exclusion and the same independence |
+
+No adopted clause goes beyond the decision, and no clause was reworded to resemble it: where the meaning already
+agrees, the adopted text stays as written. The alternative depth definition of D-B2 appears in no adopted clause.
 
 ### 1.5 Effect on earlier records
 
@@ -702,6 +828,11 @@ The RECORD B text this document reproduces was taken from one extract of the dec
 156 lines from `EXACT_RECORD_B_HUMAN_DECISION_TEXT` through V4 and one closing empty line, 14,486 bytes)
 with SHA-256 `7df83d991e7993ae1e8cc8c0be081d4c95b0e847095a529948fd8f541b1940f2`.
 
+The decision of 2026-11-17 (section 1.1.2) is reproduced from the repair task that relays it, line for line from
+"NEW EXPLICIT HUMAN DECISION:" through "capital mutation or merge.". No digest is given for it: the repository holds no
+signature, message identifier, message hash, session identifier or permanent URL for the decision, and none is
+claimed. Checks T-NRA-11 to T-NRA-13 bind it to the adopted clauses, and T-NRA-14 bounds the repair.
+
 ### 15.2 Checks
 
 | Id | Check | Required result |
@@ -716,3 +847,7 @@ with SHA-256 `7df83d991e7993ae1e8cc8c0be081d4c95b0e847095a529948fd8f541b1940f2`.
 | T-NRA-08 | The phase map | One section appended after its last line; every earlier byte unchanged |
 | T-NRA-09 | Changed paths | Exactly PRDV4, this document and `docs/crypto_core/paper_trading_phase_map.md` |
 | T-NRA-10 | Admission | No code, test, rule set, schedule, seal, policy artifact or approval table changes |
+| T-NRA-11 | Section 1.1.2 | The quoted decision equals, line for line, the decision relayed in the repair task, from "NEW EXPLICIT HUMAN DECISION:" through "capital mutation or merge."; the record claims no signature, message identifier, message hash, session identifier or permanent URL |
+| T-NRA-12 | Section 1.4, the changed clauses against the decision | Every clause that D-B1, D-B2 or D-B3 changes has one row; every quoted decision text occurs in section 1.1.2 with its line breaks joined; each adopted clause has the meaning of its decision text and goes no further |
+| T-NRA-13 | The alternative depth definition of D-B2 | Named only as PENDING_HUMAN_DECISION or as not yet decided; no section approves, selects or defaults a substitute definition |
+| T-NRA-14 | The repair | It changes only this document. PRDV4 (blob `455cdc1c988ad2d4af2767f0233c4e9cc6406316`) and the phase map (blob `82e8d537b98ab38355a852733b9490d08f49c3fc`) are as at head `c8c9374ac86a4287e62f75fc3ee033b92c05e319`; in this document the header, sections 0, 1.2, 1.5 and 2–14, every quoted RECORD B and advisory text and every test vector are unchanged |
