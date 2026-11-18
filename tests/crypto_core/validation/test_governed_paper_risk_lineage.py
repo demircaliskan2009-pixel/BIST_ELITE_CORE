@@ -18,6 +18,8 @@ It proves that, with a risk context on every day from day 0:
   archive of the policy source known at the seal, never rewritten and never backfilled before its day;
 * on the PRODUCTION table the same lineage seals with every risk reading BLOCKED, no CVaR bound (an entry fill could never
   be admitted) and a constant risk prefix, and neither table's seal verifies under the other.
+* a signed CVaR99* (the rising audit counterexample: LONG negative, SHORT positive) keeps both sides from the public
+  market to the sealed schedule v7, replays and re-verifies, and stays fail-closed on the PRODUCTION table.
 """
 
 from __future__ import annotations
@@ -225,13 +227,13 @@ def lineage_evidence(days: tuple, table: GovernedPaperRiskApprovalTable = rmt.TE
     return evidence, verification
 
 
-def fill_bounds(day: int) -> tuple:
+def fill_bounds(day: int, context: GovernedPaperRiskContext | None = None, item: object = None) -> tuple:
     """Day ``day``'s schedule v7 bounds, derived through the public risk functions over ``[G, E_{day+1})``."""
 
     with rmt.risk_table(rmt.TEST_ONLY_TABLE):
         market = derive_governed_paper_risk_market(
-            risk_context(day),
-            dataset=risk_days(day + 1)[day].seal_inputs.dataset,
+            risk_context(day) if context is None else context,
+            dataset=(risk_days(day + 1)[day] if item is None else item).seal_inputs.dataset,  # type: ignore[attr-defined]
             instrument=gpe.INS,
             start_ns=gpe.G,
             horizon_ns=gpe.instant(day + 1),
@@ -562,3 +564,57 @@ def test_on_the_production_table_every_risk_reading_is_blocked_and_no_fill_bound
         GovernedPaperExecutionStatus.READY,
         True,
     )
+
+
+# --- a signed CVaR99* lineage (P2-SIGNED-CVAR-OPPOSITE-SIDE-POISONING) ------------------------------------------------------
+
+
+def rising(k: int) -> Fraction:
+    """The SYNTHETIC audit counterexample path c_k = 100 + k/100: every daily return is positive, so the LONG CVaR99* is
+    negative and the SHORT one positive."""
+
+    return 100 + Fraction(k, 100)
+
+
+@functools.cache
+def rising_context(day: int) -> GovernedPaperRiskContext:
+    return context_of(world_g_bars(day, path=rising))
+
+
+@functools.cache
+def rising_days(count: int, production: bool = False) -> tuple:
+    """World G's first ``count`` days with the rising archive, under the TEST-ONLY risk table or the PRODUCTION one."""
+
+    if count == 0:
+        return ()
+    days = rising_days(count - 1, production)
+    return (*days, risk_day(days, rising_context(len(days)), PRODUCTION if production else rmt.TEST_ONLY_TABLE))
+
+
+def test_a_signed_cvar_lineage_seals_and_replays_both_sides_and_stays_fail_closed_on_production() -> None:
+    days = rising_days(2)
+    for day, item in enumerate(days):
+        seal = item.seal
+        assert (seal.schema_version, seal.status, seal.reason_codes) == (V11_SEAL, SEALED, ())
+        bounds = seal.schedule.cvar_bounds
+        assert bounds == fill_bounds(day, rising_context(day), item)  # the public path, both signed sides kept
+        assert bounds and all(Fraction(bound.long_unit_cvar) < 0 < Fraction(bound.short_unit_cvar) for bound in bounds)
+        assert seal.risk_archive_digest == rising_context(day).archive.archive_digest  # type: ignore[attr-defined]
+        if day:  # X1 over the signed readings
+            assert seal.risk_prefix_digest_open == days[day - 1].seal.risk_prefix_digest_close
+        verification = verified(item)
+        assert (verification.intact, verification.reason_codes) == (True, ())
+    evidence, verification = lineage_evidence(days)
+    assert (evidence.schema_version, evidence.status, verification.intact) == (
+        V11_EVIDENCE,
+        GovernedPaperExecutionStatus.READY,
+        True,
+    )
+    # the same signed contexts on the PRODUCTION table: no bound, a constant prefix, and only that table re-verifies
+    production = rising_days(2, production=True)
+    for item in production:
+        assert (item.seal.status, item.seal.schedule.cvar_bounds) == (SEALED, ())
+        assert item.seal.risk_prefix_digest_open == item.seal.risk_prefix_digest_close
+        assert verified(item, PRODUCTION).intact is True
+        assert verified(item).intact is False
+    assert verified(days[1], PRODUCTION).intact is False

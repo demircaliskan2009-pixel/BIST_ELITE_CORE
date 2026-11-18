@@ -14,6 +14,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import inspect
+from collections import OrderedDict
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
@@ -23,6 +24,7 @@ from types import SimpleNamespace
 import pytest
 
 import crypto_core.validation.governed_paper_risk_measurement as risk
+import crypto_core.validation.historical_execution_economics as economics
 from crypto_core.strategy.source_packet import SourcePacketRightsStatus
 from crypto_core.validation.governed_paper_entry_safety import (
     GOVERNED_PAPER_ENTRY_SAFETY_KILL_SWITCH_RULE_SET_DIGEST,
@@ -1070,7 +1072,7 @@ def test_schedule_v7_bounds_exist_only_on_schedule_v7_and_never_in_a_legacy_payl
     for bound in (
         HistoricalExecutionCvarBound(lifet.ANCHOR, lifet.ANCHOR, "0", "0"),
         HistoricalExecutionCvarBound(lifet.ANCHOR, lifet.HOLD_END, "1/2", "2/4"),
-        HistoricalExecutionCvarBound(lifet.ANCHOR, lifet.HOLD_END, "-1", "0"),
+        HistoricalExecutionCvarBound(lifet.ANCHOR, lifet.HOLD_END, "-0", "0"),
         HistoricalExecutionCvarBound(lifet.ANCHOR, lifet.HOLD_END, "1" * 4_001, "0"),
     ):
         with pytest.raises(HistoricalExecutionEconomicsError):
@@ -1298,6 +1300,230 @@ def test_t1_t2_a_trade_starts_at_its_first_entry_fill_and_exits_and_refused_entr
             f"trades_today={count};order_in_flight=false"
         )
     assert first // DAY + 1 == second // DAY
+
+
+# --- signed CVaR99* (C-3, C-5, C-8) through the public path (P2-SIGNED-CVAR-OPPOSITE-SIDE-POISONING) -------------------
+
+RISING, FALLING = Fraction(1, 100), Fraction(-1, 100)
+
+
+def linear_path(step: Fraction):  # noqa: ANN201
+    """The SYNTHETIC audit counterexample family: daily MARK closes c_k = 100 + step x k (every return of one sign)."""
+
+    def path(k: int) -> Fraction:
+        return 100 + step * k
+
+    return path
+
+
+@functools.cache
+def monotone_archive(step: Fraction) -> HistoricalOhlcBarArchive:
+    """Daily bars 0..263 of ``linear_path(step)``: bar 260 closes at the lifecycle ANCHOR (a UTC midnight) and bar 263
+    at HOLD_END, so every span of the HOLD world reads 253 consecutive closes."""
+
+    name = "rising" if step > 0 else "falling"
+    return daily_archive(263, origin=lifet.ANCHOR - 260 * DAY, path=linear_path(step), archive_id=f"synthetic-{name}")
+
+
+@functools.cache
+def monotone_market(step: Fraction):  # noqa: ANN201
+    return market_of(monotone_archive(step), lifet.ANCHOR, lifet.HOLD_END)
+
+
+@pytest.mark.parametrize(("step", "long_sign", "short_sign"), [(RISING, -1, 1), (FALLING, 1, -1)])
+def test_signed_cvar_survives_the_public_path_to_the_engine(step: Fraction, long_sign: int, short_sign: int) -> None:
+    market = monotone_market(step)
+    # every readable day keeps both sides with their signs: none is unrepresentable
+    assert market.cvar_days and {item.reason for item in market.cvar_days} == {""}
+    for day in market.cvar_days:
+        assert Fraction(day.long_cvar) * long_sign > 0 and Fraction(day.short_cvar) * short_sign > 0  # type: ignore[arg-type]
+    units = {end: (long, short) for end, long, short in market.cvar_units}
+    assert set(units) == {item.series_end_ns for item in market.cvar_days}
+    # an independent exact oracle of the span reading bars 8..260: the public estimators over the closes themselves
+    closes = [linear_path(step)(k) for k in range(8, 261)]
+    returns = [closes[252 - age] / closes[251 - age] - 1 for age in range(252)]
+    digests = {item.close_time_ns: item.bar_digest for item in monotone_archive(step).bars}
+    seed = governed_paper_risk_mc_seed(
+        policy_digest=risk_policy().policy_digest,
+        source_digest=DAILY_SOURCE_DIGEST,
+        interval_ns=DAY,
+        series_end_ns=lifet.ANCHOR,
+        close_digests=[digests[lifet.ANCHOR + (k - 260) * DAY] for k in range(8, 261)],
+    )
+    oracle = (
+        governed_paper_risk_cvar_star([-item for item in returns], seed).cvar,
+        governed_paper_risk_cvar_star(returns, seed).cvar,
+    )
+    assert units[lifet.ANCHOR] == oracle and oracle[0] * long_sign > 0 and oracle[1] * short_sign > 0
+    # fill bounds: one per readable span, from G to the horizon, each the exact signed canonical text of its units
+    bounds = governed_paper_risk_fill_bounds(market)
+    readable = [item for item in market.cvar_segments if not item.reason]
+    assert [(item.window_start_ns, item.window_end_ns) for item in bounds] == [
+        (item.start_ns, item.end_ns) for item in readable
+    ]
+    assert (bounds[0].window_start_ns, bounds[-1].window_end_ns) == (lifet.ANCHOR, lifet.HOLD_END)
+    for bound, segment in zip(bounds, readable, strict=True):
+        long, short = units[segment.series_end_ns]  # type: ignore[index]
+        assert (bound.long_unit_cvar, bound.short_unit_cvar) == (str(long), str(short))
+        assert (Fraction(bound.long_unit_cvar), Fraction(bound.short_unit_cvar)) == (long, short)  # exact round trip
+    # the canonical schedule v7 and its payload carry the signed texts unchanged
+    result, world = hold_v2()
+    schedule = canonical_historical_execution_admission_schedule(v7_schedule(world, bounds))
+    assert schedule.cvar_bounds == bounds
+    assert [
+        (item["long_unit_cvar"], item["short_unit_cvar"])
+        for item in historical_execution_admission_schedule_to_dict(schedule)["cvar_bounds"]  # type: ignore[union-attr]
+    ] == [(item.long_unit_cvar, item.short_unit_cvar) for item in bounds]
+    # the engine consumes them: the HOLD world's SHORT entries are admitted (never unproven), exactly as under zero units
+    outcome = governed_v7(result, world, bounds)
+    reference = governed_v7(result, world, whole_hold(0, 0))
+    assert entry_fill(outcome).outcome is HistoricalExecutionFillOutcome.FILLED
+    assert (outcome.position_transitions, outcome.trades) == (reference.position_transitions, reference.trades)
+    assert not [item for item in outcome.fills if (item.reason or "").startswith("governed_paper_cvar")]
+
+
+def test_signed_units_keep_the_c10_whole_refusal_and_a_negative_side_is_never_unproven() -> None:
+    result, world = hold_v2()
+    fill = entry_fill(governed_v7(result, world, whole_hold(0, 0)))
+    boundary = HISTORICAL_EXECUTION_CVAR_BUDGET * candidate_equity(fill) / 100  # |q| = 1, fill mark 100
+    refused = governed_v7(result, world, whole_hold(-1, boundary))  # a negative LONG unit never helps the SHORT
+    rejected = entry_fill(refused)
+    assert (rejected.outcome, rejected.reason) == (
+        HistoricalExecutionFillOutcome.REJECTED,
+        "governed_paper_cvar_budget_exhausted_at_fill",
+    )
+    assert refused.position_transitions == () and refused.fee_cashflows == ()  # whole: no fee, no transition
+    for long_unit, short_unit in ((boundary, -1), (-1, -1), (0, Fraction(-1, 10**30)), (boundary, Fraction(-7, 3))):
+        admitted = entry_fill(governed_v7(result, world, whole_hold(long_unit, short_unit)))
+        assert (admitted.outcome, admitted.filled_quantity) == (
+            HistoricalExecutionFillOutcome.FILLED,
+            fill.filled_quantity,
+        )
+
+
+def test_c10_reads_no_cvar_fraction_of_a_non_positive_equity() -> None:  # C-20
+    """White-box: R-5 passes only at zero risk, so a zero equity reaches C-10; a negative unit never admits it there."""
+
+    simulation = SimpleNamespace(
+        risk_bounds=True,
+        fee_bps=Fraction(0),
+        floor=Fraction(0),
+        cvar_starts=[0],
+        cvar_bounds=((0, 10**18, Fraction(-1), Fraction(-1)),),
+        _entry_stop=lambda order, quantity, price: Fraction(101),
+    )
+    admission = economics._GovernedPaperSimulation._risk_fill_admission  # noqa: SLF001
+    # a SHORT of 1 whose mark (102) is already beyond its stop (101), with no fee: R-1 risk = 0
+    args = (object(), Fraction(-1), Fraction(102), Fraction(102))
+    assert admission(simulation, *args, Fraction(0), 10) == "governed_paper_cvar_unproven_at_fill"
+    assert admission(simulation, *args, Fraction(-5), 10) == "governed_paper_open_risk_exceeded_at_fill"
+    assert admission(simulation, *args, Fraction(10_000), 10) is None
+
+
+def test_signed_unit_cvar_text_is_canonical_exact_and_bounded_without_counting_the_sign() -> None:
+    _, world = hold_v2()
+    v7 = v7_schedule(world)
+
+    def declared(long_text: str, short_text: str = "0") -> HistoricalExecutionAdmissionSchedule:
+        bound = HistoricalExecutionCvarBound(lifet.ANCHOR, lifet.HOLD_END, long_text, short_text)
+        return canonical_historical_execution_admission_schedule(replace(v7, cvar_bounds=(bound,)))
+
+    nines = 10**4_000 - 1  # 4,000 digits: the largest part the limit admits
+    for value in (
+        Fraction(-1, 2),
+        Fraction(-3),
+        Fraction(0),
+        Fraction(7, 3),
+        Fraction(nines),
+        Fraction(-nines),
+        Fraction(1, nines),
+        Fraction(-nines, nines - 1),
+    ):
+        text = historical_execution_risk_rational_text(value)
+        assert text == str(value) and Fraction(text) == value  # exact canonical round trip, the sign kept
+        assert declared(text, text).cvar_bounds[0].long_unit_cvar == text  # type: ignore[arg-type]
+    widest = historical_execution_risk_rational_text(Fraction(-nines, nines - 1))
+    assert len(widest) == 8_002  # type: ignore[arg-type] - a sign, 4,000 digits, "/", 4,000 digits
+    for value in (Fraction(10**4_000), Fraction(-(10**4_000)), Fraction(1, 10**4_000), Fraction(-1, 10**4_000)):
+        assert historical_execution_risk_rational_text(value) is None  # 4,001 digits in one part: unrepresentable
+        with pytest.raises(HistoricalExecutionEconomicsError, match="admission_schedule_malformed:long_unit_cvar$"):
+            declared(str(value))
+    for value in (-1, 0.5, "-1/2", None):
+        assert historical_execution_risk_rational_text(value) is None  # type: ignore[arg-type] - only a Fraction
+    for bad in (
+        "-0",
+        "+1",
+        "01",
+        "-01",
+        " 1",
+        "1 ",
+        "1/1",
+        "2/4",
+        "-2/4",
+        "0/1",
+        "-0/1",
+        "1/02",
+        "-1/1",
+        "1/0",
+        "-1/0",
+        "1/-2",
+        "--1",
+        "-",
+        "",
+        "/2",
+        "1/",
+        "1/2/3",
+        "1_000",
+        "1e3",
+        "0.5",
+        "1 / 2",
+        "١",
+    ):
+        with pytest.raises(HistoricalExecutionEconomicsError, match="admission_schedule_malformed:long_unit_cvar$"):
+            declared(bad)
+        with pytest.raises(HistoricalExecutionEconomicsError, match="admission_schedule_malformed:short_unit_cvar$"):
+            declared("0", bad)
+    # legacy schedules never carry a bound, signed or not
+    v6 = replace(
+        v7, schema_version=HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_ADMISSION_SCHEDULE_SCHEMA_VERSION, cvar_bounds=()
+    )
+    with pytest.raises(HistoricalExecutionEconomicsError, match="cvar_bounds_need_schema_v7"):
+        canonical_historical_execution_admission_schedule(replace(v6, cvar_bounds=whole_hold(-1, Fraction(-1, 3))))
+
+
+def test_a_genuinely_unrepresentable_side_still_withholds_the_whole_day_and_its_span(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real = risk._estimate  # noqa: SLF001
+    sides = []
+
+    def unrepresentable_long(losses: list[Fraction], counts: object) -> object:
+        estimate = real(losses, counts)  # type: ignore[arg-type]
+        sides.append(len(sides) % 2)  # _day estimates LONG (0) then SHORT (1)
+        return replace(estimate, cvar=Fraction(-(10**4_000))) if sides[-1] == 0 else estimate
+
+    monkeypatch.setattr(risk, "_estimate", unrepresentable_long)
+    monkeypatch.setattr(risk, "_MARKET_MEMO", OrderedDict())
+    market = market_of(monotone_archive(RISING), lifet.ANCHOR, lifet.HOLD_END)
+    assert market.cvar_days and {item.reason for item in market.cvar_days} == {"cvar_value_unrepresentable"}
+    assert {(item.long_cvar, item.short_cvar) for item in market.cvar_days} == {(None, None)}  # never one-sided
+    assert (market.cvar_units, governed_paper_risk_fill_bounds(market)) == ((), ())
+    assert {(item.series_end_ns, item.reason) for item in market.cvar_segments} == {
+        (None, "cvar_value_unrepresentable")
+    }
+
+
+def test_signed_cvar_keeps_the_c9_c12_c15_arithmetic_and_c11_reads_a_zero_severity() -> None:
+    # a LONG candidate of 1 at the mark 100 over 10,000 with a long unit of -3: CVaR99* = -0.03, never clamped
+    checks, duties = cvar_checks(-3, 5, facts_of(candidate=1))
+    assert checks["NT-R05"] == (R.PASS, "-0.030000000000000000", "portfolio_cvar99_below_5pct_of_nav")
+    assert checks["HZ-CVAR"] == (R.PASS, "-0.030000000000000000", "intraday_horizon_cvar99_below_2pct_of_nav_hzb_1")
+    assert checks["STRESS-HV"] == (R.PASS, "-0.045000000000000000", "high_vol_stress_cvar99_below_8pct_of_nav")
+    assert duties == ()
+    # C-11 is min(1, max(0, CVaR99* / 0.05)) on the current holding: a held LONG with a negative unit reads 0
+    held = facts_of(quantity=1, candidate=1)
+    assert risk._cvar_severity(held, "", (Fraction(-3), Fraction(5))) == (Fraction(0), "")  # noqa: SLF001
+    assert risk._cvar_severity(held, "", (Fraction(1), Fraction(-5))) == (Fraction(1, 5), "")  # noqa: SLF001
 
 
 # --- the system state v2 (S3, S6) -------------------------------------------------------------------------------------------

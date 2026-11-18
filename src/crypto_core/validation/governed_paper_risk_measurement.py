@@ -434,7 +434,8 @@ class GovernedPaperRiskCvarEstimate:
 class GovernedPaperRiskCvarDay:
     """The unit CVaR99* of the series ending at one daily close (``series_end_ns``, a UTC midnight), per side.
 
-    ``long_cvar`` and ``short_cvar`` are exact canonical rational texts, None with ``reason`` when unrepresentable.
+    ``long_cvar`` and ``short_cvar`` are exact canonical signed rational texts (a negative CVaR99* is a tail expected
+    gain), both None with ``reason`` when either side is unrepresentable.
     ``closes_digest`` digests the 253 daily-close bar digests oldest first and ``seed`` is the MC-3 seed (hex).
     """
 
@@ -643,7 +644,9 @@ def _require_text(value: object, name: str) -> str:
 
 
 def _exact(value: Fraction) -> str | None:
-    """The canonical exact text of a non-negative value, None when it is too large to write (an unrepresentable value)."""
+    """The canonical exact signed text of a value, None only when a part is too large to write (an unrepresentable
+    value). A CVaR99* is a signed loss estimate (C-3, C-5, C-8): a negative one is exact, never unrepresentable; S3 and
+    S6 severities reach here already within ``[0, 1]`` (C-11, L-8)."""
 
     return historical_execution_risk_rational_text(value)
 
@@ -1094,6 +1097,8 @@ def _day(
 
     long = _estimate([-item for item in returns], counts)
     short = _estimate(returns, counts)
+    # both sides are kept with their signs (a negative CVaR99* is a valid estimate); only a side too large to write
+    # withholds the day, and then both sides: no span ever declares a one-sided bound
     long_text, short_text = _exact(long.cvar), _exact(short.cvar)
     unrepresentable = long_text is None or short_text is None
     record = GovernedPaperRiskCvarDay(

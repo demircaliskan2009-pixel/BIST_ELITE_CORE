@@ -217,9 +217,9 @@ bounds never reach a reduction, a close or a protective close-only fill, and a s
 so its payload, digest and re-run are exactly the accepted ones.
 
 Fill-time risk bounds (``S1_NATIVE_RISK_MEASUREMENT_CONSTRUCTION_V1``, schedule v7). Schedule v7 is schedule v6 with the
-declared CVaR bounds, each an ordered, disjoint window with the exact CVaR99* of a unit LONG and a unit SHORT holding
-(canonical ``str(Fraction)`` texts); its re-run's outcome is v4. After every earlier rule admitted it, an
-exposure-increasing fill is
+declared CVaR bounds, each an ordered, disjoint window with the exact signed CVaR99* of a unit LONG and a unit SHORT
+holding (canonical ``str(Fraction)`` texts; a negative value is a tail expected gain); its re-run's outcome is v4. After
+every earlier rule admitted it, an exposure-increasing fill is
 
 * refused (``governed_paper_open_risk_exceeded_at_fill``) when its FCD-01 open risk at the stop strictly exceeds 4% of the
   publication-visible candidate equity (PRDV4 §1.21 NT-R03, §8.2; RECORD B R-5, equality admits): on the exact post-fill
@@ -228,7 +228,8 @@ exposure-increasing fill is
   floor. A fill without such a stop (a policy v1, no ATR reading) is refused (``governed_paper_open_risk_unproven_at_fill``);
 * refused (``governed_paper_cvar_budget_exhausted_at_fill``) when its post-fill CVaR99*, the declared unit value of its
   side times ``|q| x fill mark / candidate equity``, is at or above 5% (§1.21 NT-R05, §1.18; RECORD B C-10), and
-  (``governed_paper_cvar_unproven_at_fill``) when no declared bound contains its instant.
+  (``governed_paper_cvar_unproven_at_fill``) when no declared bound contains its instant or the candidate equity is not
+  positive (C-20: no CVaR fraction exists).
 
 A refusal is whole, never a resize; the bounds never reach a reduction, a close or a protective close-only fill, and a
 schedule v2-v6 carries no CVaR bound, so its payload, digest and re-run are exactly the accepted ones.
@@ -3431,10 +3432,12 @@ class HistoricalExecutionFlattenWindow:
 class HistoricalExecutionCvarBound:
     """One declared fill-time CVaR bound ``[window_start_ns, window_end_ns)`` (schema v7 only).
 
-    ``long_unit_cvar`` and ``short_unit_cvar`` are canonical exact rational texts (``str(Fraction)``) of the CVaR99* of a
-    unit LONG and a unit SHORT holding (``|q| x mark / equity = 1``) readable inside the window. An exposure-increasing
-    fill executing inside the window is refused when its post-fill CVaR99*, the unit value of its side times
-    ``|q| x fill mark / candidate equity``, is at or above 5%; one executing outside every window is refused as unproven.
+    ``long_unit_cvar`` and ``short_unit_cvar`` are canonical exact signed rational texts (``str(Fraction)``) of the
+    CVaR99* of a unit LONG and a unit SHORT holding (``|q| x mark / equity = 1``) readable inside the window; a CVaR99* is
+    a signed loss estimate, so a negative value (a tail expected gain) is valid. An exposure-increasing fill executing
+    inside the window is refused when its post-fill CVaR99*, the unit value of its side times
+    ``|q| x fill mark / candidate equity``, is at or above 5%; one executing outside every window, or with a candidate
+    equity that is not positive (no CVaR fraction exists), is refused as unproven.
     """
 
     window_start_ns: int
@@ -3924,8 +3927,9 @@ class _GovernedPaperSimulation(_Simulation):
         excursion; risk = ``|q| x sgn(q) x (m - x) + |q| x x x c`` with ``x`` the stop while the mark is on the safe side of
         it, else the mark, and ``c`` the policy's taker fee plus slippage floor in bps / 10,000; strictly above 4% refuses
         (``governed_paper_open_risk_exceeded_at_fill``), and a fill without a proven R-1 stop is refused as unproven. C-10:
-        the declared bound containing the fill instant gives the unit CVaR99* of the post-fill side; at or above 5% refuses
-        (``governed_paper_cvar_budget_exhausted_at_fill``), and a fill outside every bound is refused as unproven. A
+        the declared bound containing the fill instant gives the signed unit CVaR99* of the post-fill side; at or above 5%
+        refuses (``governed_paper_cvar_budget_exhausted_at_fill``), and a fill outside every bound, or with a candidate
+        equity that is not positive (C-20: a negative unit never proves a fraction of it), is refused as unproven. A
         refusal is whole, never a resize, and never reaches a reduction, a close or a protective close-only fill.
         """
 
@@ -3941,7 +3945,7 @@ class _GovernedPaperSimulation(_Simulation):
         if risk > HISTORICAL_EXECUTION_OPEN_RISK_CAP * equity:
             return "governed_paper_open_risk_exceeded_at_fill"
         index = bisect.bisect_right(self.cvar_starts, time_ns) - 1
-        if index < 0 or time_ns >= self.cvar_bounds[index][1]:
+        if index < 0 or time_ns >= self.cvar_bounds[index][1] or equity <= 0:
             return "governed_paper_cvar_unproven_at_fill"
         unit = self.cvar_bounds[index][2] if sign > 0 else self.cvar_bounds[index][3]
         if unit * abs(post_quantity) * mark_price >= HISTORICAL_EXECUTION_CVAR_BUDGET * equity:
@@ -4046,37 +4050,52 @@ def _canonical_protective_ledger_bounds(value: HistoricalExecutionAdmissionSched
 
 
 def historical_execution_risk_rational_text(value: Fraction) -> str | None:
-    """The canonical exact text (``str(Fraction)``) of a non-negative v7 CVaR bound, or None when either part exceeds the
-    bound's digit limit (such a value is never declared: its fill stays unproven)."""
+    """The canonical exact text (``str(Fraction)``) of a v7 unit CVaR99*, or None when either part exceeds the bound's
+    digit limit (such a value is never declared: its fill stays unproven).
 
-    if type(value) is not Fraction or value < 0:
+    A CVaR99* is a signed loss estimate (RECORD B C-3, C-5, C-8): a negative value, a tail expected gain, is exact and
+    valid, never unrepresentable. The limit counts the decimal digits of the absolute numerator and of the denominator,
+    never the sign.
+    """
+
+    if type(value) is not Fraction:
         return None
     # a part of at most the limit's decimal digits is below 10^limit; the comparison needs no int-to-text conversion
-    if value.numerator >= _RISK_RATIONAL_BOUND or value.denominator >= _RISK_RATIONAL_BOUND:
+    if abs(value.numerator) >= _RISK_RATIONAL_BOUND or value.denominator >= _RISK_RATIONAL_BOUND:
         return None
     return str(value)
 
 
-def _canonical_risk_rational(text: object, field_name: str) -> None:
-    """A canonical exact non-negative rational text of at most the v7 digit limit per part."""
+def _risk_rational_part(part: str) -> bool:
+    """One unsigned part of a v7 rational text: 1 to the digit limit of ASCII decimal digits (checked before parsing)."""
 
-    limit = 2 * _RISK_RATIONAL_DIGITS + 1
-    if type(text) is not str or not text or len(text) > limit or text.strip() != text:
+    return 0 < len(part) <= _RISK_RATIONAL_DIGITS and part.isascii() and part.isdigit()
+
+
+def _canonical_risk_rational(text: object, field_name: str) -> None:
+    """A canonical exact signed rational text (``str(Fraction(text)) == text``) of at most the v7 digit limit per part.
+
+    The shape is checked before any parse: an optional ``-``, then ASCII digits, then an optional ``/`` and ASCII
+    digits, each part at most the digit limit (the sign is not a digit). Canonical equality then refuses ``-0``, leading
+    zeros, ``/1`` and a reducible fraction; a zero denominator is malformed.
+    """
+
+    if type(text) is not str:
         raise _fail(f"admission_schedule_malformed:{field_name}")
-    numerator, _, denominator = text.partition("/")
-    if len(numerator) > _RISK_RATIONAL_DIGITS or len(denominator) > _RISK_RATIONAL_DIGITS:
+    numerator, slash, denominator = (text[1:] if text.startswith("-") else text).partition("/")
+    if not _risk_rational_part(numerator) or (slash and not _risk_rational_part(denominator)):
         raise _fail(f"admission_schedule_malformed:{field_name}")
     try:
         value = Fraction(text)
     except (ValueError, ZeroDivisionError) as exc:
         raise _fail(f"admission_schedule_malformed:{field_name}") from exc
-    if str(value) != text or value < 0:
+    if str(value) != text:
         raise _fail(f"admission_schedule_malformed:{field_name}")
 
 
 def _canonical_risk_bounds(value: HistoricalExecutionAdmissionSchedule) -> None:
-    """Schema v7's CVaR bounds (ordered, disjoint windows of canonical non-negative exact rationals); none on another
-    schema. Schema v7 may declare none: every exposure-increasing fill is then refused as unproven."""
+    """Schema v7's CVaR bounds (ordered, disjoint windows of canonical exact signed rationals); none on another schema.
+    Schema v7 may declare none: every exposure-increasing fill is then refused as unproven."""
 
     bounds = value.cvar_bounds
     if type(bounds) is not tuple:
