@@ -2,11 +2,12 @@
 
 > Canonical, executable operating protocol for `crypto_core` inside `demircaliskan2009-pixel/BIST_ELITE_CORE`.
 > The single canonical active authority is **section 24** (`CRYPTO_CORE_AGENT_OS_V1`, active content
-> `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1` and
-> `GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1`); sections 1-19 bind where they agree with it and section 24
-> wins on any conflict; sections 20-23 are HISTORICAL. **Doctrine precedence:** `AGENTS.md` (entrypoint and
-> durable rails) → section 24 → host adapters (`CLAUDE.md` / `CLAUDE.local.md`,
-> `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`, `.codex/skills/crypto-core-max-safe/SKILL.md`)
+> `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`,
+> `GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1` and `CODEX_EXECUTOR_QUOTA_FALLBACK_V1`); sections 1-19 bind where
+> they agree with it and section 24 wins on any conflict; sections 20-23 are HISTORICAL. **Doctrine
+> precedence:** `AGENTS.md` (entrypoint and durable rails) → section 24 → host adapters (`CLAUDE.md` /
+> `CLAUDE.local.md`, `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`,
+> `.codex/skills/crypto-core-max-safe/SKILL.md`, `.codex/skills/crypto-core-executor-fallback/SKILL.md`)
 > → prompting guides → companion procedure docs (`docs/crypto_core/agent_lessons.md`,
 > `docs/crypto_core/agent_prompts/token_efficiency_v2.md`), which carry no routing, sizing, budget or merge
 > authority.
@@ -33,12 +34,14 @@ wins.
 |---|---|
 | **ChatGPT controller** | Controller and router, architecture adjudication, prompt compiler, evidence judge, live GitHub verification, the Sol audit preflight packet and the CI/status polling around audits, contradiction detection, merge-readiness judgement, exactly one next action; severity adjudication under section 24.4; an independent audit only as the last-resort non-protected fallback of section 24.4. |
 | **Claude Opus 5.5** (`claude-opus-5-5`) | Primary deep semantic implementation and repair, with the repo-native navigation, dependency-tracing, mechanical, test and local-validation work of that same task. |
+| **Codex executor fallback** (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`; adopted id `gpt-6.2-astra`) | CONDITIONAL: one whole implementation stage or the one consolidated repair stage, only when the controller routes it after fresh Claude Opus 5.5 quota-block or unavailability evidence and every section 24.3 activation gate holds; never an audit, never a Sol-family model, never an automatic switch. |
 | **GPT-6.1 Sol** (`gpt-6.1-sol`) | PRIMARY independent auditor (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`): READ_ONLY exhaustive whole-contract audit and the one whole-contract re-audit, and for protected work the sole protected T4 audit in the same execution; an audit-only lane, never implementation, repair or routine status work. |
 | **ChatGPT Work** | Substantial multi-step execution when a cloud browser/computer, many files, apps or evidence collection materially help; never governance authority. |
 | **Deep Research** | Current load-bearing external facts only; advisory. |
 
 GPT-6 Astra (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT`) and Codex GPT-5.6 Sol
 (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_ROUTING`) are no active lane, default, fallback or dependency (section 24.3).
+GPT-6.2 Astra (`gpt-6.2-astra`) is a different model id, routable only as that conditional executor.
 
 Every serious prompt/report carries the runtime-proof block of section 24.12. Model strength is never proof.
 
@@ -122,7 +125,8 @@ git status --short --branch                # confirm: on the topic branch, clean
 
 **Branch invariant (implementation mode — always holds):**
 - `main` is checked out **only** for precheck / base-SHA proof — never edited, never committed on.
-- Claude **creates and switches to a topic branch** (`git switch -c <topic-branch>`) before the first edit.
+- The routed executor (Claude Opus 5.5, or a section 24.3 Codex executor) **creates and switches to a topic
+  branch** (`git switch -c <topic-branch>`) before the first edit.
 - **All commits and pushes happen on the topic branch**; never `git commit` on `main`, never push to `origin/main`.
 - The PR is opened **from the topic branch into `main`** (`gh pr create --base main --head <topic-branch>`).
 
@@ -163,9 +167,9 @@ Run **only** from an explicit closeout prompt that names the PR and the exact au
 - The independent audit (GPT-6.1 Sol by default, section 24.4) is exhaustive and materiality-aware
   (`COMPLETE_BLOCKER_COLLECTION`, `AUDIT_MATERIALITY_BOUNDARY_V1`): it returns the complete current material P1/P2
   set of the declared contract in one pass, never one finding at a time.
-- Automated Codex PR review comments run **asynchronously** after a push and are review threads for controller adjudication, not the routed independent audit; findings may not exist when Claude's turn ends. Claude inspects threads that exist at terminal CI and reports `0 threads (review may post later)` if none.
+- Automated Codex PR review comments run **asynchronously** after a push and are review threads for controller adjudication, not the routed independent audit; findings may not exist when the executor's turn ends. The routed executor (Claude Opus 5.5, or a section 24.3 Codex executor) inspects threads that exist at terminal CI and reports `0 threads (review may post later)` if none.
 - Inspect via GraphQL: `reviewThreads(first:n){ nodes{ id isResolved isOutdated path line comments } }` + `reviews`.
-- The auditor emits the report in §10. ChatGPT relays the complete valid material finding set (with thread IDs) in the single consolidated repair prompt (section 24.8); Claude does not wait in-turn for review.
+- The auditor emits the report in §10. ChatGPT relays the complete valid material finding set (with thread IDs) in the single consolidated repair prompt (section 24.8); the executor does not wait in-turn for review.
 
 ## 9. ChatGPT Controller Gate
 
@@ -279,7 +283,8 @@ Lessons are persisted, not improvised. Full procedure + the running ledger live 
 
 Active-work doctrine precedence: **`AGENTS.md` → section 24 of this file → the host adapters (`CLAUDE.md` +
 untracked local `CLAUDE.local.md`, `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`,
-`.codex/skills/crypto-core-max-safe/SKILL.md`) → the prompting guides**, with
+`.codex/skills/crypto-core-max-safe/SKILL.md`, `.codex/skills/crypto-core-executor-fallback/SKILL.md`) → the
+prompting guides**, with
 `docs/crypto_core/agent_lessons.md` as a lessons companion that holds no authority. On conflict section 24
 wins, and between safety rules the **stricter safety rule wins**.
 
@@ -674,8 +679,11 @@ materiality, fixed-point and lifecycle rules of 24.4, 24.5 and 24.8 and the tran
 lane is superseded), by `CLAUDE_OPUS_5_5_CONTROL_PLANE_UPGRADE_V1` (the Claude lane identity of 24.3, its effort
 policy in 24.12 and the transition rule of 24.14) and by `GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1` (the GPT-6.1
 Sol audit lane of 24.3 and 24.4, `SOL_AUDIT_USAGE_EFFICIENCY_V1`, the prompt compaction and compact audit handoff
-of 24.6, the Sol effort, speed, subagent and telemetry policies of 24.12 and the transition rule of 24.14). It is
-the single canonical active authority for how crypto_core
+of 24.6, the Sol effort, speed, subagent and telemetry policies of 24.12 and the transition rule of 24.14) and by
+`CODEX_EXECUTOR_QUOTA_FALLBACK_V1` (the conditional Codex executor lane, adopted ids, activation gates, stage and
+interrupted-stage rules of 24.3, the independence sentence of 24.4, the executor handoff fields of 24.6, the executor
+adapter of 24.7, the budget wording of 24.8, `CODEX_EXECUTOR_EFFORT_POLICY` of 24.12 and the transition rule of
+24.14). It is the single canonical active authority for how crypto_core
 development work is routed, sized, audited, repaired, stopped and resumed. Sections 1-19 bind where they agree
 with it; on any conflict this section wins, and between safety rules the stricter rule wins. Sections 20-23 are
 HISTORICAL/SUPERSEDED. The kernel governs only the operational workflow needed to develop crypto_core safely
@@ -692,7 +700,8 @@ and quickly (24.13).
   tool, audit verdict or green CI grants, implies or widens it. Standard merge only.
 - `DOCTRINE_PRECEDENCE`: `AGENTS.md` (entrypoint and durable rails) → this section → the host adapters
   (`CLAUDE.md`, `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`,
-  `.codex/skills/crypto-core-max-safe/SKILL.md`) → the prompting guides (`model_prompting_guide.md`,
+  `.codex/skills/crypto-core-max-safe/SKILL.md`, `.codex/skills/crypto-core-executor-fallback/SKILL.md`) → the
+  prompting guides (`model_prompting_guide.md`,
   `agent_prompts/opus5_prompting_playbook.md`) → companion procedure docs. Adapters and guides apply this
   section and never restate it as authority. Companion procedure docs (`token_efficiency_playbook.md`,
   `agent_prompts/token_efficiency_v2.md`, `deep_research_protocol.md`, `agent_lessons.md`) carry no routing,
@@ -722,6 +731,7 @@ restates it as authority. The council is closed: a model or tool not listed here
 |---|---|---|
 | **ChatGPT controller** | Controller and router; architecture adjudication; prompt compiler (24.6); evidence judge; severity adjudication under `AUDIT_MATERIALITY_BOUNDARY_V1` (24.4); live GitHub verification through the connector/`gh`; the compact `SOL_AUDIT_PREFLIGHT_PACKET` and the CI/status polling around every audit (24.4); contradiction detection; merge-readiness judgement; exactly one next action; an independent audit only as the last resort of `NON_PROTECTED_AUDIT_FALLBACK` (24.4) | Product implementation; any independent audit outside that fallback; auditing a candidate it implemented or repaired; any protected audit; a substitute for local tests or unverified repository state; GitHub mutation without an exact human action authorization; merge authority |
 | **Claude Opus 5.5** (`claude-opus-5-5`) | Primary deep semantic IMPLEMENTATION and REPAIR, including the single consolidated repair of a candidate (24.8) and the `ROOT_CAUSE_ESCAPE` implementation (24.8), together with the repo-native navigation, dependency-tracing, mechanical, static-inspection, test-generation, local validation and CI-diagnosis work that belongs to that same task | Any independent audit of its own work; any protected audit; controller, governance or merge authority |
+| **Codex executor fallback** (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`; the adopted executor id `gpt-6.2-astra`, GPT-6.2 Astra, on a Codex host) | CONDITIONAL implementation and repair executor for ONE whole specialist stage — an IMPLEMENTATION, including a `ROOT_CAUSE_ESCAPE` implementation, or the candidate's `ONE_CONSOLIDATED_REPAIR` (24.8) — only when the ChatGPT controller explicitly routes that stage to it because the Claude lane cannot run it and every activation gate below holds, under the same prompt shape, validation ladder, budget slot and gates as the Claude stage it replaces | Any audit or re-audit; any Sol-family model id; a route without its recorded activation; switching or being switched mid-stage; mutation concurrent with any other writer; automatic or self-selected routing; controller, governance or merge authority |
 | **GPT-6.1 Sol** (`gpt-6.1-sol`, on the ChatGPT Work/Codex host) | PRIMARY independent auditor (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`, 24.4): the READ_ONLY fresh-context exhaustive whole-contract audit and the one whole-contract re-audit of serious candidates, and for protected work the sole protected T4 `CLASS_C_CROSS_CONTRACT` audit in the same execution, run under `SOL_AUDIT_USAGE_EFFICIENCY_V1` (24.4). Requested effort `Ultra`, mandatory for protected audits; speed `STANDARD`; subagents 0 by default (24.12) | Mutation; implementation or repair; routine GitHub status, CI polling, thread enumeration, repository archaeology or mechanical work that belongs to the controller or Claude; auditing a candidate that it, or any execution on its model id, implemented or repaired; any reassignment of protected T4 to another lane |
 | **ChatGPT Work** | Substantial multi-step execution when a cloud browser/computer, many files, apps or evidence collection materially help, under the same prompt shape (24.6) and gates | Governance authority; accepted state; merge authority |
 | **Deep Research** | Current load-bearing external facts only (24.9) | Repository/PR/CI state; implementation; mutation; gate waivers |
@@ -735,10 +745,11 @@ Non-protected work continues under 24.4.
 `HOST_UI_LABELS_ARE_LITERAL` — a host's effort or mode label is recorded verbatim and never mapped across model
 families, to an API effort enum, or to `max`. Current literal labels: Claude Opus 5.5 `xhigh` and `max`; GPT-6.1
 Sol on the ChatGPT Work/Codex host `Ultra` for protected audits, any other label recorded exactly as the selector
-shows it at execution. A model's API effort names describe the API only and are never mapped onto a host label in
-either direction (`Ultra` is never translated to `max`, nor `max` to `Ultra`). The retired Opus 5 literal
-`xhighultracode` belongs to that superseded lane and is never carried onto Claude Opus 5.5; the labels of the
-superseded GPT-6 Astra and Codex GPT-5.6 Sol lanes are HISTORICAL.
+shows it at execution; a Codex executor only the host effort levels `xhigh` and `max`, each recorded exactly as
+the selector shows it, and never `ultra` (24.12). A model's API effort names describe the API only and are never
+mapped onto a host label in either direction (`Ultra` is never translated to `max`, nor `max` to `Ultra`). The
+retired Opus 5 literal `xhighultracode` belongs to that superseded lane and is never carried onto Claude Opus 5.5;
+the labels of the superseded GPT-6 Astra and Codex GPT-5.6 Sol lanes are HISTORICAL.
 
 Outside the council — none is routable, a fallback or a dependency: **Copilot `INACTIVE_UNAVAILABLE`** (24.13);
 **GPT-6 Astra `SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT`**; **Codex GPT-5.6 Sol
@@ -751,6 +762,75 @@ proof; repo-native, bounded and clear-spec engineering to the Claude Opus 5.5 ta
 review, including protected T4, to GPT-6.1 Sol (24.4); deep semantic implementation to Claude Opus 5.5. Earlier
 definitions survive only in the HISTORICAL sections and the dated changelog. Activating any of them is a
 `MATERIAL_CAPABILITY_CHANGE` (24.13).
+
+`CODEX_EXECUTOR_QUOTA_FALLBACK_V1` — Claude Opus 5.5 stays the primary implementation and repair executor. A Codex
+executor is a conditional route for ONE whole specialist stage that the Claude lane cannot run, selected by the
+ChatGPT controller. It is never a default, never an automatic or self-selected switch, never an audit, and never a
+`MODEL_FALLBACK`: the route is decided before the stage starts and compiled into that stage's own serious prompt,
+whose `MODEL_ID_REQUIRED` is the selected executor id, and inside that execution `MODEL_FALLBACK=PROHIBITED` holds as
+everywhere (24.12).
+
+- `CODEX_EXECUTOR_ADOPTED_IDS` — exactly one id is adopted: `gpt-6.2-astra` (GPT-6.2 Astra), eligible for every
+  executor stage. A host that lists a model never adopts it; adopting, retiring or re-scoping an executor id is a
+  `MATERIAL_CAPABILITY_CHANGE` (24.13) proven on host evidence. No lower-cost executor is adopted: a bounded
+  mechanical stage routes to `gpt-6.2-astra` or waits for Claude until a lower-cost id is adopted on evidence that it
+  can close a complete bounded stage and its validation. No Sol-family model id (`gpt-6.1-sol` or any other GPT Sol
+  id) is ever a Codex executor. GPT-6.2 Astra is a different model id from GPT-6 Astra (`gpt-6-astra`), which stays
+  `SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT` and outside the council.
+- `EXECUTOR_EVIDENCE_KINDS` — three kinds, none a substitute for another, and `UNKNOWN` in any fails the gate it
+  serves, except effort telemetry, which alone may stay `UNKNOWN` (24.12). `HOST_CAPABILITY_EVIDENCE`: what a host
+  offers — its model catalog or selector, the exposed literal effort labels, code-edit and shell tools, context
+  limits, configuration; it proves availability and capability, never which model executes.
+  `EXECUTION_IDENTITY_EVIDENCE`: what the running session proves about itself under 24.12; the only proof of
+  `MODEL_ACTUAL` and `THINKING_ACTUAL`. `CONTROLLER_AUTHORIZATION`: the controller's recorded selection of the route
+  for one stage; it authorizes that routing only, never proves capability or identity, and never grants merge,
+  readiness, live or capital authority.
+- `ACTIVATION_GATES` — a stage routes to a Codex executor only when every gate holds, each recorded in that stage's
+  serious prompt (`MODEL_RUNTIME_PROOF`, 24.6) and handoff, never as durable state:
+  - A `CLAUDE_UNAVAILABILITY_EVIDENCE` — fresh evidence, observed for this stage, that Claude Opus 5.5 cannot run it:
+    `CLAUDE_OPUS_5_5_QUOTA_BLOCKED` (the Claude host's own quota or usage-limit message) or
+    `CLAUDE_OPUS_5_5_UNAVAILABLE` (the Claude host cannot select or start `claude-opus-5-5`, or runs another model
+    in its place), with its source and observation time. A limit whose stated reset has passed, another stage's
+    evidence, memory, a correctable selection or configuration error, or a preference for speed, cost or a model is
+    no evidence; without it the stage stays with Claude or waits.
+  - B `CONTROLLER_SELECTION` — the controller explicitly selects the route in the stage's serious prompt
+    (`EXECUTOR_ROUTE=CODEX_EXECUTOR_QUOTA_FALLBACK_V1`, the fallback reason, the selected id). No executor, host or
+    tool selects or switches a route itself.
+  - C `ADOPTED_ID` — the selected id is in `CODEX_EXECUTOR_ADOPTED_IDS`.
+  - D `HOST_CAPABILITY` — fresh `HOST_CAPABILITY_EVIDENCE` from the executing host that it offers that exact id at the
+    requested literal effort label (24.12) with code-edit and shell tools, and that it can run the stage's whole
+    validation ladder in an isolated writer worktree of this repository.
+  - E `RUNTIME_IDENTITY` — the executing session proves `MODEL_ACTUAL` equal to the selected id and thinking
+    `ENABLED` under `FAIL_CLOSED_RUNTIME_PROOF` (24.12) before any mutation.
+  - F `WHOLE_STAGE` — the controller records that the selected executor can deliver the complete stage — the whole
+    semantic contract or the whole audited blocker inventory, with its validation — never a fragment.
+  - G `INDEPENDENT_AUDIT_PRESERVED` — GPT-6.1 Sol stays independence-eligible for the resulting candidate (24.4) and
+    remains a separate later gate. With no independent eligible auditor, no fallback runs.
+- `EXECUTOR_STAGE_RULES` —
+  - Stage boundary: a stage's executor is fixed before its first substantive work, and the executing provider changes
+    only between stages. A Claude execution stopped by quota before any substantive work was no meaningful prompt
+    (24.8) and consumed no slot, so its stage is still at its boundary.
+  - One writer: the routed executor is the candidate's only writer for that stage — no Claude or other session
+    mutates the candidate concurrently — and one open PR holds.
+  - One lifecycle: the executor stage takes the slot of the Claude stage it replaces, inside the unchanged 2 / 4 /
+    hard-5 budget (24.8). A change of executor model or provider never resets the count or adds a slot; the one
+    consolidated repair stays one; `FIXED_POINT_STOP`, `ROOT_CAUSE_ESCAPE`, exact-head binding, exact-head required CI
+    and the human's exact-head merge authority are unchanged.
+  - Independence: every model id that implemented or repaired any part of the candidate, on any host, is an
+    implementer of it (`NO_SELF_AUDIT`, 24.4). A Codex executor never audits, and its self-review is
+    `SELF_AUDIT_ONLY_NOT_INDEPENDENT`. Protected work is still audited by GPT-6.1 Sol at `Ultra` alone and otherwise
+    waits frozen on its exact head (`GPT61_SOL_T4_EXCLUSIVE`).
+- `INTERRUPTED_STAGE` — an executor, Claude or Codex, that loses its quota or availability after substantive work
+  stops mutating, and nothing restarts or continues its stage under another executor silently. The controller
+  assembles from live evidence the progress, the candidate state (local changes, commits, pushed head, PR) and the
+  consumed slot, and adjudicates under 24.8 unchanged: the slot stays consumed; the same execution resuming in its
+  retained context, under the same serious prompt and model id once its provider recovers, is one execution that
+  waited and consumes no new slot, re-proving local and live state before its next mutation; any other continuation —
+  a fresh-context restart or another executor — is a new specialist execution that starts from a controller-named
+  exact state and counts against the same hard maximum. The controller records which later stages the remaining
+  budget still admits; it never creates a slot, never uses the fifth slot outside its 24.8 purpose, never grants a
+  second repair and never lets an unfinished stage bypass a protected gate. When no continuation fits, the stage waits
+  for its own execution to resume or the candidate stops with proof.
 
 ### 24.4 Independent audit (GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1), protected Class C, complete blocker collection and Sol usage efficiency
 
@@ -795,7 +875,9 @@ definitions survive only in the HISTORICAL sections and the dated changelog. Act
   for protected work, leaves no eligible auditor (`STOP_WITH_PROOF`). GPT-6.1 Sol is READ_ONLY in this workflow
   and is routed to no implementation or repair (24.3). No model audits its own implementation or repair; a Claude
   implementer's self-review, like any same-model review of its own work, is `SELF_AUDIT_ONLY_NOT_INDEPENDENT` and
-  satisfies no audit.
+  satisfies no audit. A Codex executor stage under `CODEX_EXECUTOR_QUOTA_FALLBACK_V1` (24.3) counts as its executing
+  model id's own on every host, and no Sol-family id ever runs one, so that route never consumes GPT-6.1 Sol's
+  independence.
 - `RUNTIME_PROOF_BEFORE_AUDIT` — an auditor proves identity and required thinking (24.12) before any substantive
   audit work. A failed proof stops before auditing, delivers no verdict and consumes no specialist slot (24.8); a
   substantive audit is never followed by a retroactive no-credit label.
@@ -915,8 +997,10 @@ presentation never permits omission of mandatory `AGENT_OS_HANDOFF_V1` fields.
 setup fields (24.7); state proof (base, branch, head, PR, open PRs); files changed; validation and CI with exact
 results; review threads; P1/P2/P3 findings or the self-audit label; for an audit, the auditing lane, the
 protected-trigger classification, and whether it ran as PRIMARY (GPT-6.1 Sol) or as the recorded
-`NON_PROTECTED_AUDIT_FALLBACK` with its reason (24.4); the specialist prompt count of the PR lifecycle
-(24.8); and exactly one next safe action. Missing facts are `UNKNOWN`, never invented; failure tails
+`NON_PROTECTED_AUDIT_FALLBACK` with its reason (24.4); for an implementation or repair routed under
+`CODEX_EXECUTOR_QUOTA_FALLBACK_V1` (24.3), the executor route, the fallback reason with its Claude-unavailability
+evidence, the host-capability evidence and every executing model id of the candidate; the specialist prompt count of
+the PR lifecycle (24.8); and exactly one next safe action. Missing facts are `UNKNOWN`, never invented; failure tails
 only; a handoff never authorizes mutation.
 
 `COMPACT_AUDIT_HANDOFF` — an audit's handoff is compact by default: `VERDICT`, `RUNTIME_PROOF`, `HEAD_SHA`,
@@ -933,7 +1017,8 @@ adjudication; successful-test narratives are omitted.
 1. `AGENTS.md`;
 2. this section (`docs/crypto_core/agent_workflow.md` section 24);
 3. the relevant host adapter — `CLAUDE.md` and `.claude/skills/crypto-core-token-efficient-loop/SKILL.md` for
-   Claude, `.codex/skills/crypto-core-max-safe/SKILL.md` for Codex;
+   Claude, `.codex/skills/crypto-core-max-safe/SKILL.md` for a Codex audit, and
+   `.codex/skills/crypto-core-executor-fallback/SKILL.md` for a Codex executor stage (24.3);
 4. `docs/crypto_core/continuity/CONTINUITY_INDEX.md`;
 5. the latest accepted bounded handoff or continuity pointer, if one exists;
 6. fresh local repository proof and live GitHub proof.
@@ -959,8 +1044,8 @@ be audited together; inability to validate the whole result; or a real context/c
 `MEANINGFUL_PROMPT` — a SPECIALIST model execution that materially implements, independently audits, repairs,
 or re-audits the whole contract (24.4). Only specialist executions consume the
 prompt budget. An execution that stops on runtime proof (24.12) before any substantive work consumed no slot; an
-execution that did substantive work consumed its slot whatever its verdict. No relabelling, splitting or
-re-routing resets the count.
+execution that did substantive work consumed its slot whatever its verdict. No relabelling, splitting,
+re-routing or change of executor model or provider resets the count.
 
 `CONTROLLER_GOVERNANCE_OPERATIONS` never consume the specialist budget: live repository/GitHub state proof; CI,
 status and check reads; the `SOL_AUDIT_PREFLIGHT_PACKET` (24.4); adjudication of executor and auditor evidence;
@@ -980,7 +1065,9 @@ created to reach a count, and no audit is fragmented across executions.
   P1/P2 set) → 3 `ONE_CONSOLIDATED_REPAIR` (Claude Opus 5.5) → 4 `ONE_WHOLE_CONTRACT_REAUDIT` (GPT-6.1 Sol) →
   controller governance closeout. Target: **4** specialist prompts. Claude and GPT-6.1 Sol specialist work stays
   symmetric: one execution each for a clean candidate, two each for a repaired one; for non-protected work only,
-  a recorded 24.4 fallback audit takes the Sol slot.
+  a recorded 24.4 fallback audit takes the Sol slot; and a recorded 24.3 Codex executor stage
+  (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`) takes the Claude slot of the implementation or repair stage it replaces, never
+  an extra slot.
 - The fifth slot exists only for one replacement audit or re-audit execution when the ChatGPT controller rejects
   an executed one as procedurally invalid (wrong head, not fresh context, repository or GitHub mutation, or
   incomplete blocker collection), with the reason recorded — never because of its findings or verdict. It never
@@ -1097,6 +1184,18 @@ or the execution stops before any mutation or audit. Effort telemetry is not loa
   general default and never a reward for a project mattering. Thinking is always enabled on Claude Opus 5.5, and
   `THINKING_ACTUAL` is still reported from runtime evidence rather than assumed from this rule. Routine status
   and read-only evidence work stays controller-owned instead of spending the Claude lane.
+- `CODEX_EXECUTOR_EFFORT_POLICY` — a Codex executor stage (24.3) requires `MODEL_ID_REQUIRED` = the selected adopted
+  executor id and thinking `ENABLED` under `FAIL_CLOSED_RUNTIME_PROOF` above; it reports no model fallback, and its
+  route is recorded as `EXECUTOR_ROUTE` with the fallback reason, never as a `MODEL_FALLBACK`. Effort is recorded
+  literally (24.3): the host effort level `xhigh` for implementation and repair, and `max` only for a
+  capability-critical implementation or the hardest correctness-critical consolidated repair on an explicitly named
+  trigger; never `ultra`, requested or observed, which the host describes as automatic task delegation and which
+  would put further agents inside one writer's stage. A selector that does not expose the requested level, or an
+  observed `ultra`, stops the stage before mutation, and no level is mapped onto another. Speed is `STANDARD`; Fast
+  runs only on an explicit controller or human time-critical authorization recorded for that stage and is never a
+  correctness upgrade. Subagents are 0: no delegated, parallel or background agent mutates. A host's automatic
+  approval reviewer, sandbox or permission setting is a UX layer, never authorization — every protected action stays
+  forbidden whatever a host would approve.
 - `SOL_AUDIT_EFFORT_POLICY` — every GPT-6.1 Sol audit or re-audit requires `MODEL_ID_REQUIRED=gpt-6.1-sol` and
   thinking `ENABLED` under `FAIL_CLOSED_RUNTIME_PROOF` above; effort is recorded literally (24.3), is never
   correctness proof, and no host label is ever mapped onto another (`Ultra`, `max` and `xhigh` are never
@@ -1209,6 +1308,24 @@ Astra (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT`) and Codex GPT-5.6 Sol
 (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_ROUTING`) are no crypto_core lane, default, fallback or dependency, and
 `SETUP_STATUS=CLOSED_FROZEN` holds again under the reopen rules above — proven from live evidence, never written
 into a durable file.
+
+`CODEX_EXECUTOR_FALLBACK_TRANSITION` — `CODEX_EXECUTOR_QUOTA_FALLBACK_V1` (the conditional Codex executor lane, its
+adopted ids, evidence kinds, activation gates, stage rules and `INTERRUPTED_STAGE` of 24.3, the independence sentence
+of 24.4, the executor handoff fields of 24.6, the executor adapter of 24.7, the budget wording of 24.8,
+`CODEX_EXECUTOR_EFFORT_POLICY` of 24.12, and the adapters and guides that apply them) is a reopening under
+`MATERIAL_CAPABILITY_CHANGE`: the Codex host offers an executor-capable non-Sol model id while Claude Opus 5.5, until
+this change the only implementation and repair lane, can be quota-blocked or unavailable, which stalled every stage
+only it could run. It weakens no gate, budget, lifecycle or authority boundary and changes no audit lane. The change
+that introduces it grants itself no exemption: its own acceptance is governed by the control plane accepted before it,
+so Claude Opus 5.5 implements it and any repair of it, the GPT-6.1 Sol protected audit at `Ultra` accepts it, and no
+Codex executor implements, repairs or accepts it. While that change is under acceptance audit, every auditor and the
+ChatGPT controller apply this section and the host adapters as they stand on its base (accepted main), never the
+candidate's own text — the executor adapter it carries is the object under audit, not the audit procedure. The Codex
+executor fallback becomes routable only once that change is accepted by that audit, explicitly authorized by the human
+on its exact head, merged by standard merge, post-merge verified, matched by the externally maintained ChatGPT Project
+instruction, and fresh-chat accepted; its rules bind only stages that start after all of that and never apply
+retroactively to an earlier lifecycle. From then on `SETUP_STATUS=CLOSED_FROZEN` holds again under the reopen rules
+above — proven from live evidence, never written into a durable file.
 
 ---
 
@@ -1469,3 +1586,32 @@ follow the canonical field order. (2) `PROTECTED_ULTRA_STOP_LEAKS_TO_NONPROTECTE
 uses the available literal label the controller supplies, while identity, thinking and prohibited-fallback stops
 are unchanged. The speed and usage telemetry rules are unchanged, and no gate, lane or lifecycle rule changed.
 Docs/setup only.*
+
+*v6.4 (2026-11-18): `CODEX_EXECUTOR_QUOTA_FALLBACK_V1` — a setup reopening under `MATERIAL_CAPABILITY_CHANGE`: the
+Codex host offers an executor-capable non-Sol model id while Claude Opus 5.5, until then the only implementation and
+repair lane, can be quota-blocked or unavailable, which stalled every lifecycle stage only it could run. Section 24.3
+adds a conditional Codex executor lane for one whole implementation stage or the one consolidated repair stage, routed
+only by an explicit controller selection when seven activation gates hold: fresh Claude quota-block or unavailability
+evidence for that stage, the controller's recorded selection, an adopted id, fresh host-capability evidence, positive
+runtime identity and thinking proof, a whole-stage executor, and a preserved independent GPT-6.1 Sol audit. It keeps
+`HOST_CAPABILITY_EVIDENCE`, `EXECUTION_IDENTITY_EVIDENCE` and `CONTROLLER_AUTHORIZATION` apart. The one adopted id is
+`gpt-6.2-astra` (GPT-6.2 Astra), adopted on host-capability evidence observed on 2026-11-18: the Codex host's model
+catalog listed it with code-edit and shell tools and the effort levels `low`, `medium`, `high`, `xhigh`, `max` and
+`ultra`, while the ChatGPT Work host's catalog cached on 2026-11-07 did not list it. No execution-identity evidence
+for it existed at adoption, so every stage proves identity at runtime. No lower-cost executor is adopted, and no
+Sol-family id is ever a Codex executor. The executing provider changes only at a stage boundary; an executor stage
+takes the replaced Claude stage's slot inside the unchanged 2 / 4 / hard-5 budget; `INTERRUPTED_STAGE` sends an
+interrupted stage to controller adjudication under unchanged 24.8 rules, never to a silent restart. Section 24.4
+counts every executing model id as an implementer of the candidate; 24.6 adds the executor route to the handoff; 24.7
+names the executor adapter; 24.8 states that a change of executor never resets the count; 24.12 adds
+`CODEX_EXECUTOR_EFFORT_POLICY` (`xhigh`, `max` only on a named trigger, never `ultra`, which the host describes as
+automatic task delegation; `STANDARD` speed; subagents 0; host approval layers are never authorization); 24.14 adds
+`CODEX_EXECUTOR_FALLBACK_TRANSITION`. Sections 2, 5, 8 and 18 were aligned. The new adapter
+`.codex/skills/crypto-core-executor-fallback/SKILL.md` applies the lane; the GPT-6.1 Sol adapter stays audit-only and
+sends executor sessions to it. Unchanged: the Claude lane and its effort policy, the GPT-6.1 Sol audit lane and its
+exclusive protected Class-C authority at `Ultra`, `NON_PROTECTED_AUDIT_FALLBACK`, `COMPLETE_BLOCKER_COLLECTION`,
+`AUDIT_MATERIALITY_BOUNDARY_V1`, one consolidated repair, `FIXED_POINT_STOP`, `ROOT_CAUSE_ESCAPE`, one writer and one
+open PR, exact-head CI, the human's exact-head merge authority, standard merge, post-merge verification and every
+paper, live, capital and security boundary. Its own acceptance follows the plane before it: Claude Opus 5.5
+implemented it, the GPT-6.1 Sol protected audit accepts it, and it routes nothing before the full transition sequence.
+Docs/setup only: no product code, tests, scripts, workflows or dependencies touched.*

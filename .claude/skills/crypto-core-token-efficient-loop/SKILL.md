@@ -43,7 +43,9 @@ saving is subordinate to correctness; no gate may be skipped to save tokens. Ope
 
 - Council (§24.3): ChatGPT controller (`CONTROLLER_READONLY_FIRST_POLICY`); Claude Opus 5.5
   (`claude-opus-5-5`) for deep semantic implementation and repair, including the repo-native navigation,
-  dependency-tracing, test and validation work of that same task; GPT-6.1 Sol (`gpt-6.1-sol`) as the audit-only
+  dependency-tracing, test and validation work of that same task; the conditional Codex executor
+  (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`), routed only by the controller for a whole stage Claude cannot run (§24.3);
+  GPT-6.1 Sol (`gpt-6.1-sol`) as the audit-only
   PRIMARY independent auditor (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`), which for protected work is also the
   protected T4 audit, never reassigned, with the ChatGPT controller as the last-resort non-protected fallback
   (§24.4); ChatGPT Work; Deep Research. GPT-6 Astra is `SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT` and Codex GPT-5.6
