@@ -26,6 +26,12 @@ doctrine values, never governed parameters, and no signal reading here is a new 
   wallet model and D1 margin facts) have no reading at all. S8 (correlation spike) is proven not applicable on the
   single-instrument paper portfolio (NT-M04's proof). An unmeasured signal adds nothing to the lower bound and is never
   read as healthy.
+* Rule v2 (``S1_NATIVE_RISK_MEASUREMENT_CONSTRUCTION_V1``): the decision's own RECORD B readings
+  (``governed_paper_risk_measurement``) measure S3 (C-11: ``min(1, max(0, CVaR99* / 0.05))`` on the current holdings
+  over the exact NAV) and S6 (L-8: ``1 - LIQ(s_l)`` of the latest observation known at the decision, valid and within
+  V2). A signal without its reading stays unmeasured with the reason, and a severity of 1 (``LIQ = 0`` included) raises
+  the bound to at least CRISIS. S7 and S9 stay unmeasured, so SS-0 is still never proven. Without them the rule, every
+  reading and every payload are exactly v1.
 
 The bound. The stress lower bound is ``sum(w_i x s_i)`` over the measured lower bounds, exactly (``Fraction``), and the
 SHS upper bound is ``1`` minus it. Escalation is immediate (§1.29 State Transition Protocol), so the state is at least
@@ -71,6 +77,7 @@ from crypto_core.validation.historical_execution_economics_policy import (
 
 GOVERNED_PAPER_SYSTEM_STATE_CONTRACT_ID = "S1_INTEGRATED_RISK_AND_SYSTEM_SAFETY_CLOSURE_V1"
 GOVERNED_PAPER_SYSTEM_STATE_RULE_ID = "governed-paper-system-state-proven-lower-bound.v1"
+GOVERNED_PAPER_SYSTEM_STATE_RISK_RULE_ID = "governed-paper-system-state-proven-lower-bound.v2"
 _SCHEMA_VERSION = "governed-paper-system-state-evidence.v1"
 _PREFIX = "governed_paper_system_state"
 _DIGEST_FIELD = "evidence_digest"
@@ -361,6 +368,27 @@ GOVERNED_PAPER_SYSTEM_STATE_RULE = governed_paper_system_state_rule()
 GOVERNED_PAPER_SYSTEM_STATE_RULE_DIGEST = edge_sha256_text(edge_canonical_json(GOVERNED_PAPER_SYSTEM_STATE_RULE))
 
 
+def governed_paper_system_state_risk_rule() -> dict[str, object]:
+    """The rule v2: the v1 rule with S3 and S6 read from the decision's RECORD B readings."""
+
+    rule = governed_paper_system_state_rule()
+    rule.update(
+        rule_id=GOVERNED_PAPER_SYSTEM_STATE_RISK_RULE_ID,
+        contract_id="S1_NATIVE_RISK_MEASUREMENT_CONSTRUCTION_V1",
+        S3="c11_min_1_max_0_cvar99_star_over_0_05_on_the_current_holdings_over_the_exact_nav_otherwise_unmeasured",
+        S6="l8_1_minus_liq_of_the_latest_known_valid_observation_within_v2_otherwise_unmeasured",
+        unmeasured=["S7", "S9"],
+        ss0="never_proven_no_signal_has_an_upper_bound_and_s7_s9_have_no_reading",
+    )
+    return rule
+
+
+GOVERNED_PAPER_SYSTEM_STATE_RISK_RULE = governed_paper_system_state_risk_rule()
+GOVERNED_PAPER_SYSTEM_STATE_RISK_RULE_DIGEST = edge_sha256_text(
+    edge_canonical_json(GOVERNED_PAPER_SYSTEM_STATE_RISK_RULE)
+)
+
+
 # --- one decision ------------------------------------------------------------------------------------------------------
 
 
@@ -417,13 +445,19 @@ def derive_governed_paper_system_state_reading(  # noqa: PLR0913
     latency_ns: int,
     latency_budget_ns: int | None,
     single_instrument_portfolio: bool,
+    risk_measured: bool = False,
+    cvar_severity: Fraction | None = None,
+    cvar_reason: str = "",
+    liquidity_severity: Fraction | None = None,
+    liquidity_reason: str = "",
 ) -> GovernedPaperSystemStateReading:
     """The proven lower bound of the §1.29 state at one entry decision (pure; see the module docstring).
 
     The inputs are the decision's own facts, derived by its governed evaluation: the ladder's proven level and drawdown
     proofs at the decision, the statuses of its NT-D01..NT-D05 and NT-X01..NT-X04 checks in that order, the governed
-    latency with its tier budget (None when unknown) and the single-instrument fact. A malformed input raises
-    ``GovernedPaperSystemStateError``.
+    latency with its tier budget (None when unknown) and the single-instrument fact. ``risk_measured`` (rule v2) adds the
+    decision's RECORD B severities: S3 and S6 in ``[0, 1]``, each None with the reason it is unmeasured. A malformed input
+    raises ``GovernedPaperSystemStateError``.
     """
 
     for name, value in (("decision_sequence", decision_sequence), ("decision_time_ns", decision_time_ns)):
@@ -446,9 +480,35 @@ def derive_governed_paper_system_state_reading(  # noqa: PLR0913
         raise _fail("inputs_malformed:latency_ns")
     if latency_budget_ns is not None and not historical_execution_wire_int_is_valid(latency_budget_ns, minimum=1):
         raise _fail("inputs_malformed:latency_budget_ns")
+    if type(risk_measured) is not bool:
+        raise _fail("inputs_malformed:risk_measured")
+    for name, severity, why in (
+        ("cvar", cvar_severity, cvar_reason),
+        ("liquidity", liquidity_severity, liquidity_reason),
+    ):
+        if type(why) is not str or (not risk_measured and (severity is not None or why)):
+            raise _fail(f"inputs_malformed:{name}")
+        if severity is not None and (type(severity) is not Fraction or not 0 <= severity <= 1 or why):
+            raise _fail(f"inputs_malformed:{name}_severity")
+        if risk_measured and severity is None and not why:
+            raise _fail(f"inputs_malformed:{name}_reason")
 
     bound, unmeasured = GovernedPaperSystemStateMeasurement.LOWER_BOUND, GovernedPaperSystemStateMeasurement.UNMEASURED
     zero = Fraction(0)
+    if not risk_measured:
+        cvar = _signal("S3", unmeasured, zero, "portfolio_cvar99_methodology_undefined")
+        liquidity = _signal("S6", unmeasured, zero, "liquidity_regime_methodology_undefined")
+    else:
+        cvar = (
+            _signal("S3", unmeasured, zero, f"cvar99_reading_unavailable:{cvar_reason}")
+            if cvar_severity is None
+            else _signal("S3", bound, cvar_severity, "cvar99_star_over_5pct_of_nav_on_the_current_holdings_c11")
+        )
+        liquidity = (
+            _signal("S6", unmeasured, zero, f"liquidity_reading_unavailable:{liquidity_reason}")
+            if liquidity_severity is None
+            else _signal("S6", bound, liquidity_severity, "one_minus_liq_of_the_latest_known_valid_observation_l8")
+        )
     if drawdown_beyond_15pct_proven:
         drawdown = (Fraction(1), "trigger_11_drawdown_from_peak_beyond_15pct_proven")
     elif drawdown_beyond_10pct_proven:
@@ -470,7 +530,7 @@ def derive_governed_paper_system_state_reading(  # noqa: PLR0913
             f"kill_switch_lower_bound_ks_{kill_switch_level}_at_the_decision",
         ),
         _signal("S2", bound, *drawdown),
-        _signal("S3", unmeasured, zero, "portfolio_cvar99_methodology_undefined"),
+        cvar,
         _signal(
             "S4",
             bound,
@@ -483,7 +543,7 @@ def derive_governed_paper_system_state_reading(  # noqa: PLR0913
             Fraction(execution_active, len(_EXECUTION_IDS)),
             f"{execution_active}_of_4_execution_conditions_proven_active",
         ),
-        _signal("S6", unmeasured, zero, "liquidity_regime_methodology_undefined"),
+        liquidity,
         _signal("S7", unmeasured, zero, "feature_drift_index_not_produced"),
         _signal(
             "S8",
@@ -532,12 +592,15 @@ def governed_paper_system_state_id(reading: GovernedPaperSystemStateReading) -> 
 
 
 def build_governed_paper_system_state_evidence(
-    *, instrument: str, readings: Sequence[GovernedPaperSystemStateReading]
+    *, instrument: str, readings: Sequence[GovernedPaperSystemStateReading], risk_measured: bool = False
 ) -> GovernedPaperSystemStateEvidence:
-    """Bind the readings of every entry decision of one evaluation, in decision order (pure)."""
+    """Bind the readings of every entry decision of one evaluation, in decision order (pure); ``risk_measured`` binds
+    the rule v2 under which S3 and S6 were read."""
 
     if type(instrument) is not str or instrument == "":
         raise _fail("instrument_malformed")
+    if type(risk_measured) is not bool:
+        raise _fail("risk_measured_malformed")
     items = tuple(readings)
     if any(type(item) is not GovernedPaperSystemStateReading for item in items):
         raise _fail("readings_malformed")
@@ -549,8 +612,10 @@ def build_governed_paper_system_state_evidence(
             raise _fail("reading_digest_mismatch")
     seed = GovernedPaperSystemStateEvidence(
         schema_version=_SCHEMA_VERSION,
-        rule_id=GOVERNED_PAPER_SYSTEM_STATE_RULE_ID,
-        rule_digest=GOVERNED_PAPER_SYSTEM_STATE_RULE_DIGEST,
+        rule_id=GOVERNED_PAPER_SYSTEM_STATE_RISK_RULE_ID if risk_measured else GOVERNED_PAPER_SYSTEM_STATE_RULE_ID,
+        rule_digest=GOVERNED_PAPER_SYSTEM_STATE_RISK_RULE_DIGEST
+        if risk_measured
+        else GOVERNED_PAPER_SYSTEM_STATE_RULE_DIGEST,
         instrument=instrument,
         readings=items,
         evidence_digest="",
@@ -579,6 +644,9 @@ def governed_paper_system_state_reading_digest(reading: GovernedPaperSystemState
 __all__ = [
     "GOVERNED_PAPER_SYSTEM_STATE_CONTRACT_ID",
     "GOVERNED_PAPER_SYSTEM_STATE_NON_CLAIM_FLAGS",
+    "GOVERNED_PAPER_SYSTEM_STATE_RISK_RULE",
+    "GOVERNED_PAPER_SYSTEM_STATE_RISK_RULE_DIGEST",
+    "GOVERNED_PAPER_SYSTEM_STATE_RISK_RULE_ID",
     "GOVERNED_PAPER_SYSTEM_STATE_RULE",
     "GOVERNED_PAPER_SYSTEM_STATE_RULE_DIGEST",
     "GOVERNED_PAPER_SYSTEM_STATE_RULE_ID",
@@ -596,5 +664,6 @@ __all__ = [
     "governed_paper_system_state_evidence_to_dict",
     "governed_paper_system_state_id",
     "governed_paper_system_state_reading_digest",
+    "governed_paper_system_state_risk_rule",
     "governed_paper_system_state_rule",
 ]

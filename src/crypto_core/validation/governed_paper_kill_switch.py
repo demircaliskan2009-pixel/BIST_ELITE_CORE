@@ -94,6 +94,15 @@ A causal replay over a later archive yields the same prefix, and consecutive day
 
 The ladder binds the economics, its policy, the archive, the schedule and the decision portfolio and governed outcome it
 derived. Exact arithmetic, no float, no ``decimal`` context, and no IO, clock or randomness.
+
+T8 (``S1_NATIVE_RISK_MEASUREMENT_CONSTRUCTION_V1``, ladder v2). With a risk context (RECORD B's policy, its approval and
+its MARK archive), the ladder also reads T8 under LIQ_COMPOSITE_OBS_V3 L-7 (``governed_paper_risk_measurement``): from
+the knowledge instant of a run of valid CRISIS observations spanning strictly more than 30 minutes, extended by each later
+member known valid CRISIS, until the next member is known valid NON-CRISIS or V4 after it without a valid reading. It is a
+lower bound like every reading here: a lapse records that the proof ended, never that CRISIS ended, and no persistence or
+cool-down is claimed. T8 is unmeasured when the active table does not admit the approval (production) or the archive
+lacks the depth-50 book or the declared trade series. T3 stays unmeasured (FCD-05 is pending). Without a risk context the
+ladder, its rule and every payload are exactly v1.
 """
 
 from __future__ import annotations
@@ -108,6 +117,11 @@ from crypto_core.validation.edge_artifact_core import (
     edge_canonical_json,
     edge_payload_digest,
     edge_sha256_text,
+)
+from crypto_core.validation.governed_paper_risk_measurement import (
+    GovernedPaperRiskContext,
+    GovernedPaperRiskError,
+    derive_governed_paper_risk_market,
 )
 from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_EQUAL_INSTANT_PHASES,
@@ -135,7 +149,9 @@ from crypto_core.validation.historical_pit_dataset import (
 )
 
 GOVERNED_PAPER_KILL_SWITCH_RULE_ID = "governed-paper-kill-switch-proven-escalation.v1"
+GOVERNED_PAPER_KILL_SWITCH_RISK_RULE_ID = "governed-paper-kill-switch-proven-escalation.v2"
 _SCHEMA_VERSION = "governed-paper-kill-switch-ladder.v1"
+_RISK_SCHEMA_VERSION = "governed-paper-kill-switch-ladder.v2"
 _PREFIX = "governed_paper_kill_switch"
 _DIGEST_FIELD = "ladder_digest"
 _NS_PER_SECOND = 1_000_000_000
@@ -416,6 +432,31 @@ def governed_paper_kill_switch_rule() -> dict[str, object]:
 
 GOVERNED_PAPER_KILL_SWITCH_RULE = governed_paper_kill_switch_rule()
 GOVERNED_PAPER_KILL_SWITCH_RULE_DIGEST = edge_sha256_text(edge_canonical_json(GOVERNED_PAPER_KILL_SWITCH_RULE))
+
+
+def governed_paper_kill_switch_risk_rule() -> dict[str, object]:
+    """The ladder v2 rule: the v1 rule with T8 read under LIQ_COMPOSITE_OBS_V3 L-7 (RECORD B)."""
+
+    rule = governed_paper_kill_switch_rule()
+    unmeasured = dict(_UNMEASURED)
+    del unmeasured["T8"]
+    rule.update(
+        rule_id=GOVERNED_PAPER_KILL_SWITCH_RISK_RULE_ID,
+        contract_id="S1_NATIVE_RISK_MEASUREMENT_CONSTRUCTION_V1",
+        unmeasured=unmeasured,
+        T8="liq_composite_obs_v3_l7_from_the_knowledge_of_a_valid_crisis_run_spanning_strictly_more_than_1800s_"
+        "extended_by_each_later_member_known_valid_crisis_until_the_next_member_is_known_valid_non_crisis_or_v4_"
+        "after_it_a_late_member_restarts_it_a_lapse_is_never_backfilled",
+        T8_unmeasured="risk_policy_not_admitted_or_the_depth_50_book_or_the_declared_trade_series_absent",
+        T3="unmeasured_fcd_05_pending",
+    )
+    return rule
+
+
+GOVERNED_PAPER_KILL_SWITCH_RISK_RULE = governed_paper_kill_switch_risk_rule()
+GOVERNED_PAPER_KILL_SWITCH_RISK_RULE_DIGEST = edge_sha256_text(
+    edge_canonical_json(GOVERNED_PAPER_KILL_SWITCH_RISK_RULE)
+)
 
 
 # --- the lower-bound ladder ------------------------------------------------------------------------------------------------
@@ -771,13 +812,22 @@ def _funding_spike_readings(
 
 
 def _states(
-    *, simulated: bool, interval_8h: bool, tier_known: bool, single_instrument_portfolio: bool
+    *,
+    simulated: bool,
+    interval_8h: bool,
+    tier_known: bool,
+    single_instrument_portfolio: bool,
+    liquidity: str | None = None,
 ) -> tuple[GovernedPaperKillSwitchTriggerState, ...]:
+    """Each trigger's measurement; ``liquidity`` (ladder v2 only) is why T8 is unmeasured, empty when it is measured."""
+
     measured = GovernedPaperKillSwitchMeasurement.MEASURED
     unmeasured = GovernedPaperKillSwitchMeasurement.UNMEASURED
     reasons: dict[str, tuple[GovernedPaperKillSwitchMeasurement, str]] = {
         name: (unmeasured, reason) for name, reason in _UNMEASURED.items()
     }
+    if liquidity is not None:
+        reasons["T8"] = (measured, "") if not liquidity else (unmeasured, liquidity)
     for name in ("T1", "T2", "T5", "T11"):
         reasons[name] = (measured, "") if simulated else (unmeasured, _NOT_SIMULATED)
     reasons["T6"] = (measured, "") if interval_8h else (unmeasured, _INTERVAL_NOT_8H)
@@ -801,8 +851,8 @@ def derive_governed_paper_kill_switch_ladder(
     schedule: HistoricalExecutionAdmissionSchedule,
     single_instrument_portfolio: bool,
 ) -> GovernedPaperKillSwitchDerivation:
-    """The proven lower-bound ladder of one governed evaluation (see the module docstring), with the decision portfolio
-    and the governed outcome it reads. Pure.
+    """The proven lower-bound ladder v1 of one governed evaluation (see the module docstring), with the decision
+    portfolio and the governed outcome it reads. Pure.
 
     ``schedule`` is the information-time schedule (v4, or v5 with its fill-time sizing bounds) under evaluation.
     ``single_instrument_portfolio`` is the genesis envelope's fact the entry gate derives (NT-M04's proof). The policy and
@@ -816,6 +866,54 @@ def derive_governed_paper_kill_switch_ladder(
     ``HistoricalExecutionEconomicsError``, unchanged.
     """
 
+    return _derive_ladder(
+        policy=policy,
+        dataset=dataset,
+        economics=economics,
+        schedule=schedule,
+        single_instrument_portfolio=single_instrument_portfolio,
+        risk=None,
+    )
+
+
+def derive_governed_paper_kill_switch_risk_ladder(
+    *,
+    policy: HistoricalExecutionEconomicsPolicy,
+    dataset: HistoricalPitDataset,
+    economics: HistoricalExecutionEconomicsResult,
+    schedule: HistoricalExecutionAdmissionSchedule,
+    single_instrument_portfolio: bool,
+    risk: GovernedPaperRiskContext,
+) -> GovernedPaperKillSwitchDerivation:
+    """The ladder v2 of one governed evaluation: the ladder v1 with T8 read under LIQ_COMPOSITE_OBS_V3 L-7 from the LIQ
+    log derived from ``risk`` (the RECORD B policy, its approval and its MARK archive) and the archive. Pure.
+
+    ``risk`` is a context from which the readings are derived (``derive_governed_paper_risk_market``, every input
+    re-proven there), never a reading, a level, a ladder or a recovery approval: a T8 reading can only raise the lower
+    bound. Every other input and failure mode is the ladder v1's.
+    """
+
+    if type(risk) is not GovernedPaperRiskContext:
+        raise _fail("risk_context_malformed")
+    return _derive_ladder(
+        policy=policy,
+        dataset=dataset,
+        economics=economics,
+        schedule=schedule,
+        single_instrument_portfolio=single_instrument_portfolio,
+        risk=risk,
+    )
+
+
+def _derive_ladder(  # noqa: C901, PLR0912 - one linear derivation of the ladder
+    *,
+    policy: HistoricalExecutionEconomicsPolicy,
+    dataset: HistoricalPitDataset,
+    economics: HistoricalExecutionEconomicsResult,
+    schedule: HistoricalExecutionAdmissionSchedule,
+    single_instrument_portfolio: bool,
+    risk: GovernedPaperRiskContext | None,
+) -> GovernedPaperKillSwitchDerivation:
     if (
         type(policy) is not HistoricalExecutionEconomicsPolicy
         or type(dataset) is not HistoricalPitDataset
@@ -878,6 +976,29 @@ def derive_governed_paper_kill_switch_ladder(
     persisted = start + _LATENCY_PERSISTENCE_NS + 1
     if budget is not None and policy.latency_ns > _LATENCY_MULTIPLE * budget and persisted < horizon:
         readings.append(_reading("T7", (persisted, _FIRST), None, str(policy.latency_ns), (policy_digest,)))
+    liquidity: str | None = None
+    if risk is not None:
+        try:  # derived, never accepted: the policy, approval, archive and dataset are re-proven by the derivation
+            market = derive_governed_paper_risk_market(
+                risk, dataset=dataset, instrument=economics.instrument, start_ns=start, horizon_ns=horizon
+            )
+        except GovernedPaperRiskError as exc:
+            raise _fail("liquidity_regime_not_derivable") from exc
+        if not market.approval_admitted:
+            liquidity = f"risk_policy_not_admitted:{market.approval_reason}"
+        else:
+            liquidity = market.book_series_reason or market.trade_series_reason
+        if not liquidity:
+            readings += [
+                _reading(
+                    "T8",
+                    (item.start_ns, _FIRST),
+                    None if item.end_ns is None else (item.end_ns, _FIRST),
+                    f"liq_crisis_run_through_{item.last_member_ns}",
+                    (item.evidence_digest,),
+                )
+                for item in market.t8_intervals
+            ]
     ordered = tuple(
         sorted(
             _canonical_readings(tuple(readings), start_ns=start, horizon_ns=horizon),
@@ -890,9 +1011,11 @@ def derive_governed_paper_kill_switch_ladder(
         )
     )
     seed = GovernedPaperKillSwitchLadder(
-        schema_version=_SCHEMA_VERSION,
-        rule_id=GOVERNED_PAPER_KILL_SWITCH_RULE_ID,
-        rule_digest=GOVERNED_PAPER_KILL_SWITCH_RULE_DIGEST,
+        schema_version=_SCHEMA_VERSION if risk is None else _RISK_SCHEMA_VERSION,
+        rule_id=GOVERNED_PAPER_KILL_SWITCH_RULE_ID if risk is None else GOVERNED_PAPER_KILL_SWITCH_RISK_RULE_ID,
+        rule_digest=GOVERNED_PAPER_KILL_SWITCH_RULE_DIGEST
+        if risk is None
+        else GOVERNED_PAPER_KILL_SWITCH_RISK_RULE_DIGEST,
         instrument=economics.instrument,
         economics_result_digest=economics.result_digest,
         economics_policy_digest=policy_digest,
@@ -907,6 +1030,7 @@ def derive_governed_paper_kill_switch_ladder(
             interval_8h=interval_8h,
             tier_known=budget is not None,
             single_instrument_portfolio=single_instrument_portfolio,
+            liquidity=liquidity,
         ),
         readings=ordered,
         transitions=governed_paper_kill_switch_transitions(ordered, start_ns=start, horizon_ns=horizon),
@@ -1077,6 +1201,9 @@ def governed_paper_kill_switch_ladder_digest(ladder: GovernedPaperKillSwitchLadd
 __all__ = [
     "GOVERNED_PAPER_KILL_SWITCH_DECISION_PHASE",
     "GOVERNED_PAPER_KILL_SWITCH_NON_CLAIM_FLAGS",
+    "GOVERNED_PAPER_KILL_SWITCH_RISK_RULE",
+    "GOVERNED_PAPER_KILL_SWITCH_RISK_RULE_DIGEST",
+    "GOVERNED_PAPER_KILL_SWITCH_RISK_RULE_ID",
     "GOVERNED_PAPER_KILL_SWITCH_RULE",
     "GOVERNED_PAPER_KILL_SWITCH_RULE_DIGEST",
     "GOVERNED_PAPER_KILL_SWITCH_RULE_ID",
@@ -1091,11 +1218,13 @@ __all__ = [
     "GovernedPaperKillSwitchTransition",
     "GovernedPaperKillSwitchTriggerState",
     "derive_governed_paper_kill_switch_ladder",
+    "derive_governed_paper_kill_switch_risk_ladder",
     "governed_paper_kill_switch_ladder_digest",
     "governed_paper_kill_switch_ladder_to_dict",
     "governed_paper_kill_switch_level_at",
     "governed_paper_kill_switch_prefix_digest",
     "governed_paper_kill_switch_proven_at",
+    "governed_paper_kill_switch_risk_rule",
     "governed_paper_kill_switch_rule",
     "governed_paper_kill_switch_transitions",
     "governed_paper_kill_switch_unmeasured",
