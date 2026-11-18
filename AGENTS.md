@@ -15,10 +15,11 @@
 
 This file is the entrypoint and holds the durable rails. The single canonical active workflow authority is
 `docs/crypto_core/agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`), whose active content is
-`MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1` and
-`GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1`. The host
+`MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`,
+`GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1` and `CODEX_EXECUTOR_QUOTA_FALLBACK_V1`. The host
 adapters (`CLAUDE.md`,
-`.claude/skills/crypto-core-token-efficient-loop/SKILL.md`, `.codex/skills/crypto-core-max-safe/SKILL.md`)
+`.claude/skills/crypto-core-token-efficient-loop/SKILL.md`, `.codex/skills/crypto-core-max-safe/SKILL.md`,
+`.codex/skills/crypto-core-executor-fallback/SKILL.md`)
 and the prompting guides (`docs/crypto_core/model_prompting_guide.md`,
 `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`) apply section 24 and never restate it as
 authority. Companion procedure docs (`docs/crypto_core/token_efficiency_playbook.md`,
@@ -44,6 +45,14 @@ genuinely cannot reconstruct material operational state.
   consolidated repair, the `ROOT_CAUSE_ESCAPE` implementation and the repo-native navigation, dependency tracing,
   engineering, test and validation work of that same task. Never an independent or protected auditor,
   controller, governance or merge authority.
+- **Codex executor fallback** (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`, section 24.3; the only adopted id is
+  `gpt-6.2-astra`, GPT-6.2 Astra) — a CONDITIONAL executor for one whole implementation stage or the one
+  consolidated repair stage. It is routed only by an explicit controller selection after fresh evidence that Claude
+  Opus 5.5 is quota-blocked or unavailable for that stage, and only when every section 24.3 activation gate holds:
+  an adopted non-Sol id, fresh host-capability evidence, positive runtime identity and thinking proof, a whole-stage
+  executor and a preserved independent GPT-6.1 Sol audit. It changes executor only at a stage boundary, takes the
+  replaced Claude stage's budget slot, never audits, never runs on a Sol-family model and never switches
+  automatically. GPT-6.2 Astra is a different model id from the superseded GPT-6 Astra.
 - **GPT-6.1 Sol** (`gpt-6.1-sol`, ChatGPT Work/Codex host) — the PRIMARY independent auditor
   (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`; requested effort `Ultra`, mandatory for protected audits; speed
   `STANDARD`): fresh-context, exact-head, READ_ONLY, runtime-proven, exhaustive and materiality-aware, run under
@@ -64,7 +73,8 @@ Claude Opus 5 (`SUPERSEDED_BY_OPUS_5_5`), Claude Opus 4.8 (`SUPERSEDED_BY_OPUS_5
 GPT-5.6 Terra and Codex GPT-5.6 Luna (`NOT_IN_ACTIVE_COUNCIL`). A superseded lane is never an automatic
 fallback. Host effort labels are literal and never normalized across models or to an API
 effort enum (`HOST_UI_LABELS_ARE_LITERAL`): Claude Opus 5.5 `xhigh` and `max`; GPT-6.1 Sol `Ultra` for protected
-audits, any other label recorded as the selector shows it, and `Ultra` never translated to `max` or back. The
+audits, any other label recorded as the selector shows it, and `Ultra` never translated to `max` or back; a Codex
+executor `xhigh` and `max` only, never `ultra` (section 24.12 `CODEX_EXECUTOR_EFFORT_POLICY`). The
 Claude lane requests `xhigh` for ordinary complex implementation and repair and `max` only on an explicitly named
 capability-critical or hardest-correctness-critical trigger (section 24.12).
 
@@ -92,7 +102,9 @@ post-merge verification.
   audit, repair or whole-contract re-audit. Controller governance — state proof, CI/status reads, the Sol audit
   preflight packet, evidence adjudication, merge-readiness judgement, the human authorization request, an
   authorized mechanical merge, post-merge verification and fresh-chat acceptance — consumes none, and specialist
-  work never hides inside it.
+  work never hides inside it. A conditional Codex executor stage (section 24.3) takes the slot of the Claude stage
+  it replaces; a change of executor model or provider never resets the count or adds a slot, and an interrupted
+  stage goes to controller adjudication under section 24.8, never to a silent restart.
 - Every candidate gets one exhaustive independent audit that returns the COMPLETE current material P1/P2 set in
   one pass (`COMPLETE_BLOCKER_COLLECTION`, section 24.4), by GPT-6.1 Sol as PRIMARY, with independence eligibility
   decided before availability, by lane and by executing model id. For protected work and control-plane changes
@@ -101,7 +113,8 @@ post-merge verification.
   unavailability, quota block or runtime-proof stop routes the audit to the ChatGPT controller as the last resort,
   only when it neither implemented nor repaired the candidate (ChatGPT Work's work counts as the controller's own
   and as its executing model's own). GPT-6 Astra and Codex GPT-5.6 Sol are no fallback. With no independent
-  eligible reviewer, stop with proof. No model audits its own work.
+  eligible reviewer, stop with proof. No model audits its own work, and every model id that implemented or
+  repaired any part of a candidate, a Codex executor's included, is ineligible to audit it.
 - `SOL_AUDIT_USAGE_EFFICIENCY_V1` (section 24.4): GPT-6.1 Sol allowance buys independent judgment only. The
   controller supplies a compact preflight packet and does the status and CI polling around the audit; the auditor re-proves its
   exact head once, reads from the changed files outward, reuses green exact-head evidence instead of duplicating
@@ -130,15 +143,20 @@ post-merge verification.
   is under acceptance audit its auditors apply section 24 and the adapters of its base, not its own text — so the
   change that introduces GPT-6.1 Sol is accepted by the final legacy GPT-6 Astra audit, and GPT-6.1 Sol becomes
   active only after that acceptance, merge, post-merge verification, the external ChatGPT Project instruction
-  update and fresh-chat acceptance (`GPT61_SOL_AUDIT_TRANSITION`). The setup then reopens only for a real safety
-  defect, broken continuity, a material capability change, or measured repeated-work reduction, and the default
-  next action is product work.
+  update and fresh-chat acceptance (`GPT61_SOL_AUDIT_TRANSITION`). Likewise the conditional Codex executor
+  (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`) is accepted under the plane before it — Claude Opus 5.5 implements it and
+  the GPT-6.1 Sol protected audit accepts it — and becomes routable only after that acceptance, exact-head human
+  authorization, standard merge, post-merge verification, the external ChatGPT Project instruction update and
+  fresh-chat acceptance, never retroactively (`CODEX_EXECUTOR_FALLBACK_TRANSITION`). The setup then reopens only for
+  a real safety defect, broken continuity, a material capability change, or measured repeated-work reduction, and
+  the default next action is product work.
 
 ### Agent OS chain, accepted state, handoffs
 
 Controller-mediated and sequential: no autonomous scheduler, no auto-loop, no direct model-to-model runtime
 messaging, one repository writer at a time, one open PR, no concurrent patching. Chain: state proof → serious
-prompt (`SERIOUS_PROMPT_COMPILER`, section 24.6) → one implementer → handoff → controller verification →
+prompt (`SERIOUS_PROMPT_COMPILER`, section 24.6) → one implementer (Claude Opus 5.5, or the conditional Codex
+executor of section 24.3) → handoff → controller verification →
 exhaustive independent audit (GPT-6.1 Sol; for protected work also the protected audit) → at most one
 consolidated repair and one whole-contract re-audit → exact-head CI terminal green → controller live-state proof → explicit human
 exact-head merge authorization → standard merge → post-merge verify → next action. All reports move as
@@ -190,7 +208,8 @@ a rule. Unresolved load-bearing disputes stay `UNKNOWN` and block merge.
 - Current valid material P1/P2 review threads block. Outdated threads do not block code, but any resolution needs
   explicit guarded closeout authority.
 - Never combine: implementation + its independent audit; merge + next feature; unrelated slices; setup +
-  product code; research + mutation; two implementers; two PRs; final gate + unauthorized merge.
+  product code; research + mutation; two implementers (one stage has one executor, and the executor changes only
+  at a stage boundary, section 24.3); two PRs; final gate + unauthorized merge.
 
 ## Validation Commands
 

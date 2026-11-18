@@ -7,8 +7,9 @@ description: Use for BIST_ELITE_CORE crypto_core independent audits and re-audit
 
 Use this skill only for `crypto_core` work in BIST_ELITE_CORE. Authority: `AGENTS.md` →
 `docs/crypto_core/agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`, active content
-`MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1` and
-`GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1`) → this adapter, which restates no authority. Operate under
+`MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`,
+`GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1` and `CODEX_EXECUTOR_QUOTA_FALLBACK_V1`) → this adapter, which restates no
+authority. Operate under
 `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2): specialized institutional crypto trading systems
 engineering — paper-first, deterministic, fail-closed, audit-first — never generic coding.
 
@@ -20,6 +21,10 @@ engineering — paper-first, deterministic, fail-closed, audit-first — never g
 - It is an audit-only lane. It is never routed to implementation, repair, routine GitHub status, CI polling,
   thread enumeration or repository archaeology; that work belongs to Claude Opus 5.5 or the ChatGPT controller. A
   Codex or ChatGPT Work session on `gpt-6.1-sol` that is asked to mutate, implement or repair stops with proof.
+- Executor stages are a separate adapter. A Codex session routed to one IMPLEMENTATION or REPAIR stage under
+  `CODEX_EXECUTOR_QUOTA_FALLBACK_V1` (section 24.3) runs on an adopted non-Sol executor id and uses
+  `.codex/skills/crypto-core-executor-fallback/SKILL.md`, never this adapter. An audit or re-audit session never
+  uses the executor adapter, and no Sol-family session ever executes a stage.
 - It never audits a candidate that it — or any execution on its model id, on any host — implemented or repaired
   (`NO_SELF_AUDIT`); for protected work that leaves no eligible auditor and the gate stops with proof.
 - Protected work is audited by GPT-6.1 Sol alone. When it is unavailable, quota-blocked, cannot be requested at
@@ -84,6 +89,11 @@ repository document. Implementer conclusions are never audit premises.
   Once `FINITE_AUDIT_RULE` is satisfied, add no P3 or theoretical-hardening work.
 - Name inherited blockers by semantic defect: blocker identity survives rewording, renames, branches and PR
   numbers (section 24.8).
+- Independence covers every executing model id. When any stage of the candidate ran under the Codex executor fallback
+  (section 24.3), take its implementer set from the controller's packet and the executor handoff: every model id that
+  implemented or repaired any part of the candidate, on any host, is an implementer. Audit only when `gpt-6.1-sol` is
+  not among them (`NO_SELF_AUDIT`); otherwise stop with proof. Judge the executor's code exactly as any other
+  implementation: no lighter standard and no credit for the route.
 - The re-audit is the one whole-contract re-audit after the one consolidated repair, never repaired-lines-only:
   inspect OLD_HEAD..REPAIRED_HEAD first, map the change to the affected invariants, prove the other load-bearing
   surfaces unchanged, re-cover the whole contract (reusing accepted evidence only where exact bytes and authority
@@ -94,6 +104,11 @@ repository document. Implementer conclusions are never audit premises.
   introduces this lane, apply this adapter and section 24 as they stand on the candidate's base (accepted main),
   which route its acceptance to the final legacy GPT-6 Astra audit; GPT-6.1 Sol performs no acceptance audit of
   it and becomes active only after the full transition sequence.
+- Transition rule (section 24.14 `CODEX_EXECUTOR_FALLBACK_TRANSITION`): when the candidate is the change that
+  introduces `CODEX_EXECUTOR_QUOTA_FALLBACK_V1`, apply this adapter and section 24 as they stand on the candidate's
+  base (accepted main). That base routes its acceptance to this lane's own protected audit at `Ultra`; the executor
+  adapter and the doctrine the candidate carries are the object under audit, never the audit procedure, and they
+  route nothing until the full transition sequence completes.
 - Severity follows `AUDIT_MATERIALITY_BOUNDARY_V1` and `FINITE_AUDIT_RULE` (section 24.4): a P1/P2 needs
   demonstrated material relevance on a supported path inside the declared contract, with invariant, source
   evidence, entry or consumer path, effect, materiality and minimum regression proof; P3 is advisory and never
@@ -108,9 +123,10 @@ repository document. Implementer conclusions are never audit premises.
 
 - READ_ONLY: no edits, commits, pushes, PRs, merges, thread resolution, workflow reruns or approvals.
 - Use named files and targeted `rg`; no broad scan without a concrete material audit question.
-- Budget (section 24.8): target 2 specialist prompts clean and 4 repaired (Claude and GPT-6.1 Sol symmetric),
-  hard maximum 5, no sixth, no audit fragmented across executions; controller governance (state proof, status and
-  CI reads, the preflight packet, adjudication, merge closeout, post-merge verification) consumes none.
+- Budget (section 24.8): target 2 specialist prompts clean and 4 repaired (Claude and GPT-6.1 Sol symmetric; a
+  Codex executor stage takes the Claude slot it replaces), hard maximum 5, no sixth, no audit fragmented across
+  executions; controller governance (state proof, status and CI reads, the preflight packet, adjudication, merge
+  closeout, post-merge verification) consumes none.
 
 ## Report (section 24.6 `COMPACT_AUDIT_HANDOFF`)
 

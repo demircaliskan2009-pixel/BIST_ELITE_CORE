@@ -1,18 +1,22 @@
-# crypto_core Model Prompting Guide (v5, 2026-10-02 — GPT-6.1 Sol unified audit edition)
+# crypto_core Model Prompting Guide (v5.1, 2026-11-18 — Codex executor fallback amendment)
 
 Durable authoring guide for the active council of `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by
-`ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1` and `GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1`
-(`docs/crypto_core/agent_workflow.md` section 24 — the authority; this guide teaches how to WRITE prompts for
-it and never overrides it). Claude prompt templates: `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`.
-Research protocol: `docs/crypto_core/deep_research_protocol.md`. On any conflict, section 24 and the stricter
-safety rule win. Nothing in this guide proves repository state or authorizes a merge.
+`ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`, `GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1` and
+`CODEX_EXECUTOR_QUOTA_FALLBACK_V1` (`docs/crypto_core/agent_workflow.md` section 24 — the authority; this guide
+teaches how to WRITE prompts for it and never overrides it). Claude prompt templates:
+`docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`. Codex executor adapter:
+`.codex/skills/crypto-core-executor-fallback/SKILL.md`. Research protocol:
+`docs/crypto_core/deep_research_protocol.md`. On any conflict, section 24 and the stricter safety rule win. Nothing
+in this guide proves repository state or authorizes a merge.
 
 Active council (section 24.3): ChatGPT controller (read-only first, `CONTROLLER_READONLY_FIRST_POLICY`),
-Claude Opus 5.5 (`claude-opus-5-5`), GPT-6.1 Sol (`gpt-6.1-sol`, the audit lane), ChatGPT Work, Deep Research.
-Not routable, and never an automatic fallback: GPT-6 Astra (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT`); Codex
-GPT-5.6 Sol (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_ROUTING`); Claude Sonnet 5, Codex GPT-5.6 Terra and Codex GPT-5.6
-Luna (`NOT_IN_ACTIVE_COUNCIL`); Claude Opus 5 (`SUPERSEDED_BY_OPUS_5_5`); Claude Opus 4.8
-(`SUPERSEDED_BY_OPUS_5`); Claude Fable 5 (`INACTIVE_EXPIRED_RETIRED`); Copilot (`INACTIVE_UNAVAILABLE`).
+Claude Opus 5.5 (`claude-opus-5-5`), the conditional Codex executor (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`, adopted id
+`gpt-6.2-astra`, routed only by an explicit controller selection), GPT-6.1 Sol (`gpt-6.1-sol`, the audit lane),
+ChatGPT Work, Deep Research. Not routable, and never an automatic fallback: GPT-6 Astra
+(`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT`); Codex GPT-5.6 Sol (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_ROUTING`); Claude
+Sonnet 5, Codex GPT-5.6 Terra and Codex GPT-5.6 Luna (`NOT_IN_ACTIVE_COUNCIL`); Claude Opus 5
+(`SUPERSEDED_BY_OPUS_5_5`); Claude Opus 4.8 (`SUPERSEDED_BY_OPUS_5`); Claude Fable 5 (`INACTIVE_EXPIRED_RETIRED`);
+Copilot (`INACTIVE_UNAVAILABLE`).
 Copilot-era repository files are inactive compatibility material and never enter prompt construction.
 
 ## 1. Serious prompt shape
@@ -67,6 +71,17 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 - **Usage duty (`SOL_AUDIT_USAGE_EFFICIENCY_V1`):** spend Sol allowance on independent judgment only — do every
   status read, CI poll, thread enumeration and preflight step around an audit yourself; never inflate an audit
   prompt; never narrow, shorten or fragment an audit to save allowance.
+- **Executor routing (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`, section 24.3):** route implementation and repair to
+  Claude Opus 5.5. Select the Codex executor for one whole stage only when every activation gate holds — fresh
+  Claude quota-block or unavailability evidence for that stage (`CLAUDE_OPUS_5_5_QUOTA_BLOCKED` or
+  `CLAUDE_OPUS_5_5_UNAVAILABLE`, with source and time), your explicit selection, an adopted id, fresh
+  host-capability evidence, the executor's own runtime proof, a whole-stage executor, and a preserved independent
+  GPT-6.1 Sol audit — and record them in `MODEL_RUNTIME_PROOF`. Keep `HOST_CAPABILITY_EVIDENCE`,
+  `EXECUTION_IDENTITY_EVIDENCE` and your `CONTROLLER_AUTHORIZATION` apart. Switch only at a stage boundary; the
+  executor stage takes the replaced Claude stage's slot. For an interrupted stage, assemble its progress, candidate
+  state and consumed slot from live evidence and adjudicate under section 24.8 unchanged (`INTERRUPTED_STAGE`) —
+  never restart it silently under another executor, never create a slot, never grant a second repair. No quota
+  evidence, no fallback; no independent eligible auditor, no fallback; never a Sol-family executor.
 - **Never:** product implementation; any protected audit; an independent audit outside that fallback or of
   its own implementation or repair; a substitute for local tests; memory as repository state; GitHub mutation
   without an exact human action authorization; merge authority.
@@ -101,7 +116,22 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   proof before mutation; one PR per semantic boundary; its self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`.
 - **Templates:** `opus5_prompting_playbook.md` section 3.
 
-### 2.5 GPT-6.1 Sol — primary independent auditor (audit-only lane)
+### 2.5 Codex executor fallback — conditional implementation and repair
+
+- **Best tasks:** one whole IMPLEMENTATION stage (including a `ROOT_CAUSE_ESCAPE` implementation) or the candidate's
+  `ONE_CONSOLIDATED_REPAIR`, when Claude Opus 5.5 is quota-blocked or unavailable for that stage and the controller
+  routes it here under `CODEX_EXECUTOR_QUOTA_FALLBACK_V1` (section 24.3).
+- **Bad tasks:** any audit or re-audit; a fragment of a stage; a stage another executor started, unless the
+  controller's prompt names that continuation and its exact starting state; work Claude can run.
+- **Rules:** only an adopted id (`gpt-6.2-astra`, GPT-6.2 Astra — a different id from the superseded GPT-6 Astra),
+  never a Sol-family id; `MODEL_ID_REQUIRED` is the selected id and thinking `ENABLED`, proven before mutation on
+  execution evidence; effort `xhigh`, `max` only on a named capability-critical or hardest-correctness-critical
+  trigger, never `ultra` requested or observed (automatic task delegation); `STANDARD` speed; subagents 0; host
+  approval layers are never authorization. Same validation ladder, scoped commit, one PR, terminal CI and audit
+  gate as the Claude stage it replaces; its self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`.
+- **Adapter:** `.codex/skills/crypto-core-executor-fallback/SKILL.md`; skeleton in section 3.
+
+### 2.6 GPT-6.1 Sol — primary independent auditor (audit-only lane)
 
 - **Best tasks:** the exhaustive fresh-context whole-contract audit and the one whole-contract re-audit of every
   serious candidate (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`); for protected work, including control-plane
@@ -124,13 +154,14 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   of rerunning the full suite for duplication, runs the one re-audit delta-aware but whole-contract, and returns
   the `COMPACT_AUDIT_HANDOFF` with speed and usage telemetry when the host exposes them (`UNKNOWN` otherwise).
 
-### 2.6 Superseded lanes
+### 2.7 Superseded lanes
 
 GPT-6 Astra (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT`) and Codex GPT-5.6 Sol
 (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_ROUTING`) are no crypto_core lane, default, fallback or dependency, and their
-dated records are HISTORICAL. The change that introduces GPT-6.1 Sol is accepted by the final legacy GPT-6 Astra
-audit under the plane before it (section 24.14 `GPT61_SOL_AUDIT_TRANSITION`); no other Astra or GPT-5.6 Sol prompt
-is written.
+dated records are HISTORICAL. GPT-6.2 Astra (`gpt-6.2-astra`) is a different model id, routable only as the
+conditional executor of section 2.5. The change that introduces GPT-6.1 Sol is accepted by the final legacy GPT-6
+Astra audit under the plane before it (section 24.14 `GPT61_SOL_AUDIT_TRANSITION`); no other Astra or GPT-5.6 Sol
+prompt is written.
 
 ## 3. Lifecycle prompt skeletons
 
@@ -175,6 +206,22 @@ HANDOFF: AGENT_OS_HANDOFF_V1; this is the candidate's only repair
 ```
 
 ```text
+TASK_INTENT: <IMPLEMENTATION | REPAIR — exactly one> (one whole stage routed to the conditional Codex executor)
+SEMANTIC_BOUNDARY: <as the Claude IMPLEMENTATION or REPAIR skeleton: the whole contract or the complete audited set>
+STATE_PIN: <as the replaced stage>; the stage's starting state; every model id that already implemented or repaired
+  any part of this candidate
+MODEL_RUNTIME_PROOF: EXECUTOR_ROUTE=CODEX_EXECUTOR_QUOTA_FALLBACK_V1 | FALLBACK_REASON CLAUDE_OPUS_5_5_QUOTA_BLOCKED or
+  CLAUDE_OPUS_5_5_UNAVAILABLE with source and time | MODEL_ID_REQUIRED gpt-6.2-astra (an adopted id, never Sol-family) |
+  THINKING ENABLED | effort xhigh (max only on a named trigger; never ultra) | speed STANDARD | subagents 0 |
+  HOST_CAPABILITY_EVIDENCE requested fresh | whole-stage judgement | independent GPT-6.1 Sol audit preserved
+BLOCKER_INVENTORY: <NONE or inherited identities for an implementation; the complete audited P1/P2 set for a repair>
+STOP_CONDITIONS: any activation gate missing, stale, UNKNOWN or contradicted; runtime proof fails; requested effort
+  not exposed or ultra observed; another writer active; scope or authority outside the prompt
+HANDOFF: AGENT_OS_HANDOFF_V1 with the executor route, fallback reason and evidence, host-capability evidence and every
+  executing model id; SELF_AUDIT_ONLY_NOT_INDEPENDENT; the stage takes the replaced Claude stage's slot
+```
+
+```text
 TASK_INTENT: REAUDIT (the ONE whole-contract re-audit; READ_ONLY)
 SEMANTIC_BOUNDARY: <the same declared contract>; the whole contract, never only the repaired lines
 STATE_PIN: old head <sha>; repaired head <sha>; tree <sha|UNKNOWN>; changed files; required-check snapshot;
@@ -210,4 +257,5 @@ This guide changes prompting ergonomics only. It does not alter: one open PR; on
 direct `main` push; standard merge only; explicit per-PR, exact-head human merge authorization; pending CI =
 `NOT_READY`; current valid material P1/P2 threads block; the GPT-6.1 Sol audit for protected work;
 post-merge verification; crypto_core-only scope; paper-first/fail-closed/deterministic rails; and the
-validity of any open blocker until its own gates close it.
+validity of any open blocker until its own gates close it. The conditional Codex executor changes none of these:
+it takes the replaced Claude stage's slot, never adds a slot or a repair, and never audits.
