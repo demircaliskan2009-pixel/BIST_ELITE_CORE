@@ -1952,6 +1952,19 @@ def _armed_stop(
     sign = 1 if quantity > 0 else -1
     if protection.direction != ("LONG" if sign > 0 else "SHORT"):
         return _Protection(None, "armed_stop_of_another_direction", ())
+    return _protection_stop(protection, sign, pm_policy=pm_policy, pm_archive=pm_archive)
+
+
+def _protection_stop(
+    protection: HistoricalExecutionExcursionProtection,
+    sign: int,
+    *,
+    pm_policy: HistoricalPositionManagementPolicy,
+    pm_archive: HistoricalOhlcBarArchive,
+) -> _Protection:
+    """R-1 of one excursion: the milestone-0 stop its opening fill armed, re-derived exactly from the protection record
+    (the basis on the price grid, the ATR re-computed at its own instant), or why none is proven."""
+
     reading = historical_ohlc_wilder_atr(
         pm_archive,
         interval_ns=pm_policy.atr_interval_ns,
@@ -1972,6 +1985,63 @@ def _armed_stop(
     return _Protection(stop, "", (protection.protection_digest, reading.window_digest))  # type: ignore[arg-type]
 
 
+def _open_risk_rho(  # noqa: PLR0911 - one linear proof, every refusal named
+    facts: _Facts,
+    *,
+    time_ns: int,
+    cost: Fraction,
+    pm_policy: HistoricalPositionManagementPolicy,
+    pm_archive: HistoricalOhlcBarArchive,
+    protections: Sequence[HistoricalExecutionExcursionProtection],
+) -> tuple[Fraction | None, str, str, tuple[str, ...]]:
+    """FCD-01 at a decision (R-4 for an entry from flat, R-6 otherwise): ``(rho, refusal, why, evidence)``, the exact
+    stop-risk fraction NT-R03 renders, or None with the refusal its BLOCKED reading carries."""
+
+    snapshot = facts.snapshot
+    if snapshot is None:
+        return None, "governed_portfolio_not_computed", "", ()
+    evidence: tuple[str, ...] = (snapshot.snapshot_digest,)
+    if snapshot.order_in_flight:
+        return None, "an_order_in_flight", "", evidence
+    if facts.nav is None:
+        return None, facts.nav_reason, "", evidence
+    if facts.nav <= 0:
+        return None, "nav_not_positive", "", evidence
+    if historical_position_management_initial_stop_fraction(pm_policy) is None:
+        return None, "armed_stop_needs_the_policy_v2_r1_stop", "", evidence
+    quantity, candidate, mark = facts.quantity, facts.candidate, facts.mark
+    if facts.entry:
+        if quantity != 0:
+            return None, "prospective_entry_not_from_flat_has_no_r4_reading", "", evidence
+        if mark is None:
+            return None, "no_fresh_visible_mark", "", evidence
+        atr = historical_ohlc_wilder_atr(
+            pm_archive,
+            interval_ns=pm_policy.atr_interval_ns,
+            at_ns=time_ns,
+            max_bar_age_ns=pm_policy.atr_max_bar_age_ns,
+        )
+        if not atr.available:
+            return None, f"atr_4h_unavailable:{atr.reason}", "", evidence
+        if facts.candidate_nav is None:
+            return None, facts.candidate_nav_reason, "", evidence
+        if facts.candidate_nav <= 0:
+            return None, "candidate_nav_not_positive", "", evidence
+        sign = 1 if candidate > 0 else -1  # type: ignore[operator]
+        stop = mark - sign * min(STOP_ATR_MULTIPLE * atr.value, INITIAL_STOP_FRACTION * mark)  # type: ignore[operator]
+        rho = governed_paper_risk_stop_risk(candidate, mark, stop, cost) / facts.candidate_nav  # type: ignore[arg-type]
+        return rho, "", "candidate_open_risk_at_the_r4_stop", (*evidence, atr.window_digest)  # type: ignore[arg-type]
+    if quantity == 0:
+        return Fraction(0), "", "no_position_and_no_order_in_flight_carry_risk", evidence
+    if mark is None:
+        return None, "no_fresh_visible_mark", "", evidence
+    armed = _armed_stop(protections, time_ns=time_ns, quantity=quantity, pm_policy=pm_policy, pm_archive=pm_archive)  # type: ignore[arg-type]
+    if armed.stop is None:
+        return None, armed.reason, "", evidence
+    rho = governed_paper_risk_stop_risk(quantity, mark, armed.stop, cost) / facts.nav  # type: ignore[arg-type]
+    return rho, "", "current_position_open_risk_at_its_armed_stop_reported_r6", (*evidence, *armed.evidence)
+
+
 def _open_risk(
     facts: _Facts,
     *,
@@ -1983,52 +2053,11 @@ def _open_risk(
 ) -> GovernedPaperRiskCheckReading:
     """NT-R03 under FCD-01 (R-4, R-6, R-7)."""
 
-    snapshot = facts.snapshot
-    if snapshot is None:
-        return _check("NT-R03", _B, "", "governed_portfolio_not_computed")
-    evidence = (snapshot.snapshot_digest,)
-    if snapshot.order_in_flight:
-        return _check("NT-R03", _B, "", "an_order_in_flight", evidence)
-    if facts.nav is None:
-        return _check("NT-R03", _B, "", facts.nav_reason, evidence)
-    if facts.nav <= 0:
-        return _check("NT-R03", _B, "", "nav_not_positive", evidence)
-    if historical_position_management_initial_stop_fraction(pm_policy) is None:
-        return _check("NT-R03", _B, "", "armed_stop_needs_the_policy_v2_r1_stop", evidence)
-    quantity, candidate, mark = facts.quantity, facts.candidate, facts.mark
-    if facts.entry:
-        if quantity != 0:
-            return _check("NT-R03", _B, "", "prospective_entry_not_from_flat_has_no_r4_reading", evidence)
-        if mark is None:
-            return _check("NT-R03", _B, "", "no_fresh_visible_mark", evidence)
-        atr = historical_ohlc_wilder_atr(
-            pm_archive,
-            interval_ns=pm_policy.atr_interval_ns,
-            at_ns=time_ns,
-            max_bar_age_ns=pm_policy.atr_max_bar_age_ns,
-        )
-        if not atr.available:
-            return _check("NT-R03", _B, "", f"atr_4h_unavailable:{atr.reason}", evidence)
-        if facts.candidate_nav is None:
-            return _check("NT-R03", _B, "", facts.candidate_nav_reason, evidence)
-        if facts.candidate_nav <= 0:
-            return _check("NT-R03", _B, "", "candidate_nav_not_positive", evidence)
-        sign = 1 if candidate > 0 else -1  # type: ignore[operator]
-        stop = mark - sign * min(STOP_ATR_MULTIPLE * atr.value, INITIAL_STOP_FRACTION * mark)  # type: ignore[operator]
-        rho = governed_paper_risk_stop_risk(candidate, mark, stop, cost) / facts.candidate_nav  # type: ignore[arg-type]
-        evidence = (*evidence, atr.window_digest)  # type: ignore[assignment]
-        why = "candidate_open_risk_at_the_r4_stop"
-    elif quantity == 0:
-        rho, why = Fraction(0), "no_position_and_no_order_in_flight_carry_risk"
-    else:
-        if mark is None:
-            return _check("NT-R03", _B, "", "no_fresh_visible_mark", evidence)
-        armed = _armed_stop(protections, time_ns=time_ns, quantity=quantity, pm_policy=pm_policy, pm_archive=pm_archive)  # type: ignore[arg-type]
-        if armed.stop is None:
-            return _check("NT-R03", _B, "", armed.reason, evidence)
-        rho = governed_paper_risk_stop_risk(quantity, mark, armed.stop, cost) / facts.nav  # type: ignore[arg-type]
-        evidence = (*evidence, *armed.evidence)  # type: ignore[assignment]
-        why = "current_position_open_risk_at_its_armed_stop_reported_r6"
+    rho, reason, why, evidence = _open_risk_rho(
+        facts, time_ns=time_ns, cost=cost, pm_policy=pm_policy, pm_archive=pm_archive, protections=protections
+    )
+    if rho is None:
+        return _check("NT-R03", _B, "", reason, evidence)
     observed = historical_execution_render_amount(rho)
     if observed is None:
         return _check("NT-R03", _B, "", "open_risk_unrepresentable", evidence)
@@ -2341,6 +2370,66 @@ def _canonical_decisions(decisions: object, start_ns: int, horizon_ns: int) -> t
     return decisions  # type: ignore[return-value]
 
 
+def governed_paper_risk_entry_fraction(  # noqa: PLR0913
+    market: GovernedPaperRiskMarket,
+    decision_time_ns: int,
+    *,
+    snapshot: HistoricalExecutionDecisionPortfolioSnapshot | None,
+    exact: HistoricalExecutionDecisionExactValues | None,
+    outcome: HistoricalExecutionGovernedPaperOutcome | None,
+    economics_policy: HistoricalExecutionEconomicsPolicy,
+    position_management_policy: HistoricalPositionManagementPolicy,
+    position_management_archive: HistoricalOhlcBarArchive,
+) -> tuple[Fraction | None, str]:
+    """FCD-01 R-4 of one entry decision from flat, exact and in memory only (S1_KELLY_DEFINED_READING_CONSTRUCTION_V1):
+    ``(rho_t, "")``, the candidate's stop-risk fraction behind its NT-R03 reading (the same computation on the same
+    facts, never its rendering), or ``(None, why)`` where NT-R03 has no R-4 reading: an approval the active table does not
+    admit, a decision that is not an entry from flat, or any refusal of its own BLOCKED reading. Pure."""
+
+    if type(market) is not GovernedPaperRiskMarket:
+        raise _fail("market_malformed")
+    if not market.approval_admitted:
+        return None, f"risk_policy_not_admitted:{market.approval_reason}"
+    fee_bps = Fraction(economics_policy.taker_fee_bps)
+    cost = (fee_bps + Fraction(economics_policy.slippage_floor_bps)) / 10_000
+    facts = _facts(snapshot, exact, fee_bps)
+    if facts.snapshot is not None and not facts.entry:
+        return None, "decision_is_not_an_entry"
+    simulated = outcome is not None and outcome.simulated is True
+    rho, reason, _, _ = _open_risk_rho(
+        facts,
+        time_ns=decision_time_ns,
+        cost=cost,
+        pm_policy=position_management_policy,
+        pm_archive=position_management_archive,
+        protections=outcome.excursion_protections if simulated else (),  # type: ignore[union-attr]
+    )
+    return rho, reason
+
+
+def governed_paper_risk_protection_stop(
+    protection: HistoricalExecutionExcursionProtection,
+    *,
+    position_management_policy: HistoricalPositionManagementPolicy,
+    position_management_archive: HistoricalOhlcBarArchive,
+) -> tuple[Fraction | None, str, tuple[str, ...]]:
+    """R-1 of one excursion, exact (S1_KELLY_DEFINED_READING_CONSTRUCTION_V1): ``(stop, "", evidence)``, the milestone-0
+    stop its opening fill armed re-derived from the record exactly as NT-R03's R-6 re-derives it (the basis on the price
+    grid, the ATR re-computed at its own instant, the policy v2 nearer stop), or ``(None, why, ())``. Pure."""
+
+    if type(protection) is not HistoricalExecutionExcursionProtection:
+        raise _fail("protection_malformed")
+    if historical_position_management_initial_stop_fraction(position_management_policy) is None:
+        return None, "armed_stop_needs_the_policy_v2_r1_stop", ()
+    if protection.direction not in ("LONG", "SHORT"):
+        return None, "protection_direction_unknown", ()
+    sign = 1 if protection.direction == "LONG" else -1
+    found = _protection_stop(
+        protection, sign, pm_policy=position_management_policy, pm_archive=position_management_archive
+    )
+    return found.stop, found.reason, found.evidence
+
+
 def derive_governed_paper_risk_evidence(  # noqa: PLR0913
     context: GovernedPaperRiskContext,
     *,
@@ -2513,6 +2602,7 @@ __all__ = [
     "derive_governed_paper_risk_market",
     "governed_paper_risk_approval_digest",
     "governed_paper_risk_cvar_star",
+    "governed_paper_risk_entry_fraction",
     "governed_paper_risk_evidence_digest",
     "governed_paper_risk_evidence_to_dict",
     "governed_paper_risk_fill_bounds",
@@ -2524,6 +2614,7 @@ __all__ = [
     "governed_paper_risk_nt_m01",
     "governed_paper_risk_policy_digest",
     "governed_paper_risk_prefix_digest",
+    "governed_paper_risk_protection_stop",
     "governed_paper_risk_reading_digest",
     "governed_paper_risk_rule",
     "governed_paper_risk_spread_checks",

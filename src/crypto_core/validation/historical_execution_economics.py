@@ -236,6 +236,29 @@ schedule v2-v6 carries no CVaR bound, so its payload, digest and re-run are exac
 ``historical_execution_close_only_exit_quote`` exposes this fill model, pure, for one close-only order of a whole position
 against one book with its visible quantities scaled as the LOW_LIQUIDITY transform scales them (RECORD B LS-A).
 
+Fill-time Kelly fit (``S1_KELLY_DEFINED_READING_CONSTRUCTION_V1``, schedule v8). Schedule v8 is schedule v7: it carries
+exactly the v7 fields and nothing more, and its re-run's outcome is v4. After every earlier rule admitted it, the R-5 and
+C-10 bounds included, an exposure-increasing fill is evaluated under RECORD A's Kelly reading (KD-1..KD-12, with the KD-9
+fit of the human decision ``S1_KELLY_DA1_DECISION_V1``) on the run's own closed excursions and on the fill's own FCD-01
+stop-risk fraction ``rho = R-5 risk / publication-visible candidate equity``, by the one pure exact arithmetic
+``historical_execution_kelly_fit``:
+
+* a closed excursion counts once it is known at the decision instant of the fill's intent: its closing fill at or before
+  that instant and the final rate of every settlement it carries visible by then. A closed excursion not yet known
+  refuses the fill as unproven (``governed_paper_kelly_unproven_at_fill``), and so does every other undefined reading: no
+  known win or no known loss in the KD-1 window, an unproven opening-fill risk, or the undecided 100-trade bootstrap;
+* a defined component that fails refuses it: ``f* <= 0`` (``governed_paper_kelly_non_positive_at_fill``), the fit
+  ``rho * max(1, Lbar) > f_cap`` (``governed_paper_kelly_fit_exceeded_at_fill``), a known outcome with ``1 + rho * R_j <= 0``
+  (``governed_paper_kelly_log_domain_ruin_at_fill``), and a product of the G window's ``1 + rho * R_j`` that is not above 1
+  (``governed_paper_kelly_log_utility_non_positive_at_fill``).
+
+Every closed excursion of a schedule v7 or v8 re-run carries, in memory only, its exact realized net PnL, the exact FCD-01
+R-5 risk of its opening fill and its knowledge instant (``HistoricalExecutionTradeExactValues``, read through
+``simulate_historical_execution_governed_paper_derivation``); no ledger, payload or digest carries them. No incubation
+record exists, so no reading is ever covered and a re-run that starts flat refuses its first exposure-increasing fill. A
+refusal is whole, never a resize, and never reaches a reduction, a close or a protective close-only fill; a schedule v2-v7
+never evaluates the fit, so its payload, digest and re-run are exactly the accepted ones.
+
 Governed decision portfolio. ``simulate_historical_execution_governed_paper_decision_portfolio`` (schedule v4 only) is the
 same governed re-run, which also records, at every decision of the frozen trace, the portfolio as known at that instant
 BEFORE the decision is admitted (after the funding settlements and protective rules of the same nanosecond, before its
@@ -1401,6 +1424,10 @@ class _Trade:
     total_fees: Fraction = Fraction(0)
     total_funding: Fraction = Fraction(0)
     cash_flow: Fraction = Fraction(0)
+    # S1_KELLY_DEFINED_READING_CONSTRUCTION_V1, in memory only: the exact FCD-01 R-5 risk of the opening fill (schedules
+    # v7 and v8) and the latest visibility of a final rate the trade's settlements carry.
+    opening_risk: Fraction | None = None
+    funding_known_ns: int = 0
 
 
 @dataclass(frozen=True)
@@ -1586,6 +1613,12 @@ class _Simulation:
         self.decision_exact_values: list[HistoricalExecutionDecisionExactValues] = []
         self.event_priority = -1
         self.trade_close_priorities: list[int] = []
+        # The exact Kelly inputs of every closed trade (S1_KELLY_DEFINED_READING_CONSTRUCTION_V1): read by a governed
+        # derivation and by the schedule v8 fill-time fit only, never a ledger. ``admitted_fill_risk`` is the R-5 risk the
+        # admission of the exposure-increasing fill being executed measured (schedules v7 and v8), reset before every
+        # such admission and consumed by the transition that opens the trade.
+        self.trade_exact_values: list[HistoricalExecutionTradeExactValues] = []
+        self.admitted_fill_risk: Fraction | None = None
 
     def _transformed_marks(self, marks: _MarkCursor) -> _MarkCursor:
         """Construction hook: the mark observations as the simulation reads them (identity; a stress run overrides)."""
@@ -1671,6 +1704,8 @@ class _Simulation:
         if self.trade is not None:
             self.trade.funding.append(sealed.cashflow_digest)
             self.trade.total_funding += amount
+            # its final rate is checked present above, so the settlement's amount is known from this visibility on
+            self.trade.funding_known_ns = max(self.trade.funding_known_ns, _visibility(record))  # type: ignore[type-var]
         self._valuation(HistoricalExecutionValuationKind.FUNDING_SETTLEMENT, liability_ns, sealed.cashflow_digest)
 
     def _intent(self, decision: HistoricalDecisionRecord) -> _Intent | None:
@@ -1848,6 +1883,12 @@ class _Simulation:
         """Admission hook of an exposure-increasing fill past every sizing rule: the order, its exact post-fill position,
         its executed price, the fill mark, its positive publication-visible candidate equity and its instant. A refusal
         reason, or None (the historical model admits every one)."""
+
+        return None
+
+    def _kelly_fill_admission(self, order: object, equity: Fraction) -> str | None:
+        """Admission hook of an exposure-increasing fill past every risk rule: the order and its positive
+        publication-visible candidate equity. A refusal reason, or None (the historical model admits every one)."""
 
         return None
 
@@ -2515,6 +2556,7 @@ class _Simulation:
             notional = abs(transition.post.quantity) * mark.price
             if candidate_equity <= 0 or notional > self.max_leverage * candidate_equity:
                 return reject("risk_limit_exceeded", **quoted)
+            self.admitted_fill_risk = None  # only this fill's own admission measures it
             refused = (
                 self._exposure_fill_admission(notional, candidate_equity)
                 or self._sizing_fill_admission(
@@ -2523,6 +2565,7 @@ class _Simulation:
                 or self._risk_fill_admission(
                     record, transition.post.quantity, price, mark.price, candidate_equity, book.visibility
                 )
+                or self._kelly_fill_admission(record, candidate_equity)
             )
             if refused is not None:
                 return reject(refused, **quoted)
@@ -2595,7 +2638,9 @@ class _Simulation:
                 _derived_id("trade", self.run_digest, fill.fill_digest),
                 "LONG" if transition.signed > 0 else "SHORT",
                 time_ns,
+                opening_risk=self.admitted_fill_risk,
             )
+        self.admitted_fill_risk = None
         trade = self.trade
         if trade is None:
             raise _EconomicFailure("trade_state_inconsistent")
@@ -2659,6 +2704,14 @@ class _Simulation:
             self._trade_record(trade, HistoricalExecutionTradeStatus.CLOSED, time_ns, None, None)
         )
         self.trade_close_priorities.append(self.event_priority)
+        self.trade_exact_values.append(
+            HistoricalExecutionTradeExactValues(
+                trade_id=trade.trade_id,
+                realized_net_pnl=trade.realized_gross - trade.total_fees + trade.total_funding,
+                opening_risk=trade.opening_risk,
+                knowledge_ns=max(time_ns, trade.funding_known_ns),
+            )
+        )
         self.trade = None
 
     def _liability(self, record: HistoricalPitRecord, interval: int) -> int:
@@ -2921,6 +2974,154 @@ def historical_execution_close_only_exit_quote(  # noqa: PLR0911, PLR0913 - one 
     fee = price * filled * Fraction(policy.taker_fee_bps) / _BPS
     slippage = filled * (mid - price) if selling else filled * (price - mid)
     return "", slippage + fee
+
+
+def _mean(values: Sequence[Fraction]) -> Fraction:
+    return sum(values, Fraction(0)) / len(values)
+
+
+def historical_execution_kelly_fit(  # noqa: C901, PLR0912, PLR0915 - one linear reading of KD-1..KD-12
+    known: Sequence[tuple[Fraction, Fraction | None]],
+    *,
+    unknown_count: int,
+    rho: Fraction | None,
+) -> HistoricalExecutionKellyFit:
+    """RECORD A's Kelly reading of one candidate, exact (KD-1..KD-12, with the KD-9 of S1_KELLY_DA1_DECISION_V1).
+
+    ``known`` are the KNOWN closed trades of the lineage in engine close order, oldest first, each ``(realized net PnL,
+    FCD-01 opening-fill risk)`` with the risk None where unproven; ``unknown_count`` counts the closed trades not yet known;
+    ``rho`` is the candidate's own FCD-01 stop-risk fraction (R-4 at a decision, R-5 at an exposure-increasing fill), None
+    when unproven. ``R_j = net_j / risk_j`` needs a proven positive risk (KD-0, KD-10a). The components:
+
+    * the solvency domain on every known outcome (PRDV4 §1.21, A1.3, KD-10b): ``1 + rho * R_j <= 0`` is FAIL
+      (``KELLY_LOG_DOMAIN_RUIN``) from the first known trade, whatever else is undefined;
+    * while a closed trade is not yet known, the windows are undefined (``KELLY_TRADE_COUNT_UNPROVEN``);
+    * KD-1/KD-2/KD-3: the KD-1 window is the latest ``min(n, 100)`` known trades; a trade is a win, a loss or a zero by
+      the sign of its net PnL (A1.3); without a win and a loss it is ``KELLY_RATIO_UNDEFINED``, and every window R_j must
+      be proven (``KELLY_OUTCOME_UNPROVEN``);
+    * KD-4/KD-5/KD-6: ``p`` is the normalized EWMA ``sum_wins w_j / sum_all w_j`` with ``w_j = (19/20)^j``, j = 0 the
+      newest (zeros count in the denominator, never in b); ``b = mean_wins(R) / mean_losses(|R|)``, unweighted;
+      ``f* = (p*b - q)/b``, and ``f* <= 0`` is FAIL (``KELLY_NON_POSITIVE``);
+    * KD-7/KD-8/KD-9: below 100 trades ``f = f*/4`` and ``f_cap = min(f, 0.04)``; at 100 the bootstrap is undecided
+      (``KELLY_BOOTSTRAP_UNDECIDED``); the fit ``rho * max(1, Lbar) <= f_cap`` with ``Lbar = mean_losses(|R_j|)`` of the
+      KD-1 window holds at equality and fails above it (``KELLY_FIT_EXCEEDED``);
+    * KD-10a/c: on the G window, the latest ``min(n, 60)`` known trades, with every R_j proven and every term positive
+      and at least two of them, ``prod(1 + rho * R_j) > 1`` is required, decided by one exact integer comparison
+      (``KELLY_LOG_UTILITY_NON_POSITIVE`` otherwise); KD-10d's ``rho*mu - rho^2*s2/2`` is a diagnostic only.
+
+    A missing ``rho`` is ``KELLY_RISK_FRACTION_UNPROVEN``. FAIL when any defined component fails, BLOCKED when any is
+    undefined, PASS otherwise. No coverage: an incubation record would be read by its caller. Pure, exact, no state.
+    """
+
+    if type(unknown_count) is not int or unknown_count < 0:
+        raise _fail("kelly_unknown_count_invalid")
+    if rho is not None and type(rho) is not Fraction:
+        raise _fail("kelly_rho_malformed")
+    trades = tuple(known)
+    for item in trades:
+        if (
+            type(item) is not tuple
+            or len(item) != 2  # noqa: PLR2004 - (net, risk)
+            or type(item[0]) is not Fraction
+            or (item[1] is not None and type(item[1]) is not Fraction)
+        ):
+            raise _fail("kelly_known_trade_malformed")
+    outcomes = tuple(net / risk if risk is not None and risk > 0 else None for net, risk in trades)
+    failures: set[str] = set()
+    blocks: set[str] = set()
+    if rho is None:
+        blocks.add("KELLY_RISK_FRACTION_UNPROVEN")
+    else:
+        if any(value is not None and 1 + rho * value <= 0 for value in outcomes):
+            failures.add("KELLY_LOG_DOMAIN_RUIN")
+        if any(value is None for value in outcomes):
+            blocks.add("KELLY_OUTCOME_UNPROVEN")
+    count = len(trades)
+    window_count = min(count, HISTORICAL_EXECUTION_KELLY_WINDOW)
+    g_count = min(count, HISTORICAL_EXECUTION_KELLY_G_WINDOW)
+    window = trades[count - window_count :]
+    window_outcomes = outcomes[count - window_count :]
+    wins = sum(1 for net, _ in window if net > 0)
+    losses = sum(1 for net, _ in window if net < 0)
+    zeros = window_count - wins - losses
+    p = mean_win = mean_loss = b = f_star = f = f_cap = fit_value = diagnostic = None
+    terms: tuple[Fraction, ...] = ()
+    product: bool | None = None
+    if unknown_count:
+        blocks.add("KELLY_TRADE_COUNT_UNPROVEN")
+    else:
+        if wins == 0 or losses == 0:
+            blocks.add("KELLY_RATIO_UNDEFINED")
+        elif any(value is None for value in window_outcomes):
+            blocks.add("KELLY_OUTCOME_UNPROVEN")
+        else:
+            decay = HISTORICAL_EXECUTION_KELLY_DECAY
+            # w_j scaled by den^(n_w - 1) to exact integers; j = 0 is the newest trade (the last of the window)
+            weights = [decay.numerator**j * decay.denominator ** (window_count - 1 - j) for j in range(window_count)]
+            newest_first = list(reversed(window))
+            p = Fraction(sum(w for w, (net, _) in zip(weights, newest_first, strict=True) if net > 0), sum(weights))
+            mean_win = _mean([value for (net, _), value in zip(window, window_outcomes, strict=True) if net > 0])  # type: ignore[misc]
+            mean_loss = _mean([-value for (net, _), value in zip(window, window_outcomes, strict=True) if net < 0])  # type: ignore[operator]
+            b = mean_win / mean_loss
+            f_star = (p * b - (1 - p)) / b
+            if f_star <= 0:
+                failures.add("KELLY_NON_POSITIVE")
+            elif window_count >= HISTORICAL_EXECUTION_KELLY_WINDOW:
+                blocks.add("KELLY_BOOTSTRAP_UNDECIDED")
+            else:
+                f = f_star * HISTORICAL_EXECUTION_KELLY_FRACTION
+                f_cap = min(f, HISTORICAL_EXECUTION_KELLY_CAP)
+                if rho is not None:
+                    fit_value = rho * max(Fraction(1), mean_loss)
+                    if fit_value > f_cap:
+                        failures.add("KELLY_FIT_EXCEEDED")
+        g_outcomes = outcomes[count - g_count :]
+        if rho is not None and g_count and all(value is not None for value in g_outcomes):
+            terms = tuple(1 + rho * value for value in g_outcomes)  # type: ignore[operator]
+            if g_count >= 2 and all(term > 0 for term in terms):  # noqa: PLR2004 - KD-10c needs two trades
+                numerator = denominator = 1
+                for term in terms:  # the exact product as one integer comparison; never formed or rendered
+                    numerator *= term.numerator
+                    denominator *= term.denominator
+                product = numerator > denominator
+                if not product:
+                    failures.add("KELLY_LOG_UTILITY_NON_POSITIVE")
+                mu = _mean(g_outcomes)  # type: ignore[arg-type]
+                spread = sum(((value - mu) ** 2 for value in g_outcomes), Fraction(0)) / (g_count - 1)  # type: ignore[operator]
+                diagnostic = rho * mu - rho * rho * spread / 2
+    ordered_failures = tuple(item for item in HISTORICAL_EXECUTION_KELLY_FAILURES if item in failures)
+    ordered_blocks = tuple(item for item in HISTORICAL_EXECUTION_KELLY_BLOCKS if item in blocks)
+    if ordered_failures:
+        status, reason = HistoricalExecutionKellyStatus.FAIL, ordered_failures[0]
+    elif ordered_blocks:
+        status, reason = HistoricalExecutionKellyStatus.BLOCKED, ordered_blocks[0]
+    else:
+        status, reason = HistoricalExecutionKellyStatus.PASS, "KELLY_FIT_PROVEN"
+    return HistoricalExecutionKellyFit(
+        status=status,
+        reason=reason,
+        failures=ordered_failures,
+        blocks=ordered_blocks,
+        known_count=count,
+        unknown_count=unknown_count,
+        window_count=window_count,
+        g_count=g_count,
+        wins=wins,
+        losses=losses,
+        zeros=zeros,
+        outcomes=outcomes,
+        p=p,
+        mean_win=mean_win,
+        mean_loss=mean_loss,
+        b=b,
+        f_star=f_star,
+        f=f,
+        f_cap=f_cap,
+        fit_value=fit_value,
+        terms=terms,
+        product_exceeds_one=product,
+        diagnostic=diagnostic,
+    )
 
 
 class _ShockedMarks:
@@ -3322,31 +3523,77 @@ _PROTECTIVE_LEDGER_GOVERNED_SCHEMA_VERSION = (
 # (S1_NATIVE_RISK_MEASUREMENT_CONSTRUCTION_V1, module docstring); its re-run's outcome is v4, like schedule v6's.
 HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v7"
 _RISK_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_SCHEDULE_SCHEMA_VERSION
+# Schedule v8: the v7 schedule with RECORD A's Kelly fit at every exposure-increasing fill
+# (S1_KELLY_DEFINED_READING_CONSTRUCTION_V1, module docstring); it declares no new field and its re-run's outcome is v4.
+HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v8"
+_KELLY_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION
 _INFORMATION_TIME_SCHEDULES = (
     _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION,
     _SIZING_SCHEDULE_SCHEMA_VERSION,
     _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
     _RISK_SCHEDULE_SCHEMA_VERSION,
+    _KELLY_SCHEDULE_SCHEMA_VERSION,
 )
-# The schedules carrying the declared fill-time sizing bounds: schedule v5 and, on top of it, schedules v6 and v7.
+# The schedules carrying the declared fill-time sizing bounds: schedule v5 and, on top of it, schedules v6, v7 and v8.
 HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS = (
     _SIZING_SCHEDULE_SCHEMA_VERSION,
     _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
     _RISK_SCHEDULE_SCHEMA_VERSION,
+    _KELLY_SCHEDULE_SCHEMA_VERSION,
 )
 _SIZING_BOUND_SCHEDULES = HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS
-# The schedules carrying the declared protective-ledger bounds (exposure halt, flatten windows): schedule v6 and v7.
+# The schedules carrying the declared protective-ledger bounds (exposure halt, flatten windows): schedule v6, v7 and v8.
 HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS = (
     _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
     _RISK_SCHEDULE_SCHEMA_VERSION,
+    _KELLY_SCHEDULE_SCHEMA_VERSION,
 )
 _PROTECTIVE_LEDGER_SCHEDULES = HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS
+# The schedules carrying the declared CVaR bounds and the FCD-01 R-5 stop-risk bound: schedule v7 and, on top of it, v8.
+HISTORICAL_EXECUTION_RISK_BOUND_SCHEDULE_SCHEMA_VERSIONS = (
+    _RISK_SCHEDULE_SCHEMA_VERSION,
+    _KELLY_SCHEDULE_SCHEMA_VERSION,
+)
+_RISK_BOUND_SCHEDULES = HISTORICAL_EXECUTION_RISK_BOUND_SCHEDULE_SCHEMA_VERSIONS
 # PRDV4 §1.21 NT-R04 and §8.2: no single position strictly above 25% of NAV; schedule v4 enforces it at every fill.
 HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP = Fraction(25, 100)
 # PRDV4 §1.21 NT-R03 and §8.2 (FCD-01 R-5): the total open risk at the stop strictly above 4% of equity refuses the fill.
 HISTORICAL_EXECUTION_OPEN_RISK_CAP = Fraction(4, 100)
 # PRDV4 §1.21 NT-R05 and §1.18 (FCD-02 C-10): a post-fill CVaR99* at or above 5% of NAV refuses the fill.
 HISTORICAL_EXECUTION_CVAR_BUDGET = Fraction(5, 100)
+# RECORD A's Kelly reading (s1_kelly_class_completion_amendment_v1 section 5.1, KD-1..KD-12) with the KD-9 fit of the human
+# decision S1_KELLY_DA1_DECISION_V1 (s1_kelly_da1_doctrine_adoption_v1 section 2.1): approved methodology constants, never
+# values chosen here. KD-1: the latest min(n, 100) known closed trades; KD-7: 100 is also the undecided bootstrap's
+# boundary; KD-10: the G window is the latest min(n, 60); KD-4 (HC-16b): w_j = (19/20)^j, j = 0 the newest; KD-7: f =
+# f* / 4 below 100 trades; KD-8: f_cap = min(f, 0.04) (PRDV4 §1.28, one edge).
+HISTORICAL_EXECUTION_KELLY_WINDOW = 100
+HISTORICAL_EXECUTION_KELLY_G_WINDOW = 60
+HISTORICAL_EXECUTION_KELLY_DECAY = Fraction(19, 20)
+HISTORICAL_EXECUTION_KELLY_FRACTION = Fraction(1, 4)
+HISTORICAL_EXECUTION_KELLY_CAP = Fraction(4, 100)
+# The reading's fixed codes (the doctrine's own where it names one): the FAIL components in KD-12's order, then why a
+# reading is undefined (BLOCKED).
+HISTORICAL_EXECUTION_KELLY_FAILURES = (
+    "KELLY_NON_POSITIVE",  # KD-6
+    "KELLY_FIT_EXCEEDED",  # KD-9, the D-A1 Alternative 1 fit
+    "KELLY_LOG_DOMAIN_RUIN",  # PRDV4 §1.21, A1.3, KD-10b: a known outcome with 1 + rho_t * R_j <= 0
+    "KELLY_LOG_UTILITY_NON_POSITIVE",  # KD-10c
+)
+HISTORICAL_EXECUTION_KELLY_BLOCKS = (
+    "KELLY_TRADE_COUNT_UNPROVEN",  # A1.3: a closed trade not yet known
+    "KELLY_RISK_FRACTION_UNPROVEN",  # KD-0 C-2: no proven FCD-01 rho_t of the candidate
+    "KELLY_RATIO_UNDEFINED",  # KD-3: no win or no loss in the KD-1 window
+    "KELLY_OUTCOME_UNPROVEN",  # KD-10a: a known trade without a proven R_j
+    "KELLY_BOOTSTRAP_UNDECIDED",  # KD-7: n_w = 100 needs the undecided estimation-error bootstrap
+)
+# Schedule v8: the refusal of an exposure-increasing fill whose Kelly reading is not PASS, by its first code.
+_KELLY_FILL_REFUSALS = {
+    "KELLY_NON_POSITIVE": "governed_paper_kelly_non_positive_at_fill",
+    "KELLY_FIT_EXCEEDED": "governed_paper_kelly_fit_exceeded_at_fill",
+    "KELLY_LOG_DOMAIN_RUIN": "governed_paper_kelly_log_domain_ruin_at_fill",
+    "KELLY_LOG_UTILITY_NON_POSITIVE": "governed_paper_kelly_log_utility_non_positive_at_fill",
+}
+_KELLY_FILL_UNPROVEN = "governed_paper_kelly_unproven_at_fill"
 # A v7 CVaR bound is an exact rational of at most this many decimal digits per part (below CPython's int-to-text limit).
 _RISK_RATIONAL_DIGITS = 4_000
 _RISK_RATIONAL_BOUND = 10**_RISK_RATIONAL_DIGITS
@@ -3651,6 +3898,68 @@ class HistoricalExecutionDecisionExactValues:
 
 
 @dataclass(frozen=True)
+class HistoricalExecutionTradeExactValues:
+    """The exact Kelly inputs of one CLOSED excursion of a governed re-run, in memory only (S1_KELLY_DEFINED_READING_
+    CONSTRUCTION_V1): never serialized, digested or an artifact.
+
+    ``realized_net_pnl`` is the exact realized gross minus fees plus funding the trade record renders once.
+    ``opening_risk`` is the exact FCD-01 R-5 open risk at the stop of the opening fill (schedules v7 and v8: on the
+    post-fill position, the stop that fill armed, the fill mark and the policy's taker fee plus slippage floor), None
+    where the re-run did not measure it. ``knowledge_ns`` is the instant the trade is known (A1.3): the later of its
+    closing fill and the visibility of the final rate of every settlement it carries.
+    """
+
+    trade_id: str
+    realized_net_pnl: Fraction
+    opening_risk: Fraction | None
+    knowledge_ns: int
+
+
+class HistoricalExecutionKellyStatus(str, Enum):
+    PASS = "PASS"  # noqa: S105 - reading status label, not a credential.
+    FAIL = "FAIL"
+    BLOCKED = "BLOCKED"
+
+
+@dataclass(frozen=True)
+class HistoricalExecutionKellyFit:
+    """RECORD A's Kelly reading of one candidate (KD-1..KD-12 with the KD-9 of S1_KELLY_DA1_DECISION_V1), exact and in
+    memory only (``historical_execution_kelly_fit``): never serialized or digested.
+
+    ``status`` is FAIL when a defined component fails (``failures``, in KD-12's order), else BLOCKED when the reading is
+    undefined (``blocks``), else PASS; ``reason`` is the first code. ``outcomes`` are the R_j of the known trades, oldest
+    first (None: no proven positive risk). The window values are None where undefined; ``terms`` are the G window's
+    ``1 + rho * R_j``, oldest first, when every one is proven; ``product_exceeds_one`` is KD-10c's exact comparison (the
+    product itself is never formed as one number, so it is never rendered); ``diagnostic`` is KD-10d's second-order form,
+    a report only.
+    """
+
+    status: HistoricalExecutionKellyStatus
+    reason: str
+    failures: tuple[str, ...]
+    blocks: tuple[str, ...]
+    known_count: int
+    unknown_count: int
+    window_count: int
+    g_count: int
+    wins: int
+    losses: int
+    zeros: int
+    outcomes: tuple[Fraction | None, ...]
+    p: Fraction | None
+    mean_win: Fraction | None
+    mean_loss: Fraction | None
+    b: Fraction | None
+    f_star: Fraction | None
+    f: Fraction | None
+    f_cap: Fraction | None
+    fit_value: Fraction | None
+    terms: tuple[Fraction, ...]
+    product_exceeds_one: bool | None
+    diagnostic: Fraction | None
+
+
+@dataclass(frozen=True)
 class HistoricalExecutionGovernedPaperDerivation:
     """ONE governed re-run under one information-time schedule v4, in memory only: never serialized or digested.
 
@@ -3658,13 +3967,15 @@ class HistoricalExecutionGovernedPaperDerivation:
     and ``simulate_historical_execution_governed_paper`` under the same inputs. ``exact_values`` holds one entry per
     snapshot, in snapshot order. ``trade_close_phases`` holds one entry per CLOSED trade of the outcome, in the outcome's
     order (the order the engine closed them): the equal-instant phase (``HISTORICAL_EXECUTION_EQUAL_INSTANT_PHASES``) of
-    the event that closed it. Both are empty when the re-run could not be computed.
+    the event that closed it. ``trade_exact_values`` holds one entry per CLOSED trade in the same order: its exact Kelly
+    inputs (``HistoricalExecutionTradeExactValues``). All are empty when the re-run could not be computed.
     """
 
     portfolio: HistoricalExecutionGovernedPaperDecisionPortfolio
     outcome: HistoricalExecutionGovernedPaperOutcome
     exact_values: tuple[HistoricalExecutionDecisionExactValues, ...]
     trade_close_phases: tuple[str, ...]
+    trade_exact_values: tuple[HistoricalExecutionTradeExactValues, ...] = ()
 
 
 _GOVERNED_V3_FIELDS = (
@@ -3768,8 +4079,10 @@ class _GovernedPaperSimulation(_Simulation):
         self.depth_caps = {
             (item.book_record_digest, item.side): Fraction(item.max_order_quantity) for item in schedule.depth_caps
         }
-        # Schedule v7: the declared CVaR bounds (FCD-02 C-10) and the FCD-01 stop-risk bound (R-5) of every entry fill.
-        self.risk_bounds = schedule.schema_version == _RISK_SCHEDULE_SCHEMA_VERSION
+        # Schedule v7: the declared CVaR bounds (FCD-02 C-10) and the FCD-01 stop-risk bound (R-5) of every entry fill;
+        # schedule v8 carries them too and adds RECORD A's Kelly fit (S1_KELLY_DEFINED_READING_CONSTRUCTION_V1).
+        self.risk_bounds = schedule.schema_version in _RISK_BOUND_SCHEDULES
+        self.kelly_fit = schedule.schema_version == _KELLY_SCHEDULE_SCHEMA_VERSION
         self.cvar_bounds = tuple(
             (item.window_start_ns, item.window_end_ns, Fraction(item.long_unit_cvar), Fraction(item.short_unit_cvar))
             for item in schedule.cvar_bounds
@@ -3950,7 +4263,35 @@ class _GovernedPaperSimulation(_Simulation):
         unit = self.cvar_bounds[index][2] if sign > 0 else self.cvar_bounds[index][3]
         if unit * abs(post_quantity) * mark_price >= HISTORICAL_EXECUTION_CVAR_BUDGET * equity:
             return "governed_paper_cvar_budget_exhausted_at_fill"
+        # the exact R-5 risk this admission measured: the Kelly fit and the opening trade read it
+        self.admitted_fill_risk = risk
         return None
+
+    def _kelly_fill_admission(self, order: object, equity: Fraction) -> str | None:
+        """Schedule v8: RECORD A's Kelly reading of an exposure-increasing fill at its own R-5 stop-risk fraction (the
+        risk its R-5 admission measured over its candidate equity; module docstring), on the closed trades known at the
+        decision instant of its intent. A refusal reason, or None.
+
+        Only a decision intent increases exposure (a protective attempt or a flatten child is close-only), and its
+        position stays FLAT from its decision to this fill, so the trades closed by now are exactly those closed by then.
+        """
+
+        if not self.kelly_fit:
+            return None
+        risk = self.admitted_fill_risk
+        decided = getattr(order, "decision_time_ns", None)
+        if risk is None or type(decided) is not int:  # pragma: no cover - v8 measures R-5 of every decision intent
+            return _KELLY_FILL_UNPROVEN
+        rho = risk / equity
+        known = [
+            (item.realized_net_pnl, item.opening_risk)
+            for item in self.trade_exact_values
+            if item.knowledge_ns <= decided
+        ]
+        fit = historical_execution_kelly_fit(known, unknown_count=len(self.trade_exact_values) - len(known), rho=rho)
+        if fit.status is HistoricalExecutionKellyStatus.PASS:
+            return None
+        return _KELLY_FILL_REFUSALS.get(fit.reason, _KELLY_FILL_UNPROVEN)
 
     def _entry_stop(self, order: object, post_quantity: Fraction, price: Fraction) -> Fraction | None:
         """The R-1 stop of an exposure-increasing fill's post-fill position: the one an opening fill arms, or the armed
@@ -4094,13 +4435,14 @@ def _canonical_risk_rational(text: object, field_name: str) -> None:
 
 
 def _canonical_risk_bounds(value: HistoricalExecutionAdmissionSchedule) -> None:
-    """Schema v7's CVaR bounds (ordered, disjoint windows of canonical exact signed rationals); none on another schema.
-    Schema v7 may declare none: every exposure-increasing fill is then refused as unproven."""
+    """Schema v7's CVaR bounds (ordered, disjoint windows of canonical exact signed rationals), which schema v8 carries
+    too; none on another schema. Schema v7 or v8 may declare none: every exposure-increasing fill is then refused as
+    unproven."""
 
     bounds = value.cvar_bounds
     if type(bounds) is not tuple:
         raise _fail("admission_schedule_malformed:cvar_bounds")
-    if value.schema_version != _RISK_SCHEDULE_SCHEMA_VERSION and bounds:
+    if value.schema_version not in _RISK_BOUND_SCHEDULES and bounds:
         raise _fail("admission_schedule_malformed:cvar_bounds_need_schema_v7")
     previous_end: int | None = None
     for bound in bounds:
@@ -4130,6 +4472,7 @@ def canonical_historical_execution_admission_schedule(value: object) -> Historic
         _SIZING_SCHEDULE_SCHEMA_VERSION,
         _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
         _RISK_SCHEDULE_SCHEMA_VERSION,
+        _KELLY_SCHEDULE_SCHEMA_VERSION,
     ):
         raise _fail("admission_schedule_malformed:schema_version")
     _canonical_protective_windows(value)
@@ -4389,9 +4732,11 @@ def _governed_run(
     tuple[HistoricalExecutionDecisionPortfolioSnapshot, ...],
     tuple[HistoricalExecutionDecisionExactValues, ...],
     tuple[str, ...],
+    tuple[HistoricalExecutionTradeExactValues, ...],
 ]:
     """The one governed re-run: its outcome and, when asked to record them, its decision snapshots and the exact values
-    behind them; with the equal-instant phase of every trade close (all empty when the re-run cannot be computed)."""
+    behind them; with the equal-instant phase of every trade close and the exact Kelly inputs of every closed trade (all
+    empty when the re-run cannot be computed)."""
 
     schedule = canonical_historical_execution_admission_schedule(schedule)
     if record_decision_portfolio and schedule.schema_version not in _INFORMATION_TIME_SCHEDULES:
@@ -4437,7 +4782,7 @@ def _governed_run(
             protective=protective,
             ledger=ledger,
         )
-        return failed, (), (), ()
+        return failed, (), (), (), ()
     outcome = _governed_outcome(
         result,
         schedule,
@@ -4456,6 +4801,7 @@ def _governed_run(
         tuple(
             HISTORICAL_EXECUTION_EQUAL_INSTANT_PHASES[item] for item in simulation.trade_close_priorities if item >= 0
         ),
+        tuple(simulation.trade_exact_values),
     )
 
 
@@ -4473,7 +4819,9 @@ def simulate_historical_execution_governed_paper_decision_portfolio(
     the same inputs is the one ``outcome_digest`` binds. Pure.
     """
 
-    outcome, snapshots, _, _ = _governed_run(result, expected_result_digest, schedule, record_decision_portfolio=True)
+    outcome, snapshots, _, _, _ = _governed_run(
+        result, expected_result_digest, schedule, record_decision_portfolio=True
+    )
     return _decision_portfolio(outcome, snapshots)
 
 
@@ -4492,10 +4840,12 @@ def simulate_historical_execution_governed_paper_derivation(
     the exact values and phases, never the rendered text or the timestamp alone. Pure.
     """
 
-    outcome, snapshots, exact, phases = _governed_run(
+    outcome, snapshots, exact, phases, trades = _governed_run(
         result, expected_result_digest, schedule, record_decision_portfolio=True
     )
-    return HistoricalExecutionGovernedPaperDerivation(_decision_portfolio(outcome, snapshots), outcome, exact, phases)
+    return HistoricalExecutionGovernedPaperDerivation(
+        _decision_portfolio(outcome, snapshots), outcome, exact, phases, trades
+    )
 
 
 def _decision_portfolio(
@@ -5646,8 +5996,21 @@ __all__ = [
     "HISTORICAL_EXECUTION_OPEN_RISK_CAP",
     "HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS",
     "HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_SCHEDULE_SCHEMA_VERSION",
+    "HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION",
+    "HISTORICAL_EXECUTION_KELLY_BLOCKS",
+    "HISTORICAL_EXECUTION_KELLY_CAP",
+    "HISTORICAL_EXECUTION_KELLY_DECAY",
+    "HISTORICAL_EXECUTION_KELLY_FAILURES",
+    "HISTORICAL_EXECUTION_KELLY_FRACTION",
+    "HISTORICAL_EXECUTION_KELLY_G_WINDOW",
+    "HISTORICAL_EXECUTION_KELLY_WINDOW",
+    "HISTORICAL_EXECUTION_RISK_BOUND_SCHEDULE_SCHEMA_VERSIONS",
     "HistoricalExecutionCvarBound",
+    "HistoricalExecutionKellyFit",
+    "HistoricalExecutionKellyStatus",
+    "HistoricalExecutionTradeExactValues",
     "historical_execution_close_only_exit_quote",
+    "historical_execution_kelly_fit",
     "historical_execution_risk_rational_text",
     "HistoricalExecutionDepthCap",
     "HistoricalExecutionExcursionProtection",

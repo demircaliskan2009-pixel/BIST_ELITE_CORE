@@ -131,6 +131,7 @@ from crypto_core.validation.historical_execution_economics import (
     HistoricalExecutionEconomicsResult,
     HistoricalExecutionGovernedPaperDecisionPortfolio,
     HistoricalExecutionGovernedPaperOutcome,
+    HistoricalExecutionTradeExactValues,
     HistoricalExecutionTradeStatus,
     simulate_historical_execution_governed_paper_derivation,
 )
@@ -313,12 +314,15 @@ class GovernedPaperKillSwitchDerivation:
     """A ladder with the decision portfolio and the governed outcome it reads, all three derived from ONE engine re-run
     and never accepted. In memory only: the ladder binds the other two by their digests. ``exact_values`` are that same
     re-run's exact amounts behind every snapshot's rendered NAVs (one per snapshot, in snapshot order), for a consumer
-    that compares a strict threshold on the same re-run (never serialized or digested)."""
+    that compares a strict threshold on the same re-run (never serialized or digested). ``trade_exact_values`` are that
+    same re-run's exact Kelly inputs of every closed trade, in close order (S1_KELLY_DEFINED_READING_CONSTRUCTION_V1;
+    never serialized or digested)."""
 
     ladder: GovernedPaperKillSwitchLadder
     portfolio: HistoricalExecutionGovernedPaperDecisionPortfolio
     outcome: HistoricalExecutionGovernedPaperOutcome
     exact_values: tuple[HistoricalExecutionDecisionExactValues, ...] = ()
+    trade_exact_values: tuple[HistoricalExecutionTradeExactValues, ...] = ()
 
 
 # --- helpers -----------------------------------------------------------------------------------------------------------
@@ -1038,7 +1042,11 @@ def _derive_ladder(  # noqa: C901, PLR0912 - one linear derivation of the ladder
     )
     ladder = replace(seed, ladder_digest=edge_payload_digest(_to_payload(seed), _DIGEST_FIELD))
     return GovernedPaperKillSwitchDerivation(
-        ladder=ladder, portfolio=portfolio, outcome=outcome, exact_values=tuple(derivation.exact_values)
+        ladder=ladder,
+        portfolio=portfolio,
+        outcome=outcome,
+        exact_values=tuple(derivation.exact_values),
+        trade_exact_values=tuple(derivation.trade_exact_values),
     )
 
 
