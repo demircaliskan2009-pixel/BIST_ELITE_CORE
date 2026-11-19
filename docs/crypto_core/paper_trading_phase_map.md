@@ -667,3 +667,37 @@ effective only through its own adoption merge (`docs/crypto_core/s1_kelly_da1_do
 - pending: the construction of RECORD A's methodology with this KD-9 (a separately authorized implementation contract
   with its own protected audit); the 100-trade Kelly bootstrap; HC-16a, HC-16c and HC-16d; incubation (companion items
   1.4–1.8); RECORD B's pending items; M1, D1, risk-policy production approval, C1-C9 and DEC-1; and Stage-4.
+
+## 17. S1 Kelly defined reading — construction (recorded 2026-11-19)
+
+Contract `S1_KELLY_DEFINED_READING_CONSTRUCTION_V1` constructs RECORD A's KD-1..KD-13 with the KD-9 adopted in §16
+inside the existing governed paper substrate. It is an implementation candidate: its protected independent audit is
+pending, and it adds no policy artifact, approval-table entry or admission path.
+
+- one exact arithmetic, `historical_execution_kelly_fit`, serves the engine and the evidence. It reads the KD-1 window
+  (latest 100 known closed trades), the KD-4 EWMA (19/20)^j with j = 0 the newest, KD-5..KD-8, the adopted KD-9
+  `rho * max(1, Lbar) <= f_cap`, the A1.3 solvency domain on every known outcome, and the KD-10 product over the latest
+  60, compared as one exact rational and never rendered. f* <= 0, a KD-9 excess, a ruinous outcome and a product <= 1
+  FAIL. An undefined window, n_w = 100 (the undecided bootstrap), an unproven R_j or rho, and a closed trade whose
+  outcome is not yet known BLOCK. A proven FAIL dominates BLOCKED;
+- the one engine's schedule v8 is schedule v7 with the Kelly fit at every exposure-increasing fill: its own R-5 risk over
+  its candidate equity, on the run's closed trades known at its decision instant. A refusal is whole, never a resize.
+  Exits, reductions and protective close-only fills never reach it. Each closed trade carries its exact net PnL, its
+  opening fill's R-5 risk and its knowledge instant (the close, or its last settlement's final-rate visibility), in
+  memory only; outcomes stay v4;
+- `governed_paper_kelly_reading.py` derives the Kelly evidence of one evaluation and never accepts it. Every closed
+  trade's net PnL, knowledge instant and KD-10a risk (opening fill, its protection's stop, the fill-instant mark, the
+  policy's taker fee and slippage floor) is recomputed from the sealed records and must equal the engine's exact value.
+  Each entry decision is read at its exact FCD-01 R-4 fraction, the one NT-R03 renders. Values are recorded at scale 18
+  (ROUND_HALF_EVEN), and an unrepresentable value BLOCKS;
+- entry gate rule set v11 (on top of v10) reads SCALE-1's Kelly-fit term (§1.28) in place: PASS proves it one, FAIL is a
+  proven reduction that refuses the entry, and BLOCKED leaves it unproven. Every other A9′ term is unchanged. Day seal
+  v12 and lineage evidence v12 bind the Kelly evidence and its run-independent prefix before `E_k` and `E_k+1` (X1). A
+  Kelly lineage starts at day 0 or never, and only on a risk lineage. Every v1-v11 artifact, schedules v2-v7, outcomes
+  v2-v4 and rule sets v1-v10 stay byte-identical;
+- admission effect: none. KD-13 never covers, because no PAPER_INCUBATION_V1 record is ACTIVE, so under schedule v8 the
+  first entry's empty window refuses it and no trade can open. The production risk table admits no policy, so every
+  reading is BLOCKED and C-10 refuses every entry fill first. World G, sealed under the TEST-ONLY table, still refuses
+  every entry. REAL_PAPER_EXECUTION stays BLOCKED. Every trade, policy and reading in the tests is synthetic;
+- pending: the KD-7 100-trade bootstrap (n_w = 100 stays BLOCKED); HC-16a, HC-16c and HC-16d; incubation (companion
+  items 1.4–1.8); FCD-17 and H^(e); M1; D1; risk-policy production approval; C1-C9; DEC-1; and Stage-4.

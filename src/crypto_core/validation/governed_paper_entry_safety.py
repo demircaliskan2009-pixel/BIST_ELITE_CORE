@@ -273,6 +273,18 @@ none: in production every RECORD B reading is BLOCKED and the schedule v7 declar
 fill is refused too. Every v1-v9 check outcome, payload and digest stays byte-identical, and every S1 entry is still
 refused.
 
+Kelly reading (``S1_KELLY_DEFINED_READING_CONSTRUCTION_V1``, rule set v11). Rule sets v1-v10 hold for every evaluation
+without it. When the day seal opts in, on top of rule set v10, the evaluation derives the Kelly evidence of its horizon
+(``governed_paper_kelly_reading``): RECORD A's KD-1..KD-13 with the KD-9 fit of the human decision
+``S1_KELLY_DA1_DECISION_V1``, read on the closed trades of the same engine re-run under schedule v8 (each re-proven against
+the sealed records) at every entry's exact FCD-01 R-4 stop-risk fraction (the one NT-R03 renders). SCALE-1 under A9'
+reads it in place of its Kelly-fit term: a PASS proves the term, a FAIL is a proven reduction that refuses the fixed unit
+(never a resize), and a BLOCKED reading leaves the term unproven. Every other multiplier and ENVELOPE_FIT stay binding,
+so SCALE-1 still never passes. The schedule v8 refuses at every exposure-increasing fill an R-5 Kelly reading that is not
+PASS, whole. No incubation record exists, so no reading is covered: every lineage starts with no known trade, every reading
+is BLOCKED (``KELLY_RATIO_UNDEFINED``) and every S1 entry is still refused. Every v1-v10 check outcome, payload and
+digest stays byte-identical.
+
 The evidence is digest-bound and paper-only. It proves no venue fact, edge, profitability, readiness or Stage-4
 completion. Exact arithmetic, no float, no ``decimal`` context, and no IO, clock, randomness, network or environment.
 """
@@ -317,6 +329,19 @@ from crypto_core.validation.governed_paper_allocation_envelope import (
 )
 from crypto_core.validation.governed_paper_ctr_qualification import GovernedPaperCtrDepthStatus, GovernedPaperCtrError
 from crypto_core.validation.governed_paper_execution_authority import GovernedPaperGenesisAuthority
+from crypto_core.validation.governed_paper_kelly_reading import (
+    GOVERNED_PAPER_KELLY_CONTRACT_ID,
+    GOVERNED_PAPER_KELLY_COVERAGE,
+    GOVERNED_PAPER_KELLY_DECISION_IDS,
+    GOVERNED_PAPER_KELLY_PENDING_ITEMS,
+    GOVERNED_PAPER_KELLY_RULE_DIGEST,
+    GovernedPaperKellyError,
+    GovernedPaperKellyEvidence,
+    GovernedPaperKellyReading,
+    GovernedPaperKellyStatus,
+    derive_governed_paper_kelly_evidence,
+    governed_paper_kelly_reading_digest,
+)
 from crypto_core.validation.governed_paper_kill_switch import (
     GOVERNED_PAPER_KILL_SWITCH_DECISION_PHASE,
     GOVERNED_PAPER_KILL_SWITCH_RULE_DIGEST,
@@ -372,6 +397,7 @@ from crypto_core.validation.governed_paper_risk_measurement import (
     GovernedPaperRiskStatus,
     derive_governed_paper_risk_evidence,
     derive_governed_paper_risk_market,
+    governed_paper_risk_entry_fraction,
     governed_paper_risk_fill_bounds,
     governed_paper_risk_reading_digest,
 )
@@ -398,9 +424,10 @@ from crypto_core.validation.governed_paper_system_state import (
 )
 from crypto_core.validation.historical_decision_run import HistoricalDecisionRun
 from crypto_core.validation.historical_execution_economics import (
+    HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP,
     HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS,
-    HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_SCHEDULE_SCHEMA_VERSION,
+    HISTORICAL_EXECUTION_RISK_BOUND_SCHEDULE_SCHEMA_VERSIONS,
     HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS,
     HistoricalExecutionAdmissionSchedule,
     HistoricalExecutionDecisionExactValues,
@@ -409,6 +436,7 @@ from crypto_core.validation.historical_execution_economics import (
     HistoricalExecutionEconomicsResult,
     HistoricalExecutionGovernedPaperOutcome,
     HistoricalExecutionProtectiveWindow,
+    HistoricalExecutionTradeExactValues,
     historical_execution_visible_observations,
     simulate_historical_execution_governed_paper_decision_portfolio,
 )
@@ -523,6 +551,7 @@ GOVERNED_PAPER_ENTRY_SAFETY_SYSTEM_SAFETY_RULE_SET_ID = "governed-paper-entry-sa
 GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID = "governed-paper-entry-safety.v8"
 GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID = "governed-paper-entry-safety.v9"
 GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID = "governed-paper-entry-safety.v10"
+GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID = "governed-paper-entry-safety.v11"
 
 GOVERNED_PAPER_ENTRY_SAFETY_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
     ("paper_only", True),
@@ -728,6 +757,18 @@ class GovernedPaperEntrySafetyRisk:
 
 
 @dataclass(frozen=True)
+class GovernedPaperEntrySafetyKelly:
+    """The RECORD A Kelly facts of one decision at ``t`` (rule set v11), read from its evaluation's derived Kelly evidence.
+
+    ``reading`` is the decision's KD-1..KD-13 reading with the D-A1 fit at its FCD-01 R-4 fraction, and ``evidence_digest``
+    names the Kelly evidence that derived it. Never accepted from a caller: the evaluation derives both.
+    """
+
+    reading: GovernedPaperKellyReading
+    evidence_digest: str
+
+
+@dataclass(frozen=True)
 class GovernedPaperEntrySafetyObservation:
     """The point-in-time facts one decision is evaluated on (derived by this module, never caller authority)."""
 
@@ -788,6 +829,8 @@ class GovernedPaperEntrySafetyObservation:
     protective_ledger: GovernedPaperEntrySafetyProtectiveLedger | None = None
     # Rule set v10 only: the RECORD B risk facts of the decision (absent without them, as in rule sets v1-v9).
     risk: GovernedPaperEntrySafetyRisk | None = None
+    # Rule set v11 only: the RECORD A Kelly facts of the decision (absent without them, as in rule sets v1-v10).
+    kelly: GovernedPaperEntrySafetyKelly | None = None
 
 
 @dataclass(frozen=True)
@@ -886,8 +929,10 @@ class GovernedPaperEntrySafetyEvidence:
     sizing_evidence: GovernedPaperSizingEvidence | None = None
     # Rule set v9 on: the derived v2 protective obligation ledger of its horizon (never in a v1-v8 payload).
     protective_ledger_evidence: GovernedPaperProtectiveLedgerEvidence | None = None
-    # Rule set v10 only: the derived RECORD B risk evidence of its horizon (never in a v1-v9 payload).
+    # Rule set v10 on: the derived RECORD B risk evidence of its horizon (never in a v1-v9 payload).
     risk_evidence: GovernedPaperRiskEvidence | None = None
+    # Rule set v11 only: the derived RECORD A Kelly evidence of its horizon (never in a v1-v10 payload).
+    kelly_evidence: GovernedPaperKellyEvidence | None = None
 
 
 # --- helpers -----------------------------------------------------------------------------------------------------------
@@ -930,6 +975,7 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
         GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID,
     ):
         if evidence.kill_switch_ladder is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_kill_switch_ladder")
@@ -940,6 +986,7 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
         GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID,
     ):
         if evidence.regime_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_regime_evidence")
@@ -949,6 +996,7 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
         GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID,
     ):
         if evidence.system_state_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_system_state_evidence")
@@ -957,6 +1005,7 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
         GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID,
     ):
         if evidence.sizing_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_sizing_evidence")
@@ -964,14 +1013,22 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
     if evidence.rule_set_id not in (
         GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID,
     ):
         if evidence.protective_ledger_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_protective_ledger_evidence")
         del payload["protective_ledger_evidence"]
-    if evidence.rule_set_id != GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID:
+    if evidence.rule_set_id not in (
+        GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID,
+    ):
         if evidence.risk_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_risk_evidence")
         del payload["risk_evidence"]
+    if evidence.rule_set_id != GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID:
+        if evidence.kelly_evidence is not None:
+            raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_kelly_evidence")
+        del payload["kelly_evidence"]
     return payload
 
 
@@ -1675,6 +1732,16 @@ def governed_paper_entry_safety_a9_multipliers(
         correlation = (_PROVEN_ONE, "single_sleeve_paper_portfolio_has_no_second_edge")
     else:
         correlation = (_UNPROVEN, "edge_return_correlation_not_measured")
+    kelly_facts = observation.kelly
+    if kelly_facts is None:  # rule sets v8-v10: no Kelly reading exists
+        kelly = (_UNPROVEN, "kelly_fit_pending_items_5_1_and_5_2")
+    elif kelly_facts.reading.status is GovernedPaperKellyStatus.PASS:
+        kelly = (_PROVEN_ONE, "kelly_fit_proven_at_the_r4_fraction")
+    elif kelly_facts.reading.status is GovernedPaperKellyStatus.FAIL:
+        # KD-0 C-2: the Kelly-bounded size is proven below the fixed unit, which is refused, never resized
+        kelly = (_PROVEN_BELOW_ONE, kelly_facts.reading.reason.lower())
+    else:
+        kelly = (_UNPROVEN, kelly_facts.reading.reason.lower())
     return (
         ("edge_health_alpha_1_6", _UNPROVEN, "edge_health_score_not_produced"),
         ("de_weight_1_7", _UNPROVEN, "decay_alert_not_produced"),
@@ -1692,7 +1759,7 @@ def governed_paper_entry_safety_a9_multipliers(
         ),
         ("calibration_1_24", _UNPROVEN, "ewma_execution_calibration_pending_hd_07"),
         ("margin_and_dtl_1_26", _UNPROVEN, "margin_and_dtl_bands_not_modeled"),
-        ("kelly_fit_1_28", _UNPROVEN, "kelly_fit_pending_items_5_1_and_5_2"),
+        ("kelly_fit_1_28", *kelly),
     )
 
 
@@ -1710,7 +1777,12 @@ def _scale_a9(observation: _Observation) -> _Outcome:
         return v7
     sizing = _sizing_facts(observation).reading
     terms = governed_paper_entry_safety_a9_multipliers(observation)
-    evidence = (*v7.evidence, sizing.reading_digest)
+    kelly = observation.kelly
+    evidence = (
+        *v7.evidence,
+        sizing.reading_digest,
+        *(() if kelly is None else (kelly.reading.reading_digest, kelly.evidence_digest)),
+    )
     below = [term for term in terms if term[1] == _PROVEN_BELOW_ONE]
     if below:
         name, _, why = below[0]
@@ -2133,6 +2205,7 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
     sizing_chain: bool = False,
     protective_ledger: bool = False,
     risk_measurement: bool = False,
+    kelly: bool = False,
 ) -> dict[str, object]:
     """The rule set this module evaluates: every check, in order, with its PRDV4 clause and published threshold.
 
@@ -2155,8 +2228,12 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
     ``protective_ledger=True``) is rule set v10: rule set v9 with NT-R03, NT-R05, NT-M01, NT-X03 and HZ-LIMITS read on the
     RECORD B risk evidence, the ladder v2 (T8) and the system state v2 (S3, S6), and HZ-CVAR, EDGE-CVAR, MARGINAL-CVAR,
     STRESS-HV, STRESS-CORR, STRESS-LIQ and OB-SPREAD appended (``S1_NATIVE_RISK_MEASUREMENT_CONSTRUCTION_V1``).
+    ``kelly=True`` (only with ``risk_measurement=True``) is rule set v11: rule set v10 with SCALE-1's Kelly-fit term read on
+    the RECORD A Kelly evidence (``S1_KELLY_DEFINED_READING_CONSTRUCTION_V1``).
     """
 
+    if kelly and not risk_measurement:
+        raise _fail("kelly_rule_set_needs_the_risk_measurement_rule_set")
     if risk_measurement and not protective_ledger:
         raise _fail("risk_measurement_rule_set_needs_the_protective_ledger_rule_set")
     if protective_ledger and not sizing_chain:
@@ -2475,6 +2552,27 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
                 "fixed_point_is_unchanged",
             },
         )
+    if kelly:
+        rule_set.update(
+            rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID,
+            contract_id=GOVERNED_PAPER_KELLY_CONTRACT_ID,
+            kelly_rule={
+                "approved_doctrine": "s1_kelly_class_completion_amendment_v1 sections 2, 4.1 and 5.1 (A1.3, KD-0 with "
+                "C-1 and C-2, KD-1..KD-13) with the KD-9 of s1_kelly_da1_doctrine_adoption_v1 section 2.1",
+                "decision_ids": list(GOVERNED_PAPER_KELLY_DECISION_IDS),
+                "kelly_rule_digest": GOVERNED_PAPER_KELLY_RULE_DIGEST,
+                "source": "the_kelly_evidence_derived_from_the_one_engine_re_run_its_closed_trades_re_proven_against_"
+                "the_sealed_records_and_each_entrys_exact_fcd01_r4_fraction_never_accepted",
+                "SCALE-1": "under_a9_prime_the_kelly_fit_term_reads_the_decisions_kd12_reading_pass_proves_it_fail_is_"
+                "a_proven_reduction_that_refuses_the_fixed_unit_blocked_leaves_it_unproven",
+                "coverage": GOVERNED_PAPER_KELLY_COVERAGE,
+                "pending_never_read": list(GOVERNED_PAPER_KELLY_PENDING_ITEMS),
+                "fill": "the_engine_schedule_v8_refuses_an_exposure_increasing_fill_whose_r5_kelly_reading_is_not_pass_"
+                "whole_and_never_resized",
+                "admission": "every_reading_is_a_fact_of_the_re_run_before_its_decision_the_sequential_fixed_point_is_"
+                "unchanged",
+            },
+        )
     return rule_set
 
 
@@ -2496,6 +2594,7 @@ def governed_paper_entry_safety_rule_set_digest(  # noqa: PLR0913
     sizing_chain: bool = False,
     protective_ledger: bool = False,
     risk_measurement: bool = False,
+    kelly: bool = False,
 ) -> str:
     return edge_sha256_text(
         edge_canonical_json(
@@ -2509,6 +2608,7 @@ def governed_paper_entry_safety_rule_set_digest(  # noqa: PLR0913
                 sizing_chain=sizing_chain,
                 protective_ledger=protective_ledger,
                 risk_measurement=risk_measurement,
+                kelly=kelly,
             )
         )
     )
@@ -2606,6 +2706,30 @@ GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_DIGEST = governed_paper_en
     protective_ledger=True,
     risk_measurement=True,
 )
+GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET = governed_paper_entry_safety_rule_set(
+    protective=True,
+    portfolio=True,
+    market_data=True,
+    kill_switch=True,
+    regime=True,
+    system_safety=True,
+    sizing_chain=True,
+    protective_ledger=True,
+    risk_measurement=True,
+    kelly=True,
+)
+GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(
+    protective=True,
+    portfolio=True,
+    market_data=True,
+    kill_switch=True,
+    regime=True,
+    system_safety=True,
+    sizing_chain=True,
+    protective_ledger=True,
+    risk_measurement=True,
+    kelly=True,
+)
 
 
 # --- one decision ------------------------------------------------------------------------------------------------------
@@ -2662,7 +2786,39 @@ def _canonical_observation(observation: object) -> GovernedPaperEntrySafetyObser
     _canonical_sizing(observation)
     _canonical_protective_ledger(observation)
     _canonical_risk(observation)
+    _canonical_kelly(observation)
     return observation
+
+
+def _canonical_kelly(observation: GovernedPaperEntrySafetyObservation) -> None:
+    """The rule set v11 facts are exact types and the authentic reading of this very decision, and exist only on top of
+    rule set v10."""
+
+    facts = observation.kelly
+    if facts is None:
+        return
+    if type(facts) is not GovernedPaperEntrySafetyKelly:
+        raise _fail("observation_malformed:kelly")
+    if observation.risk is None:
+        raise _fail("observation_malformed:kelly_without_the_risk_facts")
+    if not edge_is_hex64(facts.evidence_digest):
+        raise _fail("observation_malformed:kelly_evidence_digest")
+    reading = facts.reading
+    if (
+        type(reading) is not GovernedPaperKellyReading
+        or reading.decision_sequence != observation.decision_sequence
+        or reading.decision_time_ns != observation.decision_time_ns
+        or reading.target_direction != observation.target_direction
+        or type(reading.status) is not GovernedPaperKellyStatus
+        or type(reading.reason) is not str
+    ):
+        raise _fail("observation_malformed:kelly_reading")
+    try:
+        recomputed = governed_paper_kelly_reading_digest(reading)
+    except (TypeError, ValueError) as exc:
+        raise _fail("observation_malformed:kelly_reading") from exc
+    if recomputed != reading.reading_digest:
+        raise _fail("observation_malformed:kelly_reading_digest")
 
 
 def _canonical_risk(observation: GovernedPaperEntrySafetyObservation) -> None:
@@ -3647,6 +3803,8 @@ class _GovernedRun:
     exact: dict[int, HistoricalExecutionDecisionExactValues]
     # Rule set v5 on: the governed outcome of that same re-run (the v2 ledger of rule set v9 reads it).
     outcome: HistoricalExecutionGovernedPaperOutcome | None = None
+    # Rule set v5 on: the exact Kelly inputs of every closed trade of that same re-run (rule set v11 reads them).
+    trade_exact: tuple[HistoricalExecutionTradeExactValues, ...] = ()
 
 
 def _governed_run(
@@ -3685,6 +3843,7 @@ def _governed_run(
     derived_ladder: GovernedPaperKillSwitchLadder | None = None
     exact: dict[int, HistoricalExecutionDecisionExactValues] = {}
     outcome: HistoricalExecutionGovernedPaperOutcome | None = None
+    trade_exact: tuple[HistoricalExecutionTradeExactValues, ...] = ()
     try:  # derived, never accepted: the engine re-proves the economics and re-runs it under the schedule
         if ladder is None:
             derived = simulate_historical_execution_governed_paper_decision_portfolio(
@@ -3712,11 +3871,14 @@ def _governed_run(
             )
             derived, derived_ladder, outcome = derivation.portfolio, derivation.ladder, derivation.outcome
             exact = {item.decision_sequence: item for item in derivation.exact_values}
+            trade_exact = derivation.trade_exact_values
     except HistoricalExecutionEconomicsError as exc:
         raise _fail("portfolio_not_derivable") from exc
     except GovernedPaperKillSwitchError as exc:
         raise _fail("kill_switch_ladder_not_derivable") from exc
-    return _GovernedRun({item.decision_sequence: item for item in derived.snapshots}, derived_ladder, exact, outcome)
+    return _GovernedRun(
+        {item.decision_sequence: item for item in derived.snapshots}, derived_ladder, exact, outcome, trade_exact
+    )
 
 
 def governed_paper_entry_safety_entry_sequences(run: HistoricalDecisionRun) -> tuple[int, ...]:
@@ -3763,6 +3925,7 @@ def build_governed_paper_entry_safety_evidence(
     sizing: GovernedPaperSizingContext | None = None,
     protective_ledger: GovernedPaperProtectiveLedgerContext | None = None,
     risk: GovernedPaperRiskContext | None = None,
+    kelly: bool = False,
 ) -> GovernedPaperEntrySafetyEvidence:
     """Evaluate every entry decision of ``run`` over the archive ``dataset`` it was built from (see the module docstring).
 
@@ -3788,8 +3951,11 @@ def build_governed_paper_entry_safety_evidence(
     (rule set v10, only with ``protective_ledger``) is the RECORD B risk context the day seal supplies: the schedule under
     evaluation must be the schedule v7 carrying exactly the CVaR bounds the context implies, the ladder reads T8, the
     evaluation derives every entry's risk readings from the same engine re-run, reads NT-R03, NT-R05, NT-M01, NT-X03,
-    HZ-LIMITS and the system state v2 on them, appends the §1.18, HZB-1 and §7.2 checks and binds the risk evidence. A
-    malformed or foreign input raises ``GovernedPaperEntrySafetyError``. Pure.
+    HZ-LIMITS and the system state v2 on them, appends the §1.18, HZB-1 and §7.2 checks and binds the risk evidence.
+    ``kelly=True`` (rule set v11, only with ``risk``): the schedule under evaluation must be the schedule v8, the evaluation
+    derives every entry's RECORD A Kelly reading from the same engine re-run at its exact FCD-01 R-4 fraction, reads
+    SCALE-1's Kelly-fit term on it and binds the Kelly evidence. A malformed or foreign input raises
+    ``GovernedPaperEntrySafetyError``. Pure.
     """
 
     if type(authority) is not GovernedPaperGenesisAuthority:
@@ -3824,6 +3990,10 @@ def build_governed_paper_entry_safety_evidence(
         raise _fail("risk_context_malformed")
     if risk is not None and protective_ledger is None:
         raise _fail("risk_without_the_protective_ledger_rule_set")
+    if type(kelly) is not bool:
+        raise _fail("kelly_flag_malformed")
+    if kelly and risk is None:
+        raise _fail("kelly_without_the_risk_measurement_rule_set")
     genesis = authority.genesis
     protection = _canonical_protection(protection, instrument=genesis.instrument)
     if run.status is not EdgeEvidenceStatus.READY or run.gate_verdict is not EdgeGateVerdict.PASS:
@@ -3858,11 +4028,21 @@ def build_governed_paper_entry_safety_evidence(
     ) is not (protective_ledger is not None):
         raise _fail("protective_ledger_schedule_and_rule_set_mismatch")
     if governed is not None and (
-        portfolio.schedule.schema_version == HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_SCHEDULE_SCHEMA_VERSION  # type: ignore[union-attr]
+        portfolio.schedule.schema_version in HISTORICAL_EXECUTION_RISK_BOUND_SCHEDULE_SCHEMA_VERSIONS  # type: ignore[union-attr]
     ) is not (risk is not None):
         raise _fail("risk_schedule_and_rule_set_mismatch")
+    if (
+        governed is not None
+        and (
+            portfolio.schedule.schema_version == HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION  # type: ignore[union-attr]
+        )
+        is not kelly
+    ):
+        raise _fail("kelly_schedule_and_rule_set_mismatch")
     risk_evidence: GovernedPaperRiskEvidence | None = None
     risk_readings: dict[int, GovernedPaperRiskReading] = {}
+    kelly_evidence: GovernedPaperKellyEvidence | None = None
+    kelly_readings: dict[int, GovernedPaperKellyReading] = {}
     if risk is not None:
         entries = tuple(
             (item.decision_sequence, item.decision_time_ns, item.resulting_direction)
@@ -3897,6 +4077,38 @@ def build_governed_paper_entry_safety_evidence(
         except GovernedPaperRiskError as exc:
             raise _fail("risk_evidence_not_derivable") from exc
         risk_readings = {item.decision_sequence: item for item in risk_evidence.readings}
+        if kelly:
+            try:  # derived, never accepted: the trades are re-proven against the sealed records by the derivation
+                fractions = {
+                    sequence: governed_paper_risk_entry_fraction(
+                        market,
+                        instant,
+                        snapshot=snapshots.get(sequence),  # type: ignore[union-attr]
+                        exact=governed.exact.get(sequence),  # type: ignore[union-attr]
+                        outcome=governed.outcome,  # type: ignore[union-attr]
+                        economics_policy=policy,
+                        position_management_policy=protection.position_management_policy,  # type: ignore[union-attr]
+                        position_management_archive=protection.ohlc_archive,  # type: ignore[union-attr]
+                    )
+                    for sequence, instant, _ in entries
+                }
+                kelly_evidence = derive_governed_paper_kelly_evidence(
+                    decisions=entries,
+                    outcome=governed.outcome,  # type: ignore[union-attr,arg-type]
+                    trade_exact_values=governed.trade_exact,  # type: ignore[union-attr]
+                    dataset=dataset,
+                    economics_policy=policy,
+                    position_management_policy=protection.position_management_policy,  # type: ignore[union-attr]
+                    position_management_archive=protection.ohlc_archive,  # type: ignore[union-attr]
+                    fractions=fractions,
+                    risk_evidence_digest=risk_evidence.evidence_digest,
+                    instrument=genesis.instrument,
+                    start_ns=genesis.genesis_start_ns,
+                    horizon_ns=run.evaluation_end_ns,
+                )
+            except (GovernedPaperRiskError, GovernedPaperKellyError) as exc:
+                raise _fail("kelly_evidence_not_derivable") from exc
+            kelly_readings = {item.decision_sequence: item for item in kelly_evidence.readings}
     observations = historical_execution_visible_observations(dataset, policy=policy, instrument=genesis.instrument)
     # the archive is verified just above and the kline feed candidate in ``_canonical_protection``
     market = (
@@ -3996,6 +4208,11 @@ def build_governed_paper_entry_safety_evidence(
             risk=None
             if risk_evidence is None
             else GovernedPaperEntrySafetyRisk(risk_readings[decision.decision_sequence], risk_evidence.evidence_digest),
+            kelly=None
+            if kelly_evidence is None
+            else GovernedPaperEntrySafetyKelly(
+                kelly_readings[decision.decision_sequence], kelly_evidence.evidence_digest
+            ),
         )
         pending.append(observation)
     # The same derivation the decisions' SYSTEM-STATE and SCALE-1 read; it never reads the ledger, so it comes first.
@@ -4034,7 +4251,9 @@ def build_governed_paper_entry_safety_evidence(
     protective, measured = protection is not None, snapshots is not None
     seed = GovernedPaperEntrySafetyEvidence(
         schema_version=_SCHEMA_VERSION,
-        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID
+        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID
+        if kelly
+        else GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID
         if risk is not None
         else GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID
         if protective_ledger is not None
@@ -4063,6 +4282,7 @@ def build_governed_paper_entry_safety_evidence(
             sizing_chain=sizing is not None,
             protective_ledger=protective_ledger is not None,
             risk_measurement=risk is not None,
+            kelly=kelly,
         ),
         genesis_id=genesis.genesis_id,
         genesis_digest=genesis.genesis_digest,
@@ -4088,6 +4308,7 @@ def build_governed_paper_entry_safety_evidence(
         sizing_evidence=sizing_evidence,
         protective_ledger_evidence=ledger_evidence,
         risk_evidence=risk_evidence,
+        kelly_evidence=kelly_evidence,
     )
     return replace(seed, evidence_digest=edge_payload_digest(_evidence_payload(seed), _DIGEST_FIELD))
 

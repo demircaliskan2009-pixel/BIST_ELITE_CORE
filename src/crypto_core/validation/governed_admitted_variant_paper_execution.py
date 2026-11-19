@@ -158,6 +158,17 @@ Native risk measurement lineage (``S1_NATIVE_RISK_MEASUREMENT_CONSTRUCTION_V1``,
   before ``E_{k+1}`` (X1 for the risk evidence: the prefix before ``E_k`` must equal the previous seal's). Only an approval
   the active table admits is used, and the production table admits none. Without a risk context every protective ledger
   seal and evidence is exactly the accepted v10 artifact, and no v2-v10 payload carries a seal v11 field.
+
+Kelly reading lineage (``S1_KELLY_DEFINED_READING_CONSTRUCTION_V1``, seal v12 and evidence v12).
+* A native risk measurement lineage whose protection inputs opt in to the RECORD A Kelly reading does so on every day from
+  day 0, and never switches. It needs no further input: every Kelly fact is derived from the day's own replay.
+* Its schedule is the engine's schedule v8: schedule v7 with RECORD A's Kelly fit (KD-1..KD-12 with the D-A1 fit of
+  ``S1_KELLY_DA1_DECISION_V1``) at every exposure-increasing fill. Its entry gate evaluates rule set v11: rule set v10 with
+  SCALE-1's Kelly-fit term read on the Kelly evidence each evaluation derives from the same re-run.
+* The seal binds the Kelly evidence digest and its prefix before ``E_k`` and before ``E_{k+1}`` (X1 for the Kelly evidence:
+  the prefix before ``E_k`` must equal the previous seal's). No incubation record exists, so no reading is covered and
+  every S1 entry stays refused. Without the opt-in every risk measurement seal and evidence is exactly the accepted v11
+  artifact, and no v2-v11 payload carries a seal v12 field.
 """
 
 from __future__ import annotations
@@ -215,6 +226,7 @@ from crypto_core.validation.governed_paper_execution_authority import (
     governed_paper_sealed_history_digest,
     verify_governed_paper_cycle_authority,
 )
+from crypto_core.validation.governed_paper_kelly_reading import governed_paper_kelly_prefix_digest
 from crypto_core.validation.governed_paper_kill_switch import governed_paper_kill_switch_prefix_digest
 from crypto_core.validation.governed_paper_protective_authority import (
     GovernedPaperProtectiveAuthority,
@@ -262,6 +274,7 @@ from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION,
+    HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_PROTECTIVE_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_SCHEDULE_SCHEMA_VERSION,
@@ -346,6 +359,7 @@ _SYSTEM_SAFETY_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v8"
 _SIZING_CHAIN_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v9"
 _PROTECTIVE_LEDGER_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v10"
 _RISK_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v11"
+_KELLY_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v12"
 _EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v2"
 _PROTECTIVE_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v3"
 _PORTFOLIO_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v4"
@@ -356,7 +370,9 @@ _SYSTEM_SAFETY_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v8"
 _SIZING_CHAIN_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v9"
 _PROTECTIVE_LEDGER_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v10"
 _RISK_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v11"
-_PROTECTIVE_LEDGER_SEALS = (_PROTECTIVE_LEDGER_SEAL_SCHEMA_VERSION, _RISK_SEAL_SCHEMA_VERSION)
+_KELLY_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v12"
+_RISK_SEALS = (_RISK_SEAL_SCHEMA_VERSION, _KELLY_SEAL_SCHEMA_VERSION)
+_PROTECTIVE_LEDGER_SEALS = (_PROTECTIVE_LEDGER_SEAL_SCHEMA_VERSION, *_RISK_SEALS)
 _SIZING_CHAIN_SEALS = (_SIZING_CHAIN_SEAL_SCHEMA_VERSION, *_PROTECTIVE_LEDGER_SEALS)
 _SYSTEM_SAFETY_SEALS = (_SYSTEM_SAFETY_SEAL_SCHEMA_VERSION, *_SIZING_CHAIN_SEALS)
 _REGIME_SEALS = (_REGIME_SEAL_SCHEMA_VERSION, *_SYSTEM_SAFETY_SEALS)
@@ -530,6 +546,17 @@ class GovernedPaperDaySeal:
     risk_evidence_digest: str = ""
     risk_prefix_digest_open: str = ""
     risk_prefix_digest_close: str = ""
+    # Seal v12 only (a Kelly reading lineage, S1_KELLY_DEFINED_READING_CONSTRUCTION_V1): no v2-v11 payload carries these.
+    kelly_evidence_digest: str = ""
+    kelly_prefix_digest_open: str = ""
+    kelly_prefix_digest_close: str = ""
+
+
+_SEAL_V12_FIELDS = (
+    "kelly_evidence_digest",
+    "kelly_prefix_digest_open",
+    "kelly_prefix_digest_close",
+)
 
 
 _SEAL_V11_FIELDS = (
@@ -601,7 +628,8 @@ class GovernedPaperDayProtectionInputs:
     ``sizing``) is the protective obligation ledger v2 lineage's context (seal v10, entry rule set v9, schedule v6): the
     IR-2 integrity trigger proofs known at ``E_{k+1}`` (none in production). ``risk`` (only with ``protective_ledger``) is
     the native risk measurement lineage's context (seal v11, entry rule set v10, schedule v7): the RECORD B risk policy,
-    its approval and the policy's MARK bar archive known at ``E_{k+1}``.
+    its approval and the policy's MARK bar archive known at ``E_{k+1}``. ``kelly`` (only with ``risk``) selects the RECORD A
+    Kelly reading lineage (seal v12, entry rule set v11, schedule v8); it needs no further input.
     """
 
     authority_inputs: GovernedPaperProtectiveAuthorityInputs
@@ -618,6 +646,7 @@ class GovernedPaperDayProtectionInputs:
     sizing: GovernedPaperSizingContext | None = None
     protective_ledger: GovernedPaperProtectiveLedgerContext | None = None
     risk: GovernedPaperRiskContext | None = None
+    kelly: bool = False
 
 
 @dataclass(frozen=True)
@@ -858,6 +887,21 @@ _LEGACY_PAYLOADS: dict[type, tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]
                 _PROTECTIVE_LEDGER_SEAL_SCHEMA_VERSION,
             ),
             _SEAL_V11_FIELDS,
+        ),
+        (
+            (
+                _SEAL_SCHEMA_VERSION,
+                _PROTECTIVE_SEAL_SCHEMA_VERSION,
+                _PORTFOLIO_SEAL_SCHEMA_VERSION,
+                _MARKET_DATA_SEAL_SCHEMA_VERSION,
+                _KILL_SWITCH_SEAL_SCHEMA_VERSION,
+                _REGIME_SEAL_SCHEMA_VERSION,
+                _SYSTEM_SAFETY_SEAL_SCHEMA_VERSION,
+                _SIZING_CHAIN_SEAL_SCHEMA_VERSION,
+                _PROTECTIVE_LEDGER_SEAL_SCHEMA_VERSION,
+                _RISK_SEAL_SCHEMA_VERSION,
+            ),
+            _SEAL_V12_FIELDS,
         ),
     ),
     GovernedPaperExecutionEvidence: (((_EVIDENCE_SCHEMA_VERSION,), _EVIDENCE_V3_FIELDS),),
@@ -1164,6 +1208,7 @@ class _SealProof:
     sizing_chain: bool = False
     protective_ledger: bool = False
     risk: bool = False
+    kelly: bool = False
 
 
 def _closing(inputs: GovernedPaperDaySealInputs, cycle: GovernedPaperCycleAuthority, sleeve_id: str, end: int):  # noqa: ANN202
@@ -1230,6 +1275,7 @@ class _DayProtection:
     integrity_proof_digests: tuple[str, ...] = ()  # re-proven: append-only, each new one inside this day
     risk: GovernedPaperRiskContext | None = None
     risk_digests: tuple[str, str, str] = ("", "", "")  # policy, approval, archive (re-proven)
+    kelly: bool = False
 
 
 def _risk_context(
@@ -1442,8 +1488,15 @@ def _day_protection(  # noqa: C901 - one linear proof of the protective inputs
         raise _fail("protection_inputs_malformed:risk")
     if risk is not None and ledger is None:
         raise _fail("risk_measurement_needs_the_protective_ledger_lineage")
-    if prior is not None and (prior.schema_version == _RISK_SEAL_SCHEMA_VERSION) is not (risk is not None):
+    if prior is not None and (prior.schema_version in _RISK_SEALS) is not (risk is not None):
         raise _fail("risk_measurement_lineage_switched")
+    kelly = protection.kelly
+    if type(kelly) is not bool:
+        raise _fail("protection_inputs_malformed:kelly")
+    if kelly and risk is None:
+        raise _fail("kelly_reading_needs_the_risk_measurement_lineage")
+    if prior is not None and (prior.schema_version == _KELLY_SEAL_SCHEMA_VERSION) is not kelly:
+        raise _fail("kelly_reading_lineage_switched")
     risk_digests = ("", "", "") if risk is None else _risk_context(risk, prior, genesis=genesis, end=end)
     proof_digests = () if ledger is None else _integrity_proofs(ledger, prior, genesis=genesis, start=start, end=end)
     ctr_binding = (
@@ -1538,6 +1591,7 @@ def _day_protection(  # noqa: C901 - one linear proof of the protective inputs
         integrity_proof_digests=proof_digests,
         risk=risk,
         risk_digests=risk_digests,
+        kelly=kelly,
     )
 
 
@@ -1635,6 +1689,8 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
     schedule = HistoricalExecutionAdmissionSchedule(
         schema_version=HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION
         if protection is None
+        else HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION
+        if protection.kelly
         else HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_SCHEDULE_SCHEMA_VERSION
         if protection.risk is not None
         else HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_ADMISSION_SCHEDULE_SCHEMA_VERSION
@@ -1742,7 +1798,19 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
     sizing_chain = protection is not None and protection.sizing is not None
     ledger = protection is not None and protection.protective_ledger is not None
     risk = protection is not None and protection.risk is not None
-    lineage = (protective, portfolio, market_data, kill_switch, regime, system_safety, sizing_chain, ledger, risk)
+    kelly = protection is not None and protection.kelly
+    lineage = (
+        protective,
+        portfolio,
+        market_data,
+        kill_switch,
+        regime,
+        system_safety,
+        sizing_chain,
+        ledger,
+        risk,
+        kelly,
+    )
     try:
         if not attested:
             raise _Blocked("closing_head_not_attested")
@@ -1897,6 +1965,7 @@ def _replay(
                 sizing=protection.sizing,  # type: ignore[union-attr]
                 protective_ledger=protection.protective_ledger,  # type: ignore[union-attr]
                 risk=protection.risk,  # type: ignore[union-attr]
+                kelly=protection.kelly,  # type: ignore[union-attr]
             )
         return evaluations[refused]
 
@@ -2267,6 +2336,20 @@ def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the 
                 risk_prefix_digest_open=risk_open,
                 risk_prefix_digest_close=governed_paper_risk_prefix_digest(risk_evidence, before_ns=end),
             )
+        if protection.kelly:
+            # X1 for the Kelly evidence: re-derived from G; a trade or a reading known before E_k never changes, so its
+            # prefix before E_k must be the previous seal's prefix at E_{k+1}.
+            kelly_evidence = replay.entry_safety.kelly_evidence
+            if kelly_evidence is None:  # pragma: no cover - rule set v11 always binds its Kelly evidence
+                raise _fail("kelly_evidence_missing")
+            kelly_open = governed_paper_kelly_prefix_digest(kelly_evidence, before_ns=start)
+            if prior is not None and kelly_open != prior.kelly_prefix_digest_close:
+                raise _fail("kelly_prefix_rewritten")
+            derived.update(
+                kelly_evidence_digest=kelly_evidence.evidence_digest,
+                kelly_prefix_digest_open=kelly_open,
+                kelly_prefix_digest_close=governed_paper_kelly_prefix_digest(kelly_evidence, before_ns=end),
+            )
     return {
         **derived,
         "decision_run_digest": replay.run_digest,
@@ -2300,7 +2383,9 @@ def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the 
 def _assemble_seal(proof: _SealProof) -> GovernedPaperDaySeal:
     status = GovernedPaperDaySealStatus.BLOCKED if proof.blocked else GovernedPaperDaySealStatus.SEALED
     seed = GovernedPaperDaySeal(
-        schema_version=_RISK_SEAL_SCHEMA_VERSION
+        schema_version=_KELLY_SEAL_SCHEMA_VERSION
+        if proof.kelly
+        else _RISK_SEAL_SCHEMA_VERSION
         if proof.risk
         else _PROTECTIVE_LEDGER_SEAL_SCHEMA_VERSION
         if proof.protective_ledger
@@ -2526,7 +2611,9 @@ def build_governed_paper_execution_evidence(inputs: GovernedPaperExecutionInputs
             "terminal_outstanding_protective_obligation_count": terminal.outstanding_protective_obligation_count,
         }
     seed = GovernedPaperExecutionEvidence(
-        schema_version=_RISK_EVIDENCE_SCHEMA_VERSION
+        schema_version=_KELLY_EVIDENCE_SCHEMA_VERSION
+        if terminal.schema_version == _KELLY_SEAL_SCHEMA_VERSION
+        else _RISK_EVIDENCE_SCHEMA_VERSION
         if terminal.schema_version == _RISK_SEAL_SCHEMA_VERSION
         else _PROTECTIVE_LEDGER_EVIDENCE_SCHEMA_VERSION
         if terminal.schema_version == _PROTECTIVE_LEDGER_SEAL_SCHEMA_VERSION
