@@ -646,3 +646,24 @@ governed paper substrate: no new risk engine, admission system, policy artifact 
   the D-B2 alternative depth definition; D-B4 and D-B5; MONITORING_CADENCE, so nothing is measured between decisions;
   FCD-05, FCD-13, FCD-14 and HD-07; M1, D1, C1-C9 and DEC-1, so the §1.18 de-risk duty stays unrepresentable; RECORD A's
   D-A1; risk-policy production approval; incubation and the 100-trade Kelly bootstrap; and Stage-4.
+
+## 16. S1 Kelly D-A1 — doctrine adoption (recorded 2026-11-19)
+
+Contract `S1_KELLY_DA1_DOCTRINE_ADOPTION_V1` adopts the human decision `S1_KELLY_DA1_DECISION_V1` of 2026-11-19,
+effective only through its own adoption merge (`docs/crypto_core/s1_kelly_da1_doctrine_adoption_v1.md` section 0.1):
+
+- approved for construction only (Tier III), not implemented: D-A1 Alternative 1 as KD-9 of RECORD A, in the
+  decision's exact wording (adoption document section 2.1). The candidate's FCD-01 `rho_t` times `max(1, Lbar)`, with
+  `Lbar` the mean of `abs(R_j)` over the KD-1 window's losses, must not exceed `f_cap` at the decision (R-4) and at the
+  exposure-increasing fill (R-5); otherwise FAIL, with no resize, and missing or invalid evidence stays BLOCKED.
+  Alternative 2 is not selected. KD-9 is a conservative fit constraint, not a quarter-Kelly identity for every outcome
+  distribution;
+- unchanged: KD-0 risk units, FCD-01, KD-1..KD-8, KD-10..KD-13, PRDV4 (generic multi-edge Kelly included), RECORD B,
+  the companion and the RECORD A amendment, byte for byte; every rule set, schedule, seal, module, policy artifact and
+  approval table. The Kelly reading stays BLOCKED (no FCD-01 evidence in production, no incubation record, the KD-7
+  bootstrap at 100 trades) and SCALE-1 keeps the Kelly fit unproven, so every S1 entry is still refused.
+  REAL_PAPER_EXECUTION stays BLOCKED;
+- not claimed: Kelly survival, ordinary admission, Stage-4 eligibility or credit, readiness, profitability or edge;
+- pending: the construction of RECORD A's methodology with this KD-9 (a separately authorized implementation contract
+  with its own protected audit); the 100-trade Kelly bootstrap; HC-16a, HC-16c and HC-16d; incubation (companion items
+  1.4–1.8); RECORD B's pending items; M1, D1, risk-policy production approval, C1-C9 and DEC-1; and Stage-4.
