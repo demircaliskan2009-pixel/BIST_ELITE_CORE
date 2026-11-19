@@ -6,11 +6,19 @@ KD-0 with the clarification C-1 and C-2, and the approved methodology KD-1..KD-1
 read with PRDV4 §0.3, §1.21 and §1.28 and the FCD-01 of ``docs/crypto_core/s1_native_risk_measurement_doctrine_adoption_v1.md``.
 Paper-only, deterministic, point-in-time and fail-closed. It creates no order, sizes nothing and authorizes no entry.
 
-Authority. Every reading is derived, never accepted, from the evaluation's own ONE governed engine re-run (its governed
-outcome and, in memory only, the exact Kelly inputs of every closed trade: ``HistoricalExecutionTradeExactValues``), the
-re-proven dataset, the economics and position-management policies and OHLC archive the economics binds, and the exact
-FCD-01 R-4 stop-risk fraction of each entry decision (``governed_paper_risk_entry_fraction``, the same computation NT-R03
-renders). The caller re-proves every one of them; this module re-proves their mutual consistency.
+Authority (S1_KELLY_PUBLIC_PROVENANCE_REPAIR_V1). Every reading is derived, never accepted, from the replay authority
+of its evaluation: the engine result and the caller's anchor (``result``, ``expected_result_digest``), the same authority
+``verify_governed_paper_outcome`` re-proves an outcome against. Both public producers re-run the ONE governed engine
+derivation under the supplied outcome's own schedule (``simulate_historical_execution_governed_paper_derivation``: the
+engine re-proves the result by recomputation from its own bindings against the anchor, then re-runs it). The supplied
+outcome must be that replay's outcome, field for field, and every supplied exact trade fact
+(``HistoricalExecutionTradeExactValues``) must equal the replay's own exact value: exact rationals, never a rendering, and
+never joined by a label. Only the replay's own facts are read after that. The dataset, the economics and
+position-management policies and the OHLC archive are re-proven by their public verifiers and must recompute to the
+digests the authenticated result binds. The decisions are the authenticated run's own (the run the result binds), and
+each entry's FCD-01 R-4 stop-risk fraction is derived here, from the evaluation's re-proven risk context over the same
+replay (``governed_paper_risk_entry_fraction``, the computation NT-R03 renders). A self-digest, a matching rendering or
+a matching identifier authenticates nothing: a supplied fact that is not the replay's is ``GovernedPaperKellyError``.
 
 Trades (A1.3, KD-0, KD-10a). Every CLOSED excursion of the re-run, in engine close order, is a trade. Its exact realized net
 PnL must render to the trade record's own, and its class is the sign of that PnL (win, loss or zero). Its knowledge instant
@@ -19,9 +27,9 @@ dataset's funding records, and must equal the re-run's. Its risk ``Risk_j`` is r
 the executed price and filled quantity of its first entry fill, the milestone-0 stop that fill armed (the protection record
 re-derived exactly: the basis on the price grid and the ATR re-computed at its own decision instant), the fill-instant mark
 (the mark record of the fill's own valuation, visible at the fill) and the policy's taker fee plus slippage floor, by the
-FCD-01 R-1 formula; it must equal the re-run's own R-5 measurement exactly. ``R_j = net_j / Risk_j`` exists only for a proven
+FCD-01 R-1 formula; it must equal the replay's own R-5 measurement exactly. ``R_j = net_j / Risk_j`` exists only for a proven
 positive risk; a missing, unmeasured, unreproducible, publication-invisible or non-positive one leaves ``R_j`` unproven. A
-re-run fact that does not agree with the sealed records is not an input: ``GovernedPaperKellyError``.
+replay fact that does not agree with the sealed records is not an input: ``GovernedPaperKellyError``.
 
 Reading. At an entry decision at ``t`` the known trades are those known at or before ``t``; a trade closed by ``t`` but not
 yet known keeps the windows undefined. The candidate's ``rho_t`` is its FCD-01 R-4 fraction. The one exact arithmetic is the
@@ -51,14 +59,20 @@ from fractions import Fraction
 
 from crypto_core.validation.edge_artifact_core import (
     EdgeArtifactError,
+    edge_authority_binding_snapshot,
     edge_canonical_json,
     edge_payload_digest,
     edge_sha256_text,
 )
 from crypto_core.validation.governed_paper_risk_measurement import (
+    GovernedPaperRiskContext,
+    GovernedPaperRiskError,
+    derive_governed_paper_risk_market,
+    governed_paper_risk_entry_fraction,
     governed_paper_risk_protection_stop,
     governed_paper_risk_stop_risk,
 )
+from crypto_core.validation.historical_decision_run import HistoricalDecisionRun, historical_decision_run_from_payload
 from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_KELLY_BLOCKS,
     HISTORICAL_EXECUTION_KELLY_CAP,
@@ -67,7 +81,10 @@ from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_KELLY_FRACTION,
     HISTORICAL_EXECUTION_KELLY_G_WINDOW,
     HISTORICAL_EXECUTION_KELLY_WINDOW,
+    HistoricalExecutionEconomicsError,
+    HistoricalExecutionEconomicsResult,
     HistoricalExecutionFillOutcome,
+    HistoricalExecutionGovernedPaperDerivation,
     HistoricalExecutionGovernedPaperOutcome,
     HistoricalExecutionKellyFit,
     HistoricalExecutionKellyStatus,
@@ -75,17 +92,28 @@ from crypto_core.validation.historical_execution_economics import (
     HistoricalExecutionTradeExactValues,
     HistoricalExecutionTradeStatus,
     HistoricalExecutionValuationKind,
-    historical_execution_governed_paper_outcome_digest,
     historical_execution_kelly_fit,
+    simulate_historical_execution_governed_paper_derivation,
 )
 from crypto_core.validation.historical_execution_economics_policy import (
     HistoricalExecutionEconomicsPolicy,
     historical_execution_render_amount,
     historical_execution_wire_int_is_valid,
+    verify_historical_execution_economics_policy,
 )
-from crypto_core.validation.historical_ohlc_bar_archive import HistoricalOhlcBarArchive
-from crypto_core.validation.historical_pit_dataset import HistoricalPitDataset, HistoricalPitRecord
-from crypto_core.validation.historical_position_management_policy import HistoricalPositionManagementPolicy
+from crypto_core.validation.historical_ohlc_bar_archive import (
+    HistoricalOhlcBarArchive,
+    verify_historical_ohlc_bar_archive,
+)
+from crypto_core.validation.historical_pit_dataset import (
+    HistoricalPitDataset,
+    HistoricalPitRecord,
+    verify_historical_pit_dataset,
+)
+from crypto_core.validation.historical_position_management_policy import (
+    HistoricalPositionManagementPolicy,
+    verify_historical_position_management_policy,
+)
 
 GOVERNED_PAPER_KELLY_CONTRACT_ID = "S1_KELLY_DEFINED_READING_CONSTRUCTION_V1"
 # RECORD A (the human-approved class-completion decision) and the human decision resolving its delta D-A1.
@@ -193,7 +221,12 @@ class GovernedPaperKellyReading:
 
 @dataclass(frozen=True)
 class GovernedPaperKellyEvidence:
-    """The derived Kelly evidence of one governed evaluation: its trades and every entry decision's reading."""
+    """The derived Kelly evidence of one governed evaluation: its trades and every entry decision's reading.
+
+    Every digest names an authenticated authority: the replay's outcome and the result it re-proved against the caller's
+    anchor, the re-proven dataset, policies and archive the result binds, and the re-proven risk context the R-4
+    fractions read (its policy, approval, MARK archive and the approval table that admitted it or not).
+    """
 
     schema_version: str
     contract_id: str
@@ -201,11 +234,15 @@ class GovernedPaperKellyEvidence:
     method_id: str
     rule_digest: str
     outcome_digest: str
+    baseline_result_digest: str
     dataset_digest: str
     economics_policy_digest: str
     position_management_policy_digest: str
     ohlc_archive_digest: str
-    risk_evidence_digest: str
+    risk_policy_digest: str
+    risk_approval_digest: str
+    risk_archive_digest: str
+    risk_approval_table_id: str
     instrument: str
     start_ns: int
     horizon_ns: int
@@ -298,6 +335,9 @@ def governed_paper_kelly_rule() -> dict[str, object]:
         "pending_never_read": list(GOVERNED_PAPER_KELLY_PENDING_ITEMS),
         "fill": "the_engine_schedule_v8_refuses_an_exposure_increasing_fill_whose_r5_kelly_reading_is_not_pass_whole_"
         "and_never_resized",
+        "provenance": "the_replay_authority_result_and_anchor_re_proven_by_the_engine_the_supplied_outcome_equal_to_the_"
+        "replay_field_for_field_every_supplied_exact_trade_fact_equal_to_the_replay_exactly_inputs_re_proven_to_the_"
+        "result_bindings_decisions_from_the_authenticated_run_r4_fractions_derived_from_the_re_proven_risk_context",
     }
 
 
@@ -401,8 +441,95 @@ def _opening_risk(  # noqa: PLR0911 - one linear re-derivation, every refusal na
     return risk, "", facts
 
 
-def governed_paper_kelly_trades(  # noqa: C901, PLR0913 - one linear re-proof of every closed trade
+@dataclass(frozen=True)
+class _Replay:
+    """The authenticated replay of one evaluation (in memory only): the ONE engine derivation re-run from the replay
+    authority, the result the engine re-proved against the anchor, and the decision run that result binds."""
+
+    derivation: HistoricalExecutionGovernedPaperDerivation
+    result: HistoricalExecutionEconomicsResult
+    run: HistoricalDecisionRun
+
+
+def _authenticated_replay(  # noqa: PLR0913 - the replay authority and every input bound to it
     *,
+    result: object,
+    expected_result_digest: object,
+    outcome: object,
+    trade_exact_values: object,
+    dataset: object,
+    economics_policy: object,
+    position_management_policy: object,
+    position_management_archive: object,
+) -> _Replay:
+    """Authenticate a supplied governed outcome and its exact trade facts against their replay authority.
+
+    The engine re-proves ``result`` against the caller's anchor (recomputed from its own run, policy and dataset
+    bindings) and re-runs it under the supplied outcome's own schedule: ONE derivation gives the outcome and the exact
+    Kelly inputs of every closed trade. The supplied outcome must be that outcome field for field, and the supplied exact
+    facts must equal its exact values exactly, in order. The dataset, policies and archive must recompute, through their
+    public verifiers, to the digests the authenticated result binds. Anything else raises ``GovernedPaperKellyError``
+    before any evidence exists; nothing supplied is read afterwards.
+    """
+
+    if type(outcome) is not HistoricalExecutionGovernedPaperOutcome or outcome.simulated is not True:
+        raise _fail("governed_outcome_malformed")
+    try:
+        exact = tuple(trade_exact_values)  # type: ignore[arg-type]
+    except TypeError as exc:
+        raise _fail("trade_exact_values_malformed") from exc
+    if any(type(item) is not HistoricalExecutionTradeExactValues for item in exact):
+        raise _fail("trade_exact_values_malformed")
+    try:  # the engine re-proves the result against the anchor, then re-runs it: never a supplied fact
+        derivation = simulate_historical_execution_governed_paper_derivation(
+            result,  # type: ignore[arg-type]
+            expected_result_digest=expected_result_digest,  # type: ignore[arg-type]
+            schedule=outcome.schedule,
+        )
+    except HistoricalExecutionEconomicsError as exc:
+        raise _fail("replay_authority_rejected") from exc
+    if derivation.outcome.simulated is not True or derivation.outcome != outcome:
+        raise _fail("governed_outcome_not_the_authenticated_replay")
+    if exact != derivation.trade_exact_values:  # exact rationals, in close order: never a rendering or a label
+        raise _fail("trade_exact_values_not_of_the_authenticated_replay")
+    authentic: HistoricalExecutionEconomicsResult = result  # type: ignore[assignment] - re-proven by the engine above
+    for verify, value, expected, code in (
+        (verify_historical_pit_dataset, dataset, authentic.dataset_digest, "dataset_not_of_the_replay"),
+        (
+            verify_historical_execution_economics_policy,
+            economics_policy,
+            authentic.economics_policy_digest,
+            "economics_policy_not_of_the_replay",
+        ),
+        (
+            verify_historical_position_management_policy,
+            position_management_policy,
+            authentic.position_management_policy_digest,
+            "position_management_policy_not_of_the_replay",
+        ),
+        (
+            verify_historical_ohlc_bar_archive,
+            position_management_archive,
+            authentic.ohlc_archive_digest,
+            "ohlc_archive_not_of_the_replay",
+        ),
+    ):
+        verification = verify(value)  # total: a malformed or forged input is never intact or never the bound digest
+        if not verification.intact or verification.recomputed_digest != expected:
+            raise _fail(code)
+    try:  # the run the authenticated result binds (the engine re-proved it against the binding's anchor)
+        run = historical_decision_run_from_payload(edge_authority_binding_snapshot(authentic.run_binding))
+    except Exception as exc:  # noqa: BLE001 - an underivable run is never read
+        raise _fail("replay_run_not_derivable") from exc
+    if run.run_digest != authentic.run_digest:  # pragma: no cover - the engine re-proved this binding
+        raise _fail("replay_run_not_derivable")
+    return _Replay(derivation, authentic, run)
+
+
+def governed_paper_kelly_trades(  # noqa: PLR0913 - the replay authority and every input bound to it
+    *,
+    result: HistoricalExecutionEconomicsResult,
+    expected_result_digest: str,
     outcome: HistoricalExecutionGovernedPaperOutcome,
     trade_exact_values: Sequence[HistoricalExecutionTradeExactValues],
     dataset: HistoricalPitDataset,
@@ -410,33 +537,50 @@ def governed_paper_kelly_trades(  # noqa: C901, PLR0913 - one linear re-proof of
     position_management_policy: HistoricalPositionManagementPolicy,
     position_management_archive: HistoricalOhlcBarArchive,
 ) -> tuple[tuple[GovernedPaperKellyTrade, ...], tuple[GovernedPaperKellyKnownTrade, ...]]:
-    """Every CLOSED trade of one governed re-run, re-proven against the sealed records (see the module docstring): the
-    evidence records and their exact facts, in engine close order. The outcome's own digest is recomputed through the
-    public serializer first (the evidence binds it). A re-run fact that disagrees with the sealed records, a reordered,
-    missing or duplicate trade, or a malformed input raises ``GovernedPaperKellyError``. Pure."""
+    """Every CLOSED trade of one authenticated governed replay, re-proven against the sealed records (see the module
+    docstring): the evidence records and their exact facts, in engine close order.
 
-    if type(outcome) is not HistoricalExecutionGovernedPaperOutcome or outcome.simulated is not True:
-        raise _fail("governed_outcome_malformed")
-    if historical_execution_governed_paper_outcome_digest(outcome) != outcome.outcome_digest:
-        raise _fail("governed_outcome_digest_mismatch")
-    if type(dataset) is not HistoricalPitDataset or outcome.dataset_digest != dataset.dataset_digest:
-        raise _fail("dataset_not_of_the_outcome")
-    if (
-        type(economics_policy) is not HistoricalExecutionEconomicsPolicy
-        or economics_policy.policy_digest != outcome.economics_policy_digest
-    ):
-        raise _fail("economics_policy_not_of_the_outcome")
-    if type(position_management_policy) is not HistoricalPositionManagementPolicy or (
-        type(position_management_archive) is not HistoricalOhlcBarArchive
-    ):
-        raise _fail("position_management_inputs_malformed")
-    exact = tuple(trade_exact_values)
-    if any(type(item) is not HistoricalExecutionTradeExactValues for item in exact):
-        raise _fail("trade_exact_values_malformed")
+    ``result`` and ``expected_result_digest`` are the replay authority; ``outcome`` and ``trade_exact_values`` are claims
+    that must be that replay's own (``_authenticated_replay``), and only the replay's own facts are read. A non-authentic
+    authority, a supplied fact that is not the replay's, an input that is not the one the result binds, or a replay fact
+    that disagrees with the sealed records raises ``GovernedPaperKellyError``. Pure.
+    """
+
+    replay = _authenticated_replay(
+        result=result,
+        expected_result_digest=expected_result_digest,
+        outcome=outcome,
+        trade_exact_values=trade_exact_values,
+        dataset=dataset,
+        economics_policy=economics_policy,
+        position_management_policy=position_management_policy,
+        position_management_archive=position_management_archive,
+    )
+    return _reproven_trades(
+        replay.derivation,
+        dataset=dataset,
+        economics_policy=economics_policy,
+        position_management_policy=position_management_policy,
+        position_management_archive=position_management_archive,
+    )
+
+
+def _reproven_trades(  # noqa: C901 - one linear re-proof of every closed trade
+    derivation: HistoricalExecutionGovernedPaperDerivation,
+    *,
+    dataset: HistoricalPitDataset,
+    economics_policy: HistoricalExecutionEconomicsPolicy,
+    position_management_policy: HistoricalPositionManagementPolicy,
+    position_management_archive: HistoricalOhlcBarArchive,
+) -> tuple[tuple[GovernedPaperKellyTrade, ...], tuple[GovernedPaperKellyKnownTrade, ...]]:
+    """The re-proof of an AUTHENTICATED replay's closed trades against its sealed records (every input already bound)."""
+
+    outcome = derivation.outcome
+    exact = derivation.trade_exact_values
     closed = [item for item in outcome.trades if item.status is HistoricalExecutionTradeStatus.CLOSED]
     if [item.trade_id for item in closed] != [item.trade_id for item in exact] or len(
         {item.trade_id for item in closed}
-    ) != len(closed):
+    ) != len(closed):  # pragma: no cover - one replay gives both, in close order
         raise _fail("trade_exact_values_not_of_the_outcome")
     records = {item.record_digest: item for item in dataset.records}
     cashflows = {item.cashflow_digest: item for item in outcome.funding_cashflows}
@@ -535,7 +679,12 @@ def build_governed_paper_kelly_reading(  # noqa: PLR0913
 ) -> GovernedPaperKellyReading:
     """The Kelly reading of one entry decision at ``decision_time_ns`` on the re-proven trades of its evaluation (in
     engine close order): the trades known by then, the closed but not yet known ones, the candidate's exact FCD-01 R-4
-    ``rho`` (None with ``rho_reason``) and the engine's one exact arithmetic (module docstring). Pure."""
+    ``rho`` (None with ``rho_reason``) and the engine's one exact arithmetic (module docstring). Pure.
+
+    This is the KD arithmetic over the facts it is given, and it carries no provenance of its own: a reading is evidence
+    only inside ``derive_governed_paper_kelly_evidence``, which derives its trades and fraction from the authenticated
+    replay, and the entry gate reads only that derived evidence.
+    """
 
     for value, name in ((decision_sequence, "decision_sequence"), (decision_time_ns, "decision_time_ns")):
         if not historical_execution_wire_int_is_valid(value, minimum=0):
@@ -624,40 +773,83 @@ def _canonical_decisions(decisions: object, start_ns: int, horizon_ns: int) -> t
     return decisions  # type: ignore[return-value]
 
 
-def derive_governed_paper_kelly_evidence(  # noqa: PLR0913
+def derive_governed_paper_kelly_evidence(  # noqa: PLR0913 - the replay authority, its bound inputs and the span
     *,
-    decisions: tuple[tuple[int, int, str], ...],
+    result: HistoricalExecutionEconomicsResult,
+    expected_result_digest: str,
     outcome: HistoricalExecutionGovernedPaperOutcome,
     trade_exact_values: Sequence[HistoricalExecutionTradeExactValues],
     dataset: HistoricalPitDataset,
     economics_policy: HistoricalExecutionEconomicsPolicy,
     position_management_policy: HistoricalPositionManagementPolicy,
     position_management_archive: HistoricalOhlcBarArchive,
-    fractions: Mapping[int, tuple[Fraction | None, str]],
-    risk_evidence_digest: str,
+    risk: GovernedPaperRiskContext,
     instrument: str,
     start_ns: int,
     horizon_ns: int,
 ) -> GovernedPaperKellyEvidence:
-    """The Kelly evidence of one governed evaluation: the re-proven trades of its one engine re-run and the reading of
-    every entry decision ``(sequence, instant, direction)`` at its exact FCD-01 R-4 fraction ``fractions[sequence]``
-    (``governed_paper_risk_entry_fraction``, derived by the caller from the same re-run). Pure."""
+    """The Kelly evidence of one governed evaluation, derived from its authenticated replay (module docstring).
+
+    The supplied outcome and exact trade facts must be the replay's own (``_authenticated_replay``). The trades are the
+    replay's closed trades re-proven against the sealed records. The entry decisions are every LONG/SHORT decision of
+    the run the authenticated result binds, each inside ``[start_ns, horizon_ns)``, and each is read at the exact FCD-01
+    R-4 fraction derived here from the re-proven ``risk`` context over the same replay
+    (``governed_paper_risk_entry_fraction``; an approval the active table does not admit gives no fraction). Nothing
+    else supplied is read. A non-authentic or foreign input raises ``GovernedPaperKellyError``. Pure.
+    """
 
     for value, name in ((start_ns, "start_ns"), (horizon_ns, "horizon_ns")):
         if not historical_execution_wire_int_is_valid(value, minimum=0):
             raise _fail(f"{name}_invalid")
     if horizon_ns <= start_ns:
         raise _fail("evaluation_horizon_invalid")
-    entries = _canonical_decisions(decisions, start_ns, horizon_ns)
-    if type(instrument) is not str or instrument != outcome.instrument:  # type: ignore[union-attr]
-        raise _fail("instrument_not_of_the_outcome")
-    if type(risk_evidence_digest) is not str or len(risk_evidence_digest) != 64:  # noqa: PLR2004 - a SHA-256 hex digest
-        raise _fail("risk_evidence_digest_malformed")
-    if not isinstance(fractions, Mapping) or any(item[0] not in fractions for item in entries):
-        raise _fail("entry_fractions_malformed")
-    trades, known = governed_paper_kelly_trades(
+    replay = _authenticated_replay(
+        result=result,
+        expected_result_digest=expected_result_digest,
         outcome=outcome,
         trade_exact_values=trade_exact_values,
+        dataset=dataset,
+        economics_policy=economics_policy,
+        position_management_policy=position_management_policy,
+        position_management_archive=position_management_archive,
+    )
+    derived = replay.derivation.outcome
+    if type(instrument) is not str or instrument != derived.instrument:
+        raise _fail("instrument_not_of_the_replay")
+    entries = _canonical_decisions(
+        tuple(
+            (item.decision_sequence, item.decision_time_ns, item.resulting_direction)
+            for item in replay.run.decisions
+            if item.resulting_direction in ("LONG", "SHORT")
+        ),
+        start_ns,
+        horizon_ns,
+    )
+    snapshots = {item.decision_sequence: item for item in replay.derivation.portfolio.snapshots}
+    exact_values = {item.decision_sequence: item for item in replay.derivation.exact_values}
+    try:  # the evaluation's risk context, re-proven by the market derivation; the fractions read the same replay
+        market = derive_governed_paper_risk_market(
+            risk, dataset=dataset, instrument=instrument, start_ns=start_ns, horizon_ns=horizon_ns
+        )
+        fractions = {
+            sequence: governed_paper_risk_entry_fraction(
+                market,
+                instant,
+                snapshot=snapshots.get(sequence),
+                exact=exact_values.get(sequence),
+                outcome=derived,
+                economics_policy=economics_policy,
+                position_management_policy=position_management_policy,
+                position_management_archive=position_management_archive,
+            )
+            for sequence, instant, _ in entries
+        }
+    except GovernedPaperRiskError as exc:
+        raise _fail("risk_market_not_derivable") from exc
+    if market.dataset_digest != replay.result.dataset_digest:  # pragma: no cover - the same re-proven dataset
+        raise _fail("risk_market_not_of_the_replay")
+    trades, known = _reproven_trades(
+        replay.derivation,
         dataset=dataset,
         economics_policy=economics_policy,
         position_management_policy=position_management_policy,
@@ -680,12 +872,16 @@ def derive_governed_paper_kelly_evidence(  # noqa: PLR0913
         decision_ids=GOVERNED_PAPER_KELLY_DECISION_IDS,
         method_id=GOVERNED_PAPER_KELLY_METHOD_ID,
         rule_digest=GOVERNED_PAPER_KELLY_RULE_DIGEST,
-        outcome_digest=outcome.outcome_digest,
-        dataset_digest=dataset.dataset_digest,
-        economics_policy_digest=economics_policy.policy_digest,
-        position_management_policy_digest=position_management_policy.policy_digest,
-        ohlc_archive_digest=position_management_archive.archive_digest,
-        risk_evidence_digest=risk_evidence_digest,
+        outcome_digest=derived.outcome_digest,
+        baseline_result_digest=derived.baseline_result_digest,
+        dataset_digest=derived.dataset_digest,
+        economics_policy_digest=derived.economics_policy_digest,
+        position_management_policy_digest=replay.result.position_management_policy_digest,  # type: ignore[arg-type]
+        ohlc_archive_digest=replay.result.ohlc_archive_digest,  # type: ignore[arg-type]
+        risk_policy_digest=market.policy_digest,
+        risk_approval_digest=market.approval_digest,
+        risk_archive_digest=market.archive_digest,
+        risk_approval_table_id=market.approval_table_id,
         instrument=instrument,
         start_ns=start_ns,
         horizon_ns=horizon_ns,

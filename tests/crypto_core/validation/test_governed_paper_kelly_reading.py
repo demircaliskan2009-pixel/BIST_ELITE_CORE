@@ -13,9 +13,13 @@ What is proven:
 * the engine (schedule v8): the fit at every exposure-increasing fill on the run's own closed trades, a whole refusal (no
   fee, no transition), LONG and SHORT, only exposure-increasing fills reach it, and a v7 derivation's exact trade inputs
   equal an independent R-5 oracle;
-* the reading (``governed_paper_kelly_reading``): every trade re-proven against the sealed records (a tampered net, risk,
-  knowledge, order, fill or dataset fails closed), the known/unknown split at a decision, unrepresentable values, digests
-  and a run-independent X1 prefix;
+* the reading (``governed_paper_kelly_reading``): every trade re-proven against the sealed records, the known/unknown
+  split at a decision, unrepresentable values, digests and a run-independent X1 prefix;
+* the public provenance boundary (S1_KELLY_PUBLIC_PROVENANCE_REPAIR_V1, through public builders and digest functions only):
+  both producers accept an authentic replay unchanged (T1) and reject, before any evidence exists, a re-digested forged
+  outcome with matching forged exact facts (T2), an exact PnL moved by 1/10^40 under an unchanged rendering (T3), and a
+  cross-run, relabelled, reordered or foreign side channel, authority or input (T5) (T4: both producers); the decisions
+  and R-4 fractions are derived, never supplied, and a seal never promotes a forged Kelly evidence (T7);
 * the gate (rule set v11): SCALE-1 reads the Kelly-fit term in place (PASS proves it, FAIL refuses as a proven reduction,
   BLOCKED leaves it unproven) and rule sets v1-v10 keep their identities;
 * the lineage (seal v12, evidence v12) on world G: one from day 0 or never, only on a risk lineage, the X1 chain, the public
@@ -33,6 +37,7 @@ from fractions import Fraction
 import pytest
 
 import crypto_core.validation.governed_paper_ctr_qualification as ctr
+import crypto_core.validation.governed_paper_kelly_reading as kelly_module
 import crypto_core.validation.governed_paper_regime_state as regime
 import crypto_core.validation.governed_paper_risk_measurement as risk
 import crypto_core.validation.historical_execution_economics as economics
@@ -41,6 +46,7 @@ from crypto_core.validation.governed_admitted_variant_paper_execution import (
     GovernedPaperExecutionStatus,
     build_governed_paper_day_seal,
     governed_paper_day_seal_to_dict,
+    verify_governed_paper_outcome,
 )
 from crypto_core.validation.governed_paper_entry_safety import (
     GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET,
@@ -74,11 +80,16 @@ from crypto_core.validation.governed_paper_kelly_reading import (
     governed_paper_kelly_reading_digest,
     governed_paper_kelly_trades,
 )
-from crypto_core.validation.governed_paper_risk_measurement import GOVERNED_PAPER_RISK_PRODUCTION_APPROVAL_TABLE
+from crypto_core.validation.governed_paper_risk_measurement import (
+    GOVERNED_PAPER_RISK_PRODUCTION_APPROVAL_TABLE,
+    GovernedPaperRiskContext,
+    derive_governed_paper_risk_market,
+)
 from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_KELLY_BLOCKS,
     HISTORICAL_EXECUTION_KELLY_FAILURES,
+    HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_GOVERNED_PAPER_OUTCOME_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HistoricalExecutionEconomicsError,
@@ -126,6 +137,7 @@ PASS, FAIL, BLOCKED = (
     HistoricalExecutionKellyStatus.BLOCKED,
 )
 S = GovernedPaperEntrySafetyStatus
+V6 = HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_ADMISSION_SCHEDULE_SCHEMA_VERSION
 V7 = HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_SCHEDULE_SCHEMA_VERSION
 V8 = HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION
 V11_SEAL, V12_SEAL = "governed-paper-day-seal.v11", "governed-paper-day-seal.v12"
@@ -176,10 +188,10 @@ def _production_tables_with_exact_memos():
     with pytest.MonkeyPatch.context() as patch:
         gpe.apply_memos(patch)
         archives = gpe.SameObjects(regime.verify_historical_ohlc_bar_archive)
-        for module in (regime, gpe.execution, risk):
+        for module in (regime, gpe.execution, risk, kelly_module):
             patch.setattr(module, "verify_historical_ohlc_bar_archive", archives)
         exact = gpe._EXACT[(gpe.execution, "verify_historical_pit_dataset")]  # noqa: SLF001
-        for module in (regime, ctr, risk):
+        for module in (regime, ctr, risk, kelly_module):
             patch.setattr(module, "verify_historical_pit_dataset", exact)
         assert risk._APPROVAL_TABLE is PRODUCTION  # noqa: SLF001
         yield
@@ -626,110 +638,178 @@ def test_a_v7_derivation_carries_every_closed_trades_exact_kelly_inputs() -> Non
     assert any(item.funding_cashflow_digests for item in closed)  # a trade carries settlements: its knowledge waits
 
 
-def kelly_trades(derivation: object, world: object, **changes: object):  # noqa: ANN201
+# --- the public provenance boundary (S1_KELLY_PUBLIC_PROVENANCE_REPAIR_V1) ---------------------------------------------
+
+
+@functools.cache
+def hold_risk() -> GovernedPaperRiskContext:
+    """A SYNTHETIC risk context of the HOLD world: the synthetic risk policy and approval over its MARK archive."""
+
+    return GovernedPaperRiskContext(rmt.risk_policy(), rmt.risk_approval(), rmt.monotone_archive(rmt.RISING))
+
+
+def inputs(**changes: object) -> dict[str, object]:
+    """The authentic public inputs of the HOLD world's schedule v7 replay (its authority, its outcome and exact facts and
+    the inputs its result binds), with ``changes``."""
+
+    result, world, derivation = hold_derivation()
     values: dict[str, object] = {
-        "outcome": derivation.outcome,  # type: ignore[attr-defined]
-        "trade_exact_values": derivation.trade_exact_values,  # type: ignore[attr-defined]
+        "result": result,
+        "expected_result_digest": result.result_digest,
+        "outcome": derivation.outcome,
+        "trade_exact_values": derivation.trade_exact_values,
         "dataset": world.dataset,  # type: ignore[attr-defined]
         "economics_policy": lifet.economics_policy(),
         "position_management_policy": sst.pm_v2(),
         "position_management_archive": lifet.ohlc_archive(),
     }
     values.update(changes)
-    return governed_paper_kelly_trades(**values)  # type: ignore[arg-type]
+    return values
 
 
-def test_every_trade_is_re_proven_against_the_sealed_records_and_a_tamper_fails_closed() -> None:  # KD-0, KD-10a
+def kelly_trades(**changes: object):  # noqa: ANN201
+    return governed_paper_kelly_trades(**inputs(**changes))  # type: ignore[arg-type]
+
+
+def kelly_evidence(**changes: object):  # noqa: ANN201
+    span = {"risk": hold_risk(), "instrument": lifet.INS, "start_ns": lifet.ANCHOR, "horizon_ns": lifet.HOLD_END}
+    return derive_governed_paper_kelly_evidence(**inputs(**{**span, **changes}))  # type: ignore[arg-type]
+
+
+PRODUCERS = {"trades": kelly_trades, "evidence": kelly_evidence}
+
+
+def test_an_authentic_replay_is_read_unchanged_through_both_public_producers() -> None:  # T1, KD-0, KD-10a
     result, world, derivation = hold_derivation()
     assert result.position_management_policy_digest == sst.pm_v2().policy_digest
-    trades, facts = kelly_trades(derivation, world)
+    trades, facts = kelly_trades()
+    assert len(trades) == len(derivation.trade_exact_values) == 2
     for trade, fact, values in zip(trades, facts, derivation.trade_exact_values, strict=True):
-        assert trade.risk_reason == "" and fact.opening_risk == values.opening_risk
+        assert trade.risk_reason == "" and (fact.realized_net_pnl, fact.opening_risk) == (
+            values.realized_net_pnl,  # the replay's exact value, never a rendering
+            values.opening_risk,
+        )
         assert trade.opening_risk == historical_execution_render_amount(values.opening_risk)  # type: ignore[arg-type]
         assert trade.outcome_r == historical_execution_render_amount(values.realized_net_pnl / values.opening_risk)  # type: ignore[operator]
-        assert trade.trade_class == (
-            "WIN" if values.realized_net_pnl > 0 else "LOSS" if values.realized_net_pnl < 0 else "ZERO"
-        )
-        assert (trade.knowledge_ns, trade.direction) == (values.knowledge_ns, "SHORT")
-    first = derivation.trade_exact_values[0]
-    for tampered, reason in (
-        (replace(first, realized_net_pnl=first.realized_net_pnl + 1), "trade_net_pnl_not_of_the_record"),
-        (replace(first, opening_risk=first.opening_risk + F(1, 10**18)), "trade_opening_risk_not_of_the_records"),  # type: ignore[operator]
-        (replace(first, knowledge_ns=first.knowledge_ns + 1), "trade_knowledge_not_of_the_records"),
-        (replace(first, trade_id="f" * 64), "trade_exact_values_not_of_the_outcome"),
+        assert (trade.trade_class, trade.knowledge_ns, trade.direction) == ("LOSS", values.knowledge_ns, "SHORT")
+    evidence = kelly_evidence()
+    assert evidence == kelly_evidence() and evidence.trades == trades  # deterministic: the same re-proof
+    assert (evidence.outcome_digest, evidence.baseline_result_digest, evidence.dataset_digest) == (
+        derivation.outcome.outcome_digest,
+        result.result_digest,
+        world.dataset.dataset_digest,  # type: ignore[attr-defined]
+    )
+    # a schedule v6 replay measures no R-5 risk: every opening risk stays unproven, never estimated (KD-10a)
+    v6 = simulate_historical_execution_governed_paper_derivation(
+        result,
+        expected_result_digest=result.result_digest,
+        schedule=rmt.v7_schedule(world, (), schema_version=V6),
+    )
+    unmeasured, _ = kelly_trades(outcome=v6.outcome, trade_exact_values=v6.trade_exact_values)
+    assert unmeasured and {item.risk_reason for item in unmeasured} == {"opening_risk_not_measured_by_the_re_run"}
+
+
+def forged_history(derivation: object) -> tuple:
+    """The audit's forgery through public builders only: every closed trade made a win of 1 in its record text and in its
+    exact side channel together, and the outcome re-digested by its public digest function."""
+
+    win = F(1)
+    exact = tuple(replace(item, realized_net_pnl=win) for item in derivation.trade_exact_values)  # type: ignore[attr-defined]
+    trades = tuple(
+        replace(item, realized_net_pnl=historical_execution_render_amount(win))
+        if item.status is HistoricalExecutionTradeStatus.CLOSED
+        else item
+        for item in derivation.outcome.trades  # type: ignore[attr-defined]
+    )
+    outcome = replace(derivation.outcome, trades=trades)  # type: ignore[attr-defined]
+    return replace(outcome, outcome_digest=historical_execution_governed_paper_outcome_digest(outcome)), exact
+
+
+@pytest.mark.parametrize("producer", sorted(PRODUCERS))
+def test_a_re_digested_forged_history_is_rejected_before_any_evidence(producer: str) -> None:  # T2, T4
+    result, _, derivation = hold_derivation()
+    outcome, exact = forged_history(derivation)
+    assert historical_execution_governed_paper_outcome_digest(outcome) == outcome.outcome_digest  # self-consistent
+    assert verify_governed_paper_outcome(
+        outcome, result=result, expected_result_digest=result.result_digest
+    ).intact is (False)  # the public outcome verifier rejects it, and so must every Kelly producer
+    with pytest.raises(GovernedPaperKellyError, match="governed_outcome_not_the_authenticated_replay$"):
+        PRODUCERS[producer](outcome=outcome, trade_exact_values=exact)
+    # the forged exact facts alone, beside the authentic outcome, are rejected as well
+    with pytest.raises(GovernedPaperKellyError, match="trade_exact_values_not_of_the_authenticated_replay$"):
+        PRODUCERS[producer](trade_exact_values=exact)
+
+
+@pytest.mark.parametrize("producer", sorted(PRODUCERS))
+def test_an_exact_pnl_moved_below_its_rendering_is_rejected(producer: str) -> None:  # T3, T4
+    _, _, derivation = hold_derivation()
+    first, *rest = derivation.trade_exact_values
+    nudged = replace(first, realized_net_pnl=first.realized_net_pnl + F(1, 10**40))
+    closed = [item for item in derivation.outcome.trades if item.status is HistoricalExecutionTradeStatus.CLOSED]
+    assert historical_execution_render_amount(nudged.realized_net_pnl) == closed[0].realized_net_pnl  # same text
+    with pytest.raises(GovernedPaperKellyError, match="trade_exact_values_not_of_the_authenticated_replay$"):
+        PRODUCERS[producer](trade_exact_values=(nudged, *rest))
+    for changed in (
+        replace(first, opening_risk=first.opening_risk + F(1, 10**40)),  # type: ignore[operator]
+        replace(first, knowledge_ns=first.knowledge_ns + 1),
     ):
-        with pytest.raises(GovernedPaperKellyError, match=reason):
-            kelly_trades(derivation, world, trade_exact_values=(tampered, *derivation.trade_exact_values[1:]))
-    for reordered in (derivation.trade_exact_values[::-1], (*derivation.trade_exact_values, first)):
-        if reordered != derivation.trade_exact_values:
-            with pytest.raises(GovernedPaperKellyError, match="trade_exact_values_not_of_the_outcome"):
-                kelly_trades(derivation, world, trade_exact_values=reordered)
-    unmeasured = (replace(first, opening_risk=None), *derivation.trade_exact_values[1:])
-    assert kelly_trades(derivation, world, trade_exact_values=unmeasured)[0][0].risk_reason == (
-        "opening_risk_not_measured_by_the_re_run"
+        with pytest.raises(GovernedPaperKellyError, match="trade_exact_values_not_of_the_authenticated_replay$"):
+            PRODUCERS[producer](trade_exact_values=(changed, *rest))
+
+
+@functools.cache
+def long_derivation():  # noqa: ANN201
+    result, world = long_v2()
+    return simulate_historical_execution_governed_paper_derivation(
+        result, expected_result_digest=result.result_digest, schedule=hold_schedule(world, "LONG", V7)
     )
-    # a forged opening fill price: the bound outcome digest no longer recomputes, so it is never read
-    opening = derivation.outcome.trades[0].entry_fill_digests[0]
-    forged = tuple(
-        replace(item, fill_price=lifet.d(F(item.fill_price) + 1)) if item.fill_digest == opening else item
-        for item in derivation.outcome.fills
+
+
+@pytest.mark.parametrize("producer", sorted(PRODUCERS))
+def test_a_foreign_or_relabelled_side_channel_authority_or_input_is_rejected(producer: str) -> None:  # T5, T4
+    result, world, derivation = hold_derivation()
+    long_result, long_world = long_v2()
+    authentic = derivation.trade_exact_values
+    foreign = long_derivation().trade_exact_values
+    relabelled = tuple(
+        replace(item, trade_id=mine.trade_id) for item, mine in zip(foreign, authentic, strict=False)
+    )  # another run's exact facts under this run's labels: never joined by the label
+    assert (
+        relabelled
+        and [item.trade_id for item in relabelled] == [item.trade_id for item in authentic][: len(relabelled)]
     )
-    outcome = replace(derivation.outcome, fills=forged)
-    with pytest.raises(GovernedPaperKellyError, match="governed_outcome_digest_mismatch$"):
-        kelly_trades(derivation, world, outcome=outcome)
-    # even re-digested, it no longer matches its protection's basis: its risk is unproven, never accepted
-    resealed = replace(outcome, outcome_digest=historical_execution_governed_paper_outcome_digest(outcome))
-    (trade, *_), (fact, *_) = kelly_trades(derivation, world, outcome=resealed)
-    assert (trade.risk_reason, fact.opening_risk) == ("protection_not_of_the_opening_fill", None)
-    other, other_world = long_v2()
-    assert other.result_digest != result.result_digest
-    for changes, reason in (  # provenance: one dataset, one economics policy, a governed simulated outcome
-        ({"dataset": other_world.dataset}, "dataset_not_of_the_outcome"),  # type: ignore[attr-defined]
-        ({"outcome": replace(derivation.outcome, simulated=False)}, "governed_outcome_malformed"),
-        ({"outcome": replace(derivation.outcome, outcome_digest="0" * 64)}, "governed_outcome_digest_mismatch"),
+    side_channels = (relabelled, authentic[::-1], (*authentic, authentic[0]), authentic[:1], ())
+    for exact in side_channels:
+        with pytest.raises(GovernedPaperKellyError, match="trade_exact_values_not_of_the_authenticated_replay$"):
+            PRODUCERS[producer](trade_exact_values=exact)
+    dropped = replace(world.dataset, records=world.dataset.records[:-1])  # type: ignore[attr-defined]
+    forged_policy = replace(lifet.economics_policy(), policy_digest="0" * 64)
+    for changes, reason in (
+        ({"expected_result_digest": "0" * 64}, "replay_authority_rejected"),
+        ({"result": replace(result, trades=result.trades[:1])}, "replay_authority_rejected"),
+        ({"result": long_result}, "replay_authority_rejected"),
         (
-            {"economics_policy": replace(lifet.economics_policy(), policy_digest="0" * 64)},
-            "economics_policy_not_of_the_outcome",
+            {"result": long_result, "expected_result_digest": long_result.result_digest},
+            "governed_outcome_not_the_authenticated_replay",
         ),
-        ({"position_management_archive": object()}, "position_management_inputs_malformed"),
+        ({"outcome": replace(derivation.outcome, simulated=False)}, "governed_outcome_malformed"),
+        ({"trade_exact_values": 7}, "trade_exact_values_malformed"),
+        ({"trade_exact_values": (object(),)}, "trade_exact_values_malformed"),
+        ({"dataset": long_world.dataset}, "dataset_not_of_the_replay"),  # type: ignore[attr-defined]
+        ({"dataset": dropped}, "dataset_not_of_the_replay"),  # its stale self-digest field is not authentication
+        ({"economics_policy": forged_policy}, "economics_policy_not_of_the_replay"),
+        ({"position_management_policy": lifet.pm_policy()}, "position_management_policy_not_of_the_replay"),
+        ({"position_management_archive": lifet.ohlc_archive(first=-23)}, "ohlc_archive_not_of_the_replay"),
+        ({"position_management_archive": object()}, "ohlc_archive_not_of_the_replay"),
     ):
         with pytest.raises(GovernedPaperKellyError, match=f"{reason}$"):
-            kelly_trades(derivation, world, **changes)
-    # a policy v1 arms no R-1 stop: the risk of every opening fill is unproven, never estimated (KD-10a)
-    (trade, *_), (fact, *_) = kelly_trades(derivation, world, position_management_policy=lifet.pm_policy())
-    assert (trade.risk_reason, fact.opening_risk) == (
-        "opening_stop_unproven:armed_stop_needs_the_policy_v2_r1_stop",
-        None,
-    )
+            PRODUCERS[producer](**changes)
 
 
-def test_the_evidence_and_its_prefix_are_deterministic_and_run_independent() -> None:
+def test_the_evidence_derives_its_decisions_and_fractions_and_its_prefix_is_run_independent() -> None:
     result, world, derivation = hold_derivation()
-    entries = tuple(
-        (item.decision_sequence, item.decision_time_ns, item.resulting_direction)
-        for item in world.run.decisions  # type: ignore[attr-defined]
-        if item.resulting_direction in ("LONG", "SHORT")
-    )
-    fractions = {sequence: (F(1, 100), "") for sequence, _, _ in entries}
-
-    def derive():  # noqa: ANN202
-        return derive_governed_paper_kelly_evidence(
-            decisions=entries,
-            outcome=derivation.outcome,
-            trade_exact_values=derivation.trade_exact_values,
-            dataset=world.dataset,  # type: ignore[attr-defined]
-            economics_policy=lifet.economics_policy(),
-            position_management_policy=sst.pm_v2(),
-            position_management_archive=lifet.ohlc_archive(),
-            fractions=fractions,
-            risk_evidence_digest="e" * 64,
-            instrument=lifet.INS,
-            start_ns=lifet.ANCHOR,
-            horizon_ns=lifet.HOLD_END,
-        )
-
-    evidence = derive()
-    assert evidence == derive() and evidence.evidence_digest == governed_paper_kelly_evidence_digest(evidence)
+    evidence = kelly_evidence()
+    assert evidence.evidence_digest == governed_paper_kelly_evidence_digest(evidence)
     assert (evidence.paper_only, evidence.execution_authorized, evidence.edge_proven, evidence.stage4_complete) == (
         True,
         False,
@@ -740,6 +820,29 @@ def test_the_evidence_and_its_prefix_are_deterministic_and_run_independent() -> 
         evidence.decision_ids == GOVERNED_PAPER_KELLY_DECISION_IDS
         and evidence.pending_items == GOVERNED_PAPER_KELLY_PENDING_ITEMS
     )
+    market = derive_governed_paper_risk_market(
+        hold_risk(), dataset=world.dataset, instrument=lifet.INS, start_ns=lifet.ANCHOR, horizon_ns=lifet.HOLD_END
+    )  # type: ignore[arg-type]
+    assert (
+        evidence.risk_policy_digest,
+        evidence.risk_approval_digest,
+        evidence.risk_archive_digest,
+        evidence.risk_approval_table_id,
+    ) == (market.policy_digest, market.approval_digest, market.archive_digest, PRODUCTION.table_id)
+    entries = [
+        (item.decision_sequence, item.decision_time_ns, item.resulting_direction)
+        for item in world.run.decisions  # type: ignore[attr-defined]
+        if item.resulting_direction in ("LONG", "SHORT")
+    ]
+    assert [(item.decision_sequence, item.decision_time_ns, item.target_direction) for item in evidence.readings] == (
+        entries
+    )  # the authenticated run's own entry decisions, never supplied ones
+    for reading in evidence.readings:  # the PRODUCTION table admits no risk policy: no fraction, never a supplied one
+        assert (reading.rho, reading.rho_reason, reading.status) == (
+            None,
+            NOT_ADMITTED,
+            GovernedPaperKellyStatus.BLOCKED,
+        )
     later = [item for item in evidence.readings if item.known_trade_ids]
     assert later, "a decision after a trade's knowledge reads it"
     cut = later[0].decision_time_ns
@@ -752,21 +855,15 @@ def test_the_evidence_and_its_prefix_are_deterministic_and_run_independent() -> 
         evidence, before_ns=lifet.HOLD_END
     )  # run-derived identifiers are not X1 content
     assert governed_paper_kelly_evidence_digest(renamed) != evidence.evidence_digest
-    with pytest.raises(GovernedPaperKellyError, match="entry_fractions_malformed"):
-        derive_governed_paper_kelly_evidence(
-            decisions=entries,
-            outcome=derivation.outcome,
-            trade_exact_values=derivation.trade_exact_values,
-            dataset=world.dataset,  # type: ignore[attr-defined]
-            economics_policy=lifet.economics_policy(),
-            position_management_policy=sst.pm_v2(),
-            position_management_archive=lifet.ohlc_archive(),
-            fractions={},
-            risk_evidence_digest="e" * 64,
-            instrument=lifet.INS,
-            start_ns=lifet.ANCHOR,
-            horizon_ns=lifet.HOLD_END,
-        )
+    for changes, reason in (
+        ({"risk": None}, "risk_market_not_derivable"),
+        ({"instrument": "OTHER-PERP"}, "instrument_not_of_the_replay"),
+        ({"start_ns": lifet.HOLD_END - 1}, "decision_outside_the_evaluation_horizon"),
+        ({"horizon_ns": lifet.ANCHOR}, "evaluation_horizon_invalid"),
+    ):
+        with pytest.raises(GovernedPaperKellyError, match=f"{reason}$"):
+            kelly_evidence(**changes)
+    assert result.result_digest == evidence.baseline_result_digest
 
 
 # --- the gate: rule set v11 and SCALE-1 ---------------------------------------------------------------------------------
@@ -956,7 +1053,13 @@ def test_the_public_gate_replays_the_sealed_kelly_evidence_at_the_exact_r4_fract
     )
     found = evidence.kelly_evidence
     assert found is not None and found.evidence_digest == item.seal.kelly_evidence_digest
-    assert found.risk_evidence_digest == evidence.risk_evidence.evidence_digest  # type: ignore[union-attr]
+    risk_evidence = evidence.risk_evidence
+    assert (found.risk_policy_digest, found.risk_approval_digest, found.risk_archive_digest) == (
+        risk_evidence.policy_digest,  # type: ignore[union-attr]
+        risk_evidence.approval_digest,  # type: ignore[union-attr]
+        risk_evidence.archive_digest,  # type: ignore[union-attr]
+    )  # the R-4 fractions read the same re-proven risk context as the risk evidence
+    assert (found.risk_approval_table_id, found.dataset_digest) == ("test_only", item.seal.dataset_digest)
     for before, sealed in (
         (gpe.instant(3), item.seal.kelly_prefix_digest_open),
         (gpe.instant(4), item.seal.kelly_prefix_digest_close),
@@ -986,6 +1089,24 @@ def test_the_public_gate_replays_the_sealed_kelly_evidence_at_the_exact_r4_fract
     ):
         with pytest.raises(GovernedPaperEntrySafetyError, match=f"{reason}$"):
             kelly_gate(item, 3, context, schedule, kelly)
+
+
+def test_a_seal_never_promotes_a_forged_kelly_evidence() -> None:  # T7
+    item = kelly_days(4)[3]
+    found = kelly_gate(item, 3, rlt.risk_context(3)).kelly_evidence
+    assert found is not None and found.readings
+    promoted = replace(
+        found,
+        readings=tuple(
+            replace(reading, status=GovernedPaperKellyStatus.PASS, reason="KELLY_FIT_PROVEN")
+            for reading in found.readings
+        ),
+    )
+    forged = replace(promoted, evidence_digest=governed_paper_kelly_evidence_digest(promoted))
+    assert forged.evidence_digest == governed_paper_kelly_evidence_digest(forged)  # self-consistent, yet never read
+    resealed = replace(item, seal=gpe.reseal_seal(item.seal, kelly_evidence_digest=forged.evidence_digest))
+    assert rlt.verified(resealed).intact is False  # the verifier re-derives the evidence from the replay
+    assert rlt.verified(item).intact is True
 
 
 def test_a_kelly_lineage_is_one_from_day_0_or_never_and_only_on_a_risk_lineage() -> None:

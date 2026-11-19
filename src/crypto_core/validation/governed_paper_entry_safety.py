@@ -397,7 +397,6 @@ from crypto_core.validation.governed_paper_risk_measurement import (
     GovernedPaperRiskStatus,
     derive_governed_paper_risk_evidence,
     derive_governed_paper_risk_market,
-    governed_paper_risk_entry_fraction,
     governed_paper_risk_fill_bounds,
     governed_paper_risk_reading_digest,
 )
@@ -4078,37 +4077,26 @@ def build_governed_paper_entry_safety_evidence(
             raise _fail("risk_evidence_not_derivable") from exc
         risk_readings = {item.decision_sequence: item for item in risk_evidence.readings}
         if kelly:
-            try:  # derived, never accepted: the trades are re-proven against the sealed records by the derivation
-                fractions = {
-                    sequence: governed_paper_risk_entry_fraction(
-                        market,
-                        instant,
-                        snapshot=snapshots.get(sequence),  # type: ignore[union-attr]
-                        exact=governed.exact.get(sequence),  # type: ignore[union-attr]
-                        outcome=governed.outcome,  # type: ignore[union-attr]
-                        economics_policy=policy,
-                        position_management_policy=protection.position_management_policy,  # type: ignore[union-attr]
-                        position_management_archive=protection.ohlc_archive,  # type: ignore[union-attr]
-                    )
-                    for sequence, instant, _ in entries
-                }
+            try:  # derived, never accepted: the producer re-proves the replay authority and reads only its own facts
                 kelly_evidence = derive_governed_paper_kelly_evidence(
-                    decisions=entries,
+                    result=portfolio.economics,  # type: ignore[union-attr]
+                    expected_result_digest=portfolio.economics.result_digest,  # type: ignore[union-attr]
                     outcome=governed.outcome,  # type: ignore[union-attr,arg-type]
                     trade_exact_values=governed.trade_exact,  # type: ignore[union-attr]
                     dataset=dataset,
                     economics_policy=policy,
                     position_management_policy=protection.position_management_policy,  # type: ignore[union-attr]
                     position_management_archive=protection.ohlc_archive,  # type: ignore[union-attr]
-                    fractions=fractions,
-                    risk_evidence_digest=risk_evidence.evidence_digest,
+                    risk=risk,
                     instrument=genesis.instrument,
                     start_ns=genesis.genesis_start_ns,
                     horizon_ns=run.evaluation_end_ns,
                 )
-            except (GovernedPaperRiskError, GovernedPaperKellyError) as exc:
+            except GovernedPaperKellyError as exc:
                 raise _fail("kelly_evidence_not_derivable") from exc
             kelly_readings = {item.decision_sequence: item for item in kelly_evidence.readings}
+            if set(kelly_readings) != set(risk_readings):  # pragma: no cover - both read every entry of the same run
+                raise _fail("kelly_evidence_not_derivable")
     observations = historical_execution_visible_observations(dataset, policy=policy, instrument=genesis.instrument)
     # the archive is verified just above and the kline feed candidate in ``_canonical_protection``
     market = (
