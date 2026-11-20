@@ -37,36 +37,17 @@ loading without proof.
 
 ## Before any mutation: the activation record (section 24.3 `ACTIVATION_GATES`)
 
-The controller's serious prompt (`SERIOUS_PROMPT_COMPILER`, section 24.6) carries inside `MODEL_RUNTIME_PROOF`:
-`EXECUTOR_ROUTE=CODEX_EXECUTOR_QUOTA_FALLBACK_V1`; the fallback reason (`CLAUDE_OPUS_5_5_QUOTA_BLOCKED` or
-`CLAUDE_OPUS_5_5_UNAVAILABLE`) with its fresh evidence, source and observation time; the selected adopted id; the
-requested literal effort label; the whole-stage judgement; and the independent-audit record. A missing, stale,
-`UNKNOWN` or contradicted item → `STOP_WITH_PROOF`, no mutation. Then prove, in order:
+Use the controller's `MODEL_RUNTIME_PROOF` record for this stage and state pin (§24.3 A–G). Check its source
+and time, Claude's current unavailability, the explicit route and the controller's prospective whole-stage
+judgement. An executor handoff cannot supply a missing controller decision.
 
-1. `HOST_CAPABILITY_EVIDENCE` — the executing host offers the exact selected id at the requested label with code-edit
-   and shell tools, and can run the stage's whole validation ladder in the named isolated writer worktree. A catalog,
-   selector or configuration proves capability only, never identity.
-2. `EXECUTION_IDENTITY_EVIDENCE` — the section 24.12 block (`MODEL_REQUESTED`, `MODEL_ID_REQUIRED` = the selected id,
-   `MODEL_ACTUAL`, `MODEL_EFFORT_REQUESTED`, `MODEL_EFFORT_ACTUAL`, `MODEL_FALLBACK`, `THINKING_ACTUAL`,
-   `MODEL_IDENTITY_EVIDENCE`, `MODEL_EFFORT_EVIDENCE`) from the running session's own runtime metadata, `/status` or
-   an equivalent diagnostic. `MODEL_ACTUAL` must positively equal the selected id and thinking must be positively
-   `ENABLED`. `UNKNOWN`, a mismatch, disabled thinking, a host's automatic model reroute, or selector, configuration,
-   default, cache or request text offered as the only proof stops before any mutation. Only effort may stay
-   `UNKNOWN`.
-3. Local state — the named branch, base and head, a clean isolated writer worktree, no open PR for an implementation
-   or exactly the candidate PR for a repair, and no other session mutating the candidate.
-
-A stop at any of these steps did no substantive work and consumes no specialist slot (section 24.8).
-
-## Effort, speed, subagents (section 24.12 `CODEX_EXECUTOR_EFFORT_POLICY`)
-
-- Effort is recorded literally: the host level `xhigh` for implementation and repair; `max` only on an explicitly
-  named capability-critical or hardest-correctness-critical trigger; never `ultra`, requested or observed, whose
-  automatic task delegation would put further agents inside one writer's stage. A selector that does not expose the
-  requested level, or an observed `ultra`, stops the stage before mutation; never map one level onto another.
-- Speed `STANDARD`; Fast only on an explicit controller or human time-critical authorization recorded for the stage.
-- Subagents 0: no delegated, parallel or background agent edits the repository.
-- The host's automatic approval reviewer, sandbox and permission settings are UX, never authorization.
+Before creating a branch or editing, report the host surface and selection under §24.12. On CLI, keep the
+explicit invocation or loaded setting and its acceptance diagnostic. On desktop, keep the actual selected
+label and any required model/client-specific source. Record the session's raw model, effort and thinking
+separately. Prove the clean isolated checkout, correct base/head/tree, sole writer, open-PR state and ability
+to finish the whole validation ladder. Use the controller's current remote snapshot. Any missing required
+proof or contradiction stops before mutation and consumes no substantive slot. Speed and subagent limits are
+in §24.12. An executor `Ultra` selection or execution always stops.
 
 ## Execution contract (sections 24.8 and 5)
 
@@ -77,8 +58,7 @@ A stop at any of these steps did no substantive work and consumes no specialist 
   the full suite only through `scripts/crypto_core/run_full_tests_logged.ps1` (`PYTEST_EXIT=0` is authoritative);
   `git diff --check`; exact changed-file proof.
 - Publish with exact-path `git add`, one commit (or the one same-branch repair commit), a normal push of the topic
-  branch, one PR for an implementation, and natural CI to a terminal state; pending is `NOT_READY`. Then stop at the
-  audit gate.
+  branch, one PR for an implementation, and hand off the exact head, tree and clean local status. The controller verifies CI, CodeQL and reviews before the audit.
 - Stage boundary: never hand this stage to another executor, and never continue a stage another executor started
   unless the controller's prompt names that continuation and its exact starting state.
 - `INTERRUPTED_STAGE` (section 24.3): if this session loses quota or availability after substantive work, stop
@@ -95,11 +75,9 @@ mutation; any edit outside the allowed files.
 
 ## Report (section 24.6 `AGENT_OS_HANDOFF_V1`)
 
-Result; the runtime-proof block; `EXECUTOR_ROUTE`, the fallback reason with its Claude-unavailability evidence, the
-`HOST_CAPABILITY_EVIDENCE` and every executing model id of the candidate; setup fields; base, branch, head, tree, PR
-and open PRs; files changed; validation and CI with exact results; review threads; `SELF_AUDIT_ONLY_NOT_INDEPENDENT`;
-the specialist prompt count of the PR lifecycle; and exactly one next safe action. Missing facts are `UNKNOWN`,
-never invented; failure tails only.
+Use §24.6 `AGENT_OS_HANDOFF_V1`. Include the A–G authorization source and the actual pre-mutation evidence,
+all implementing model ids, scoped validation, exact head/tree, clean status and specialist count. Attribute
+remote status to the controller snapshot with its head. Unavailable results are `UNKNOWN`.
 
 ## Transition (section 24.14 `CODEX_EXECUTOR_FALLBACK_TRANSITION`)
 

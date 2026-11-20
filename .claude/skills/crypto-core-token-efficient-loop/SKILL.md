@@ -22,19 +22,15 @@ saving is subordinate to correctness; no gate may be skipped to save tokens. Ope
    `MODEL_IDENTITY_EVIDENCE`, `MODEL_EFFORT_EVIDENCE`. Fail closed: `MODEL_ACTUAL` must be positively
    `claude-opus-5-5` and thinking positively `ENABLED` on execution evidence; `UNKNOWN`, a mismatch, disabled
    thinking, a known prohibited fallback, or selector/config/default/cache/request text alone →
-   `STOP_WITH_PROOF`. Only effort may stay `UNKNOWN`. Host labels stay literal: `xhigh` for ordinary complex
-   implementation and repair, `max` only on a named capability-critical or hardest-correctness-critical
-   trigger.
-3. Prove LOCAL state once with `git`/`gh`: HEAD, clean tree, branch, open PRs — local proof stays Claude's
-   own responsibility even with a controller packet.
+   `STOP_WITH_PROOF`. Only effort may stay `UNKNOWN`. Select and report the supported effort under §24.12.
+3. Prove the local base, HEAD, tree, branch and clean status. Bind them to the controller's current PR snapshot.
 4. Read the named set; use symbol search before full files; build one source surface map.
 5. Close the whole semantic boundary as the largest safe semantic closure (§24.8) inside the allowed files,
    preserving paper-only, fail-closed and digest-boundary rules. A repair is the single consolidated repair:
    the complete audited P1/P2 set, by root cause, in one change.
 6. Validate one command at a time: scoped Ruff/format, targeted tests, logged full suite when code changed,
    `git diff --check`, exact changed-file proof.
-7. Publish with scoped `git add`, one commit, one PR, and natural CI to a terminal state. Pending is
-   `NOT_READY`.
+7. Publish with scoped `git add`, one commit and one PR. Hand the exact head to the controller for CI and review verification.
 8. End with an `AGENT_OS_HANDOFF_V1` handoff: runtime proof, setup fields (`SETUP_REQUESTED`/`SETUP_ACTUAL`/
    `SETUP_FILES_READ`/`SETUP_GAPS`), exact scope, validation, PR/CI/thread evidence, the meaningful-prompt
    count, `SELF_AUDIT_ONLY_NOT_INDEPENDENT`, and exactly one next safe action.
