@@ -45,18 +45,15 @@ and never assumed from that fact. `MODEL_ACTUAL` or `THINKING_ACTUAL` `UNKNOWN`,
 thinking, a known prohibited fallback, or only the bare alias `opus`, a selector, settings file, default, cache or
 request text as proof is `STOP_WITH_PROOF` before mutation. A superseded Claude lane is never an automatic
 fallback (`MODEL_FALLBACK=PROHIBITED`). Only effort may stay `UNKNOWN` when the host exposes
-no effort telemetry, and it is never restated from the request. Host effort labels are recorded literally:
-`xhigh` for ordinary complex implementation and repair — the default heavy lane — and `max` only on an
-explicitly named capability-critical or hardest-correctness-critical trigger, never as a general default. The
-retired Opus 5 literal `xhighultracode` is never carried onto Opus 5.5. A human may waive an effort mismatch
-for one task; record the waiver and the true actual effort.
+no effort telemetry, and it is never restated from the request. Select effort from the actual host under section 24.12 and record the
+selected literal separately from session telemetry. The controller records the technical trigger for `max`.
 
 ## Setup load and fresh chat
 
 `SETUP_LOAD_CONTRACT_V1` / `FRESH_CHAT_BOOTSTRAP` (section 24.7): read `AGENTS.md`, section 24, this file,
 `CLAUDE.local.md` when present, `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`,
 `docs/crypto_core/continuity/CONTINUITY_INDEX.md`, the accepted bounded handoff if one exists, and the
-controller-named task files; then prove local and live GitHub state. Report `SETUP_REQUESTED` /
+controller-named task files; then prove local state against the controller’s live GitHub snapshot. Report `SETUP_REQUESTED` /
 `SETUP_ACTUAL` / `SETUP_FILES_READ` / `SETUP_GAPS`; never claim setup loading without proof.
 
 Controller intake: the ChatGPT controller supplies the serious prompt (`SERIOUS_PROMPT_COMPILER`, section
@@ -83,7 +80,7 @@ safe work: git state, clean tree, branch, and test results.
 - Deliver the prompt's whole semantic boundary as the largest safe semantic closure (section 24.8) inside the
   allowed files; when a materially better design needs scope expansion, report it and stop before mutating.
 - One implementation prompt does the whole arc (precheck → reads → patch → targeted + logged-full validation
-  → scoped commit → push → one PR → natural CI to terminal → handoff), then stops at the audit gate. Never
+  → scoped commit → push → one PR → exact-head handoff for controller CI and review checks), then stops at the audit gate. Never
   merge; never start the next feature; never combine unrelated slices; never mix setup and product.
 - A repair is the single consolidated repair of the candidate: the COMPLETE audit blocker set, by root cause,
   in one change. No finding-by-finding repair, no second repair, and no mutation of a candidate under

@@ -3,7 +3,7 @@
 > Canonical, executable operating protocol for `crypto_core` inside `demircaliskan2009-pixel/BIST_ELITE_CORE`.
 > The single canonical active authority is **section 24** (`CRYPTO_CORE_AGENT_OS_V1`, active content
 > `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`,
-> `GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1` and `CODEX_EXECUTOR_QUOTA_FALLBACK_V1`); sections 1-19 bind where
+> `GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1`, `CODEX_EXECUTOR_QUOTA_FALLBACK_V1` and the host/workflow closure in §24.3); sections 1-19 bind where
 > they agree with it and section 24 wins on any conflict; sections 20-23 are HISTORICAL. **Doctrine
 > precedence:** `AGENTS.md` (entrypoint and durable rails) → section 24 → host adapters (`CLAUDE.md` /
 > `CLAUDE.local.md`, `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`,
@@ -55,7 +55,7 @@ explicit guarded closeout; human threads are never self-resolved.
 ## 3. Hard Rules
 
 - crypto_core only; **no BIST implementation leakage** (BIST is historical context).
-- **One open PR at a time.** Verify live (`gh pr list --state open`) at the start of every task.
+- **One open PR at a time.** The controller verifies live (`gh pr list --state open`) at the start of every task.
 - **No direct push to `main`.** No force-push. No branch deletion unless the authorized command says so.
 - **Standard merge only** (no squash/rebase). **No merge without explicit human authorization naming the PR and the exact command.**
 - **CI `pending` / `queued` / `in_progress` / `no checks reported` is NOT_READY** — keep polling to terminal, or report a bounded-timeout snapshot. Never treat a startup window as green.
@@ -93,8 +93,8 @@ The lifecycle, prompt budget and fixed-point stop are section 24.8. The sequence
 
 1. The ChatGPT controller compiles one serious prompt (section 24.6) for one semantic boundary (pinned
    expected `main` HEAD, "open PRs: none").
-2. The routed implementer runs the **Implementation Loop** (§5) → opens one PR → natural CI to terminal →
-   handoff. No merge.
+2. The routed implementer runs the **Implementation Loop** (§5) → opens one PR → hands off its exact head.
+   The controller verifies natural CI, CodeQL and reviews.
 3. One exhaustive fresh-context independent audit — GPT-6.1 Sol (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`), which
    for protected or control-plane work is also the protected audit; for non-protected work only, the recorded
    section 24.4 fallback — returns the complete material P1/P2 set (§8).
@@ -115,7 +115,7 @@ git switch main
 git pull --ff-only origin main
 git rev-parse HEAD                         # MUST equal the prompt's expected SHA
 git status --short --branch                # MUST be clean + in sync
-gh pr list --repo demircaliskan2009-pixel/BIST_ELITE_CORE --state open --json number,title,headRefName,baseRefName,url   # MUST be []
+# Controller STATE_PIN must show zero open PRs on the current base. Refresh it if stale or contradicted.
 
 # create + switch to a topic branch BEFORE any patch/commit/push (never edit/commit on main)
 git switch -c <topic-branch>               # feature/<crypto-core-scope>-prN (feature) or chore/<crypto-core-scope>-prN (setup/docs)
@@ -135,7 +135,7 @@ safe semantic closure inside the allowed files (section 24.8) → self-audit (sc
 provenance / strict-Decimal / fail-closed / no hidden IO / paper-safety triple) → targeted tests →
 relevant suite → **full helper after meaningful changes** → `git diff --check` → scoped `git add <paths>` →
 commit (on the topic branch) → push (the topic branch) → `gh pr create --base main --head <topic-branch>` →
-**poll CI to terminal** (§ CI rule in §3) → inspect threads that exist (§8) → report (§10). **No merge.**
+report the local evidence (§10). The controller polls CI to terminal (§3) and collects threads (§8). **No merge.**
 
 ## 6. Consolidated Repair Loop
 
@@ -145,7 +145,7 @@ commit (on the topic branch) → push (the topic branch) → `gh pr create --bas
 - Precheck first (branch + `HEAD == expected SHA` + clean tree + exactly one open PR + changed files ⊆ scope).
 - Pin PR number and expected head; repair **only the named blockers**, **same branch only**, bounded to named files.
 - **Test-only by default**; touch production only if a **new failing test proves a real defect**, and only inside the named module. If test-only, prove `git diff <prev> HEAD -- src/` is **empty**.
-- Re-validate fully (targeted → relevant suite → full helper `PYTEST_EXIT=0` → `git diff --check`) → scoped add → commit → push same branch → **re-poll CI to terminal** → report. **No merge.**
+- Re-validate fully (targeted → relevant suite → full helper `PYTEST_EXIT=0` → `git diff --check`) → scoped add → commit → push same branch → hand off the repaired head for controller CI verification. **No merge.**
 
 ## 7. Closeout / Merge Loop
 
@@ -167,7 +167,7 @@ Run **only** from an explicit closeout prompt that names the PR and the exact au
 - The independent audit (GPT-6.1 Sol by default, section 24.4) is exhaustive and materiality-aware
   (`COMPLETE_BLOCKER_COLLECTION`, `AUDIT_MATERIALITY_BOUNDARY_V1`): it returns the complete current material P1/P2
   set of the declared contract in one pass, never one finding at a time.
-- Automated Codex PR review comments run **asynchronously** after a push and are review threads for controller adjudication, not the routed independent audit; findings may not exist when the executor's turn ends. The routed executor (Claude Opus 5.5, or a section 24.3 Codex executor) inspects threads that exist at terminal CI and reports `0 threads (review may post later)` if none.
+- Automated Codex PR review comments run **asynchronously** after a push and are review threads for controller adjudication, not the routed independent audit; findings may not exist when the executor's turn ends. The controller collects reviews and threads at terminal CI, records their exact-head status, and refreshes them at merge preflight.
 - Inspect via GraphQL: `reviewThreads(first:n){ nodes{ id isResolved isOutdated path line comments } }` + `reviews`.
 - The auditor emits the report in §10. ChatGPT relays the complete valid material finding set (with thread IDs) in the single consolidated repair prompt (section 24.8); the executor does not wait in-turn for review.
 
@@ -683,7 +683,8 @@ of 24.6, the Sol effort, speed, subagent and telemetry policies of 24.12 and the
 `CODEX_EXECUTOR_QUOTA_FALLBACK_V1` (the conditional Codex executor lane, adopted ids, activation gates, stage and
 interrupted-stage rules of 24.3, the independence sentence of 24.4, the executor handoff fields of 24.6, the executor
 adapter of 24.7, the budget wording of 24.8, `CODEX_EXECUTOR_EFFORT_POLICY` of 24.12 and the transition rule of
-24.14). It is the single canonical active authority for how crypto_core
+24.14), and by `CRYPTO_CORE_AGENT_OS_HOST_AND_WORKFLOW_CLOSURE_V1` (stage authorization and host evidence in
+24.3 and 24.12, controller and writer responsibilities in 24.5, prospective adoption in 24.14). It is the single canonical active authority for how crypto_core
 development work is routed, sized, audited, repaired, stopped and resumed. Sections 1-19 bind where they agree
 with it; on any conflict this section wins, and between safety rules the stricter rule wins. Sections 20-23 are
 HISTORICAL/SUPERSEDED. The kernel governs only the operational workflow needed to develop crypto_core safely
@@ -742,14 +743,10 @@ waits on the frozen exact head (`CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE`); nothin
 T4 — not GPT-6 Astra, Codex GPT-5.6 Sol, Claude Opus 5.5, the ChatGPT controller, ChatGPT Work or any other lane.
 Non-protected work continues under 24.4.
 
-`HOST_UI_LABELS_ARE_LITERAL` — a host's effort or mode label is recorded verbatim and never mapped across model
-families, to an API effort enum, or to `max`. Current literal labels: Claude Opus 5.5 `xhigh` and `max`; GPT-6.1
-Sol on the ChatGPT Work/Codex host `Ultra` for protected audits, any other label recorded exactly as the selector
-shows it at execution; a Codex executor only the host effort levels `xhigh` and `max`, each recorded exactly as
-the selector shows it, and never `ultra` (24.12). A model's API effort names describe the API only and are never
-mapped onto a host label in either direction (`Ultra` is never translated to `max`, nor `max` to `Ultra`). The
-retired Opus 5 literal `xhighultracode` belongs to that superseded lane and is never carried onto Claude Opus 5.5;
-the labels of the superseded GPT-6 Astra and Codex GPT-5.6 Sol lanes are HISTORICAL.
+`HOST_UI_LABELS_ARE_LITERAL` — record the selected host control and the executing session's values verbatim.
+Keep the provider, model ID and client surface attached to each observation. Never translate an effort across
+providers, model families or client surfaces, or infer a selector label from an API enum. Section 24.12 governs
+each lane. GPT-6.1 Sol protected audits require the literal selector `Ultra`.
 
 Outside the council — none is routable, a fallback or a dependency: **Copilot `INACTIVE_UNAVAILABLE`** (24.13);
 **GPT-6 Astra `SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT`**; **Codex GPT-5.6 Sol
@@ -777,35 +774,41 @@ everywhere (24.12).
   can close a complete bounded stage and its validation. No Sol-family model id (`gpt-6.1-sol` or any other GPT Sol
   id) is ever a Codex executor. GPT-6.2 Astra is a different model id from GPT-6 Astra (`gpt-6-astra`), which stays
   `SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT` and outside the council.
-- `EXECUTOR_EVIDENCE_KINDS` — three kinds, none a substitute for another, and `UNKNOWN` in any fails the gate it
-  serves, except effort telemetry, which alone may stay `UNKNOWN` (24.12). `HOST_CAPABILITY_EVIDENCE`: what a host
-  offers — its model catalog or selector, the exposed literal effort labels, code-edit and shell tools, context
-  limits, configuration; it proves availability and capability, never which model executes.
-  `EXECUTION_IDENTITY_EVIDENCE`: what the running session proves about itself under 24.12; the only proof of
-  `MODEL_ACTUAL` and `THINKING_ACTUAL`. `CONTROLLER_AUTHORIZATION`: the controller's recorded selection of the route
-  for one stage; it authorizes that routing only, never proves capability or identity, and never grants merge,
-  readiness, live or capital authority.
-- `ACTIVATION_GATES` — a stage routes to a Codex executor only when every gate holds, each recorded in that stage's
-  serious prompt (`MODEL_RUNTIME_PROOF`, 24.6) and handoff, never as durable state:
-  - A `CLAUDE_UNAVAILABILITY_EVIDENCE` — fresh evidence, observed for this stage, that Claude Opus 5.5 cannot run it:
-    `CLAUDE_OPUS_5_5_QUOTA_BLOCKED` (the Claude host's own quota or usage-limit message) or
-    `CLAUDE_OPUS_5_5_UNAVAILABLE` (the Claude host cannot select or start `claude-opus-5-5`, or runs another model
-    in its place), with its source and observation time. A limit whose stated reset has passed, another stage's
-    evidence, memory, a correctable selection or configuration error, or a preference for speed, cost or a model is
-    no evidence; without it the stage stays with Claude or waits.
-  - B `CONTROLLER_SELECTION` — the controller explicitly selects the route in the stage's serious prompt
-    (`EXECUTOR_ROUTE=CODEX_EXECUTOR_QUOTA_FALLBACK_V1`, the fallback reason, the selected id). No executor, host or
-    tool selects or switches a route itself.
-  - C `ADOPTED_ID` — the selected id is in `CODEX_EXECUTOR_ADOPTED_IDS`.
-  - D `HOST_CAPABILITY` — fresh `HOST_CAPABILITY_EVIDENCE` from the executing host that it offers that exact id at the
-    requested literal effort label (24.12) with code-edit and shell tools, and that it can run the stage's whole
-    validation ladder in an isolated writer worktree of this repository.
-  - E `RUNTIME_IDENTITY` — the executing session proves `MODEL_ACTUAL` equal to the selected id and thinking
-    `ENABLED` under `FAIL_CLOSED_RUNTIME_PROOF` (24.12) before any mutation.
-  - F `WHOLE_STAGE` — the controller records that the selected executor can deliver the complete stage — the whole
-    semantic contract or the whole audited blocker inventory, with its validation — never a fragment.
-  - G `INDEPENDENT_AUDIT_PRESERVED` — GPT-6.1 Sol stays independence-eligible for the resulting candidate (24.4) and
-    remains a separate later gate. With no independent eligible auditor, no fallback runs.
+- `EXECUTOR_EVIDENCE_KINDS` — the host supplies selection and capability (`HOST_CAPABILITY_EVIDENCE`). The
+  executing session supplies raw model, thinking and effort (`EXECUTION_IDENTITY_EVIDENCE`). The controller
+  authorizes one stage prospectively (`CONTROLLER_AUTHORIZATION`). The assigned writer confirms runtime,
+  checkout and ability to finish before its first mutation. Each record retains its own source.
+- `ACTIVATION_GATES` — **controller pre-dispatch**. In `MODEL_RUNTIME_PROOF`, record the decision and basis for
+  each of A–G against the named stage and `STATE_PIN`. Identify the controller prompt or accepted supplement,
+  its time, and the source and time of volatile evidence. The controller may authorize the stage conditional on
+  the writer's D/E and local confirmations. Until then only read-only preflight can run. A preflight-only
+  request grants no write authority. A missing controller decision requires a prospective controller supplement.
+  - **A · Claude availability.** Supply `CLAUDE_UNAVAILABILITY_EVIDENCE` with
+    `CLAUDE_OPUS_5_5_QUOTA_BLOCKED` (Claude's own limit message and reset if shown)
+    or `CLAUDE_OPUS_5_5_UNAVAILABLE` (the host cannot select or start the required id, or executes another id).
+    An attributed observation accepted for the same unstarted stage may be reused while current and uncontradicted.
+    Reject a passed reset, another stage's observation, a correctable setup error or a preference for Astra.
+  - **B · Selection.** Explicitly select `EXECUTOR_ROUTE=CODEX_EXECUTOR_QUOTA_FALLBACK_V1`, the executor id,
+    fallback reason and the whole implementation or consolidated repair. Only the controller selects a route.
+  - **C · Adoption.** Match the exact id to `CODEX_EXECUTOR_ADOPTED_IDS`.
+  - **D · Host capability.** Identify the host/client, model, supported effort selection under 24.12, shell/edit
+    tools, isolated writer checkout and the tools and permissions needed for the whole validation ladder.
+  - **E · Runtime.** Specify the required executing id, thinking enabled and the diagnostic needed to confirm both.
+    Cite current-session evidence when available. When the session does not yet exist, record the condition
+    explicitly. The writer confirms D and E in the actual session before any substantive work.
+  - **F · Whole stage.** The controller explicitly judges whether this executor can deliver the complete semantic
+    boundary or blocker inventory and its validation. Give the basis (scope, dependencies, capacity constraints)
+    before dispatch. Known shortfalls block. Unavailable usage figures stay `UNKNOWN`. An executor estimate, a
+    successful handoff or a decision made after substantive work cannot fill a missing controller judgement.
+  - **G · Independence.** Name the separate later GPT-6.1 Sol audit and check its id against every implementing or
+    repairing id in the candidate lifecycle. Protected T4 remains exclusive to Sol at literal `Ultra`.
+- **Executor pre-mutation.** Bind the controller's complete record to this stage, base and host. Confirm D and E
+  from the actual selection and executing session. Check the isolated checkout, clean status, base/head/tree,
+  sole writer, current open-PR proof (zero for implementation, exactly the candidate for repair), and feasibility
+  of the whole scope and its local validation. Reject a wrong base, dirty checkout, concurrent writer, expired
+  evidence, known quota/context shortfall or unmet condition. Report both records in the handoff. All A–G must
+  pass before branch creation, editing or any other candidate mutation. A preflight stop consumes no specialist
+  slot. Only the controller can supply a missing pre-dispatch decision, prospectively while the stage is unstarted.
 - `EXECUTOR_STAGE_RULES` —
   - Stage boundary: a stage's executor is fixed before its first substantive work, and the executing provider changes
     only between stages. A Claude execution stopped by quota before any substantive work was no meaningful prompt
@@ -965,6 +968,13 @@ material P1/P2; exact-head CI terminal green, including the required tests and C
 proof; and the human's explicit authorization naming the PR, the exact head and the merge command. Then standard merge, post-merge verification (section 12) and the next action. These closeout
 steps are controller governance and consume no specialist prompt (24.8).
 
+The writer proves its local checkout, changed scope, validation, commit/tree and clean status at handoff.
+The controller supplies the live GitHub state, polls CI and CodeQL to terminal, collects reviews and threads,
+and refreshes the exact-head merge preflight (section 7). After the authorized mechanical standard merge,
+it verifies the remote PR, merge commit and resulting main (section 12). An executor may diagnose a named CI
+failure from that evidence. Specialists reuse current pinned snapshots and surface contradictions. The auditor
+still independently re-proves its exact head, scope and required checks once (24.4).
+
 ### 24.6 SERIOUS_PROMPT_COMPILER and AGENT_OS_HANDOFF_V1
 
 `SERIOUS_PROMPT_COMPILER` — the controller compiles every serious prompt in this shape and order:
@@ -999,7 +1009,7 @@ results; review threads; P1/P2/P3 findings or the self-audit label; for an audit
 protected-trigger classification, and whether it ran as PRIMARY (GPT-6.1 Sol) or as the recorded
 `NON_PROTECTED_AUDIT_FALLBACK` with its reason (24.4); for an implementation or repair routed under
 `CODEX_EXECUTOR_QUOTA_FALLBACK_V1` (24.3), the executor route, the fallback reason with its Claude-unavailability
-evidence, the host-capability evidence and every executing model id of the candidate; the specialist prompt count of
+evidence, the attributable A–G controller record, the pre-mutation host/runtime/local proof and every executing model id of the candidate; the specialist prompt count of
 the PR lifecycle (24.8); and exactly one next safe action. Missing facts are `UNKNOWN`, never invented; failure tails
 only; a handoff never authorizes mutation.
 
@@ -1152,7 +1162,7 @@ MODEL_FALLBACK / THINKING_ACTUAL / MODEL_IDENTITY_EVIDENCE / MODEL_EFFORT_EVIDEN
 ```
 
 `FAIL_CLOSED_RUNTIME_PROOF` — model identity and required thinking are load-bearing: they are proven positively,
-or the execution stops before any mutation or audit. Effort telemetry is not load-bearing.
+or the execution stops before any mutation or audit. The table judges runtime identity and thinking. Effort selection and the evidence required by each host path below are separate gates.
 
 | Runtime fact | Verdict |
 |---|---|
@@ -1172,30 +1182,36 @@ or the execution stops before any mutation or audit. Effort telemetry is not loa
   serious prompt's `MODEL_RUNTIME_PROOF`).
 - When the exact required `MODEL_ACTUAL` is independently proven on execution evidence, the absence of a separate
   fallback telemetry field is not a second proof requirement; a known prohibited fallback still stops.
-- `MODEL_EFFORT_ACTUAL` may be `UNKNOWN` when exact execution-effort telemetry is unavailable. That is
-  non-blocking once identity and required thinking are proven, and the actual is never restated from the request.
-  Effort and `HOST_SETTING_RAW` are recorded literally under `HOST_UI_LABELS_ARE_LITERAL` (24.3) and never mapped
-  to an API effort enum. A human may waive an effort mismatch for one task; the waiver and the true actual effort
-  are recorded. Identity and required thinking have no waiver: a different model is a different routed task.
-- Effort is chosen from the work itself; de-escalate as soon as the remaining work is simpler.
-- `CLAUDE_EFFORT_POLICY` — the Claude lane requests `xhigh` for ordinary complex semantic implementation and
-  repair: that is the default heavy coding lane. It requests `max` only for capability-critical implementation
-  or the hardest correctness-critical consolidated repair, on an explicitly named trigger; `max` is never the
-  general default and never a reward for a project mattering. Thinking is always enabled on Claude Opus 5.5, and
-  `THINKING_ACTUAL` is still reported from runtime evidence rather than assumed from this rule. Routine status
-  and read-only evidence work stays controller-owned instead of spending the Claude lane.
-- `CODEX_EXECUTOR_EFFORT_POLICY` — a Codex executor stage (24.3) requires `MODEL_ID_REQUIRED` = the selected adopted
-  executor id and thinking `ENABLED` under `FAIL_CLOSED_RUNTIME_PROOF` above; it reports no model fallback, and its
-  route is recorded as `EXECUTOR_ROUTE` with the fallback reason, never as a `MODEL_FALLBACK`. Effort is recorded
-  literally (24.3): the host effort level `xhigh` for implementation and repair, and `max` only for a
-  capability-critical implementation or the hardest correctness-critical consolidated repair on an explicitly named
-  trigger; never `ultra`, requested or observed, which the host describes as automatic task delegation and which
-  would put further agents inside one writer's stage. A selector that does not expose the requested level, or an
-  observed `ultra`, stops the stage before mutation, and no level is mapped onto another. Speed is `STANDARD`; Fast
-  runs only on an explicit controller or human time-critical authorization recorded for that stage and is never a
-  correctness upgrade. Subagents are 0: no delegated, parallel or background agent mutates. A host's automatic
-  approval reviewer, sandbox or permission setting is a UX layer, never authorization — every protected action stays
-  forbidden whatever a host would approve.
+- Record `HOST_UI_LABEL` from the visible selected control and `HOST_CONFIG_SELECTION` from the explicit
+  configuration bound to this session. Use `N/A` for an unused surface and `UNKNOWN` for missing evidence.
+  Record `MODEL_ACTUAL`, `THINKING_ACTUAL` and `MODEL_EFFORT_ACTUAL` from the running session. Preserve the
+  literal values and their sources in the runtime block. Absent effort telemetry stays `UNKNOWN`; it can pass
+  identity/thinking but cannot establish a host relationship that requires an observed raw value. Only a human
+  may waive an effort mismatch for one task, recording the waiver and true actual. Identity, required thinking,
+  unsupported selection, a mandatory host proof or a prohibited mode cannot be waived.
+- `CLAUDE_EFFORT_POLICY` — for ordinary complex work, request `xhigh` only where the actual Opus 5.5 host offers
+  it. Otherwise the controller selects an offered literal appropriate to the stage and records why it suffices
+  (for example, `high` if offered). Use `max` only when offered and a named capability-critical implementation
+  or hardest correctness-critical consolidated repair requires it. Stop if no supported setting suffices.
+  Prove model and thinking on execution evidence.
+- `CODEX_EXECUTOR_EFFORT_POLICY` — the controller requests `xhigh`, or `max` only on the same named critical
+  triggers. Record the literal host selection alongside the request. Gate D uses
+  one of these paths for the exact adopted executor id:
+  - **CLI/config:** require the requested literal on this invocation or in a session-bound loaded setting.
+    Cite `HOST_CONFIG_ACCEPTANCE_EVIDENCE` showing this execution accepted that value. For example, the matching CLI process invocation
+    and same-session turn metadata reporting the requested effort establish acceptance. A suggested launch command, a default
+    config file, a catalog or a raw turn value alone is insufficient. No desktop control is required.
+  - **Visible selector:** cite the selected literal on this host and model. A literal matching the requested
+    permitted effort establishes selection directly. For a different spelling (such as `Extra High` with raw `xhigh`),
+    require host documentation explicitly linking those two values for that client/version and model, the
+    visible selection and matching raw effort on this execution. Record the source, scope and both literals.
+    Missing evidence, a different raw value, or documentation for another client/model stops this path.
+  - In either path reject a known raw effort that conflicts with the approved selection, unsupported
+    selections, contradictory evidence, and executor `Ultra` or `ultra`
+    requested, selected, configured or observed. No executor waiver permits these cases or automatic
+    delegation. Gate E independently requires the adopted runtime id, thinking enabled and no model fallback.
+    Speed is `STANDARD` (Fast requires explicit time-critical authorization) and subagents are 0. Host
+    approval or sandbox settings confer no action authority.
 - `SOL_AUDIT_EFFORT_POLICY` — every GPT-6.1 Sol audit or re-audit requires `MODEL_ID_REQUIRED=gpt-6.1-sol` and
   thinking `ENABLED` under `FAIL_CLOSED_RUNTIME_PROOF` above; effort is recorded literally (24.3), is never
   correctness proof, and no host label is ever mapped onto another (`Ultra`, `max` and `xhigh` are never
@@ -1252,6 +1268,11 @@ a CI gate) and holds no authority. Its lane-set and role-keyword assertions pred
 it never overrides this section.
 
 ### 24.14 SETUP_FREEZE and PRODUCT_DEFAULT
+
+`CRYPTO_CORE_AGENT_OS_HOST_AND_WORKFLOW_CLOSURE_V1` applies prospectively after independent protected acceptance
+under accepted-main rules, terminal exact-head CI and CodeQL, explicit exact-head human authorization, standard
+merge, remote post-merge proof, the corresponding external Project instruction update and fresh-chat acceptance.
+Its own implementation and audit use the base policy. It grants no retroactive stage authority and adopts no model.
 
 `SETUP_STATUS=CLOSED_FROZEN` holds once this kernel's setup PR is independently accepted, merged, post-merge
 verified and fresh-chat accepted. The status is proven from that live evidence (24.11) and never written into a

@@ -1,8 +1,8 @@
-# crypto_core Model Prompting Guide (v5.1, 2026-11-18 — Codex executor fallback amendment)
+# crypto_core Model Prompting Guide
 
 Durable authoring guide for the active council of `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by
 `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`, `GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1` and
-`CODEX_EXECUTOR_QUOTA_FALLBACK_V1` (`docs/crypto_core/agent_workflow.md` section 24 — the authority; this guide
+`CODEX_EXECUTOR_QUOTA_FALLBACK_V1` and `CRYPTO_CORE_AGENT_OS_HOST_AND_WORKFLOW_CLOSURE_V1` (`docs/crypto_core/agent_workflow.md` section 24 — the authority; this guide
 teaches how to WRITE prompts for it and never overrides it). Claude prompt templates:
 `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`. Codex executor adapter:
 `.codex/skills/crypto-core-executor-fallback/SKILL.md`. Research protocol:
@@ -28,7 +28,7 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 - `TASK_INTENT` comes first, one per prompt; never an implementation together with its own independent audit.
 - `SEMANTIC_BOUNDARY` names the one contract the PR closes as the largest safe semantic closure (section
   24.8) — never a file-count or LOC target.
-- `STATE_PIN` carries exact SHAs, branch, PR and open-PR count; the executor re-proves them locally.
+- `STATE_PIN` carries exact SHAs, branch, PR and open-PR count; the writer binds its local base/head/tree and clean status to the controller’s remote proof.
 - `MODEL_RUNTIME_PROOF` carries the section 24.12 fields and requirements (`MODEL_ID_REQUIRED`, required
   thinking), with the host label written literally; identity and required thinking fail closed on `UNKNOWN`, and
   only effort may stay `UNKNOWN`.
@@ -71,17 +71,9 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 - **Usage duty (`SOL_AUDIT_USAGE_EFFICIENCY_V1`):** spend Sol allowance on independent judgment only — do every
   status read, CI poll, thread enumeration and preflight step around an audit yourself; never inflate an audit
   prompt; never narrow, shorten or fragment an audit to save allowance.
-- **Executor routing (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`, section 24.3):** route implementation and repair to
-  Claude Opus 5.5. Select the Codex executor for one whole stage only when every activation gate holds — fresh
-  Claude quota-block or unavailability evidence for that stage (`CLAUDE_OPUS_5_5_QUOTA_BLOCKED` or
-  `CLAUDE_OPUS_5_5_UNAVAILABLE`, with source and time), your explicit selection, an adopted id, fresh
-  host-capability evidence, the executor's own runtime proof, a whole-stage executor, and a preserved independent
-  GPT-6.1 Sol audit — and record them in `MODEL_RUNTIME_PROOF`. Keep `HOST_CAPABILITY_EVIDENCE`,
-  `EXECUTION_IDENTITY_EVIDENCE` and your `CONTROLLER_AUTHORIZATION` apart. Switch only at a stage boundary; the
-  executor stage takes the replaced Claude stage's slot. For an interrupted stage, assemble its progress, candidate
-  state and consumed slot from live evidence and adjudicate under section 24.8 unchanged (`INTERRUPTED_STAGE`) —
-  never restart it silently under another executor, never create a slot, never grant a second repair. No quota
-  evidence, no fallback; no independent eligible auditor, no fallback; never a Sol-family executor.
+- **Executor routing.** Put the attributable §24.3 A–G decisions in `MODEL_RUNTIME_PROOF` for this stage.
+  For F, explain why the named writer can finish this scope and validation. Leave executing-session confirmation
+  to the writer before mutation. Preserve the stage boundary, slot and interrupted-stage rules of §24.3.
 - **Never:** product implementation; any protected audit; an independent audit outside that fallback or of
   its own implementation or repair; a substitute for local tests; memory as repository state; GitHub mutation
   without an exact human action authorization; merge authority.
@@ -110,26 +102,17 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   forensic debugging with long validation loops, the `ROOT_CAUSE_ESCAPE` implementation and the single
   consolidated repair of a candidate, together with the repo-native navigation, mechanical, static-inspection,
   test-generation, local validation and CI-diagnosis work of that same task.
-- **Rules:** host effort label recorded literally — `xhigh` for ordinary complex implementation and repair,
-  `max` only on an explicitly named capability-critical or hardest-correctness-critical trigger and never as a
-  general default; thinking enabled and still proven from runtime evidence; runtime
-  proof before mutation; one PR per semantic boundary; its self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`.
-- **Templates:** `opus5_prompting_playbook.md` section 3.
+- **Prompt:** name the contract, affected entry points, invariants and negative cases. Give the validation ladder
+  and publication authority. Choose an offered Opus 5.5 setting under §24.12. Use the existing Opus playbook for
+  implementation or the single consolidated repair.
 
-### 2.5 Codex executor fallback — conditional implementation and repair
+### 2.5 GPT-6.2 Astra — conditional whole-stage executor
 
-- **Best tasks:** one whole IMPLEMENTATION stage (including a `ROOT_CAUSE_ESCAPE` implementation) or the candidate's
-  `ONE_CONSOLIDATED_REPAIR`, when Claude Opus 5.5 is quota-blocked or unavailable for that stage and the controller
-  routes it here under `CODEX_EXECUTOR_QUOTA_FALLBACK_V1` (section 24.3).
-- **Bad tasks:** any audit or re-audit; a fragment of a stage; a stage another executor started, unless the
-  controller's prompt names that continuation and its exact starting state; work Claude can run.
-- **Rules:** only an adopted id (`gpt-6.2-astra`, GPT-6.2 Astra — a different id from the superseded GPT-6 Astra),
-  never a Sol-family id; `MODEL_ID_REQUIRED` is the selected id and thinking `ENABLED`, proven before mutation on
-  execution evidence; effort `xhigh`, `max` only on a named capability-critical or hardest-correctness-critical
-  trigger, never `ultra` requested or observed (automatic task delegation); `STANDARD` speed; subagents 0; host
-  approval layers are never authorization. Same validation ladder, scoped commit, one PR, terminal CI and audit
-  gate as the Claude stage it replaces; its self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`.
-- **Adapter:** `.codex/skills/crypto-core-executor-fallback/SKILL.md`; skeleton in section 3.
+- **Prompt:** supply the same complete contract and validation, plus the §24.3 A–G controller record inside
+  `MODEL_RUNTIME_PROOF`. For a CLI writer, name the literal config option and require proof this execution
+  accepted it. For desktop, name the actual selector label and the §24.12 evidence path. Ask for the writer's
+  separate session and checkout proof, then a scoped commit and exact-head handoff where authorized.
+  [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
 
 ### 2.6 GPT-6.1 Sol — primary independent auditor (audit-only lane)
 
@@ -154,6 +137,16 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   of rerunning the full suite for duplication, runs the one re-audit delta-aware but whole-contract, and returns
   the `COMPACT_AUDIT_HANDOFF` with speed and usage telemetry when the host exposes them (`UNKNOWN` otherwise).
 
+### Evaluation profiles outside the council
+
+These are questions for evaluating a future capability change. They dispatch no agent and grant no repository,
+implementation or audit role. Any adoption requires separate evidence and independent acceptance under §24.
+
+| Model | Bounded evaluation question |
+|---|---|
+| GPT-6.1 Terra (`gpt-6.1-terra`) | On a fixed example with a known answer, does it identify the required evidence and flag missing inputs? Compare the output with the expected result and record omissions. |
+| GPT-6.2 Sol (`gpt-6.2-sol`) | On a fixed historical example, does it distinguish material findings from unsupported concerns? Compare with an independently established answer. The result cannot satisfy a candidate audit. |
+
 ### 2.7 Superseded lanes
 
 GPT-6 Astra (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT`) and Codex GPT-5.6 Sol
@@ -163,83 +156,34 @@ conditional executor of section 2.5. The change that introduces GPT-6.1 Sol is a
 Astra audit under the plane before it (section 24.14 `GPT61_SOL_AUDIT_TRANSITION`); no other Astra or GPT-5.6 Sol
 prompt is written.
 
-## 3. Lifecycle prompt skeletons
+## 3. Shared serious prompt
 
-The specialist skeletons (IMPLEMENTATION, AUDIT, REPAIR, REAUDIT) show only the fields that carry task-specific
-content: every serious prompt keeps all twelve top-level fields of section 24.6 in canonical order, and an
-abbreviated skeleton never reorders them. The ARCHITECTURE skeleton records a controller decision, not a specialist
-prompt.
+Use one instance of this template. Put stage-specific inputs in their existing fields.
 
 ```text
-TASK_INTENT: IMPLEMENTATION
-SEMANTIC_BOUNDARY: <one coherent contract closed as the largest safe semantic closure>
-STATE_PIN: main @ <sha>; open PRs <n>; branch <name> absent
-MODEL_RUNTIME_PROOF: <section 24.12 fields; host label literal>
-ALLOWED_FILES: <exact>   INVARIANTS: <exact>   BLOCKER_INVENTORY: <inherited blocker identities or NONE>
-VALIDATION_MATRIX: <exact ladder>   GITHUB_AUTHORIZATION: branch/commit/push/one PR; merge NOT AUTHORIZED
-FORBIDDEN: <task-specific + standing rails>   STOP_CONDITIONS: <enumerated>
-HANDOFF: AGENT_OS_HANDOFF_V1; MEANINGFUL_PROMPT_COUNT_THIS_PR: 1
+TASK_INTENT: <one routed stage>
+SEMANTIC_BOUNDARY: <contract, supported paths and completion condition>
+STATE_PIN: <repository, base, head/tree, PR state and source of the snapshot>
+MODEL_RUNTIME_PROOF: <route, host selection, required id/thinking, execution proof per §24.12>
+ALLOWED_FILES: <exact scope or READ_ONLY>
+INVARIANTS: <task-specific invariants and standing rails by reference>
+BLOCKER_INVENTORY: <inherited identities and exact evidence, or NONE>
+VALIDATION_MATRIX: <required local checks, remote gates and owners>
+GITHUB_AUTHORIZATION: <exact actions and limits>
+FORBIDDEN: <standing rails and stage-specific exclusions>
+STOP_CONDITIONS: <evidence failures, scope and authority boundaries>
+HANDOFF: <§24.6 packet, specialist count and one next safe action>
 ```
 
-```text
-TASK_INTENT: AUDIT (GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1; exhaustive, fresh context, READ_ONLY)
-SEMANTIC_BOUNDARY: <the declared contract of PR #<n>>; judge it, do not expand it (FINITE_AUDIT_RULE)
-STATE_PIN: PR #<n>; base <sha>; head <sha>; tree <sha|UNKNOWN>; changed files; required-check snapshot;
-  review-thread snapshot; PROTECTED yes/no with the trigger (the SOL_AUDIT_PREFLIGHT_PACKET state)
-MODEL_RUNTIME_PROOF: GPT-6.1 Sol | MODEL_ID_REQUIRED gpt-6.1-sol | THINKING ENABLED | effort Ultra (mandatory when
-  PROTECTED; otherwise Ultra by default or the controller-supplied available literal) | speed STANDARD; for
-  non-protected work only, the section 24.4 controller fallback with FALLBACK_REASON recorded
-BLOCKER_INVENTORY: <known P1/P2 identities, including review-thread ids, or NONE>
-HANDOFF: COMPACT_AUDIT_HANDOFF — the COMPLETE current material P1/P2 set in one pass, each with invariant,
-  file:line evidence, supported entry/consumer path, effect, materiality and minimum regression proof
-  (AUDIT_MATERIALITY_BOUNDARY_V1); P3 separately; for protected work this one audit is also the protected Class-C
-  verdict. Zero mutation.
-```
-
-```text
-TASK_INTENT: REPAIR (the ONE consolidated repair)
-SEMANTIC_BOUNDARY: repair the complete set by root cause in one change on the same branch; no new scope
-MODEL_RUNTIME_PROOF: Claude Opus 5.5 | MODEL_ID_REQUIRED claude-opus-5-5 | section 24.12 fields
-BLOCKER_INVENTORY: <the complete audited P1/P2 set, verbatim, with identities>
-STOP_CONDITIONS: a blocker cannot be reproduced; the repair needs files or authority outside the prompt
-HANDOFF: AGENT_OS_HANDOFF_V1; this is the candidate's only repair
-```
-
-```text
-TASK_INTENT: <IMPLEMENTATION | REPAIR — exactly one> (one whole stage routed to the conditional Codex executor)
-SEMANTIC_BOUNDARY: <as the Claude IMPLEMENTATION or REPAIR skeleton: the whole contract or the complete audited set>
-STATE_PIN: <as the replaced stage>; the stage's starting state; every model id that already implemented or repaired
-  any part of this candidate
-MODEL_RUNTIME_PROOF: EXECUTOR_ROUTE=CODEX_EXECUTOR_QUOTA_FALLBACK_V1 | FALLBACK_REASON CLAUDE_OPUS_5_5_QUOTA_BLOCKED or
-  CLAUDE_OPUS_5_5_UNAVAILABLE with source and time | MODEL_ID_REQUIRED gpt-6.2-astra (an adopted id, never Sol-family) |
-  THINKING ENABLED | effort xhigh (max only on a named trigger; never ultra) | speed STANDARD | subagents 0 |
-  HOST_CAPABILITY_EVIDENCE requested fresh | whole-stage judgement | independent GPT-6.1 Sol audit preserved
-BLOCKER_INVENTORY: <NONE or inherited identities for an implementation; the complete audited P1/P2 set for a repair>
-STOP_CONDITIONS: any activation gate missing, stale, UNKNOWN or contradicted; runtime proof fails; requested effort
-  not exposed or ultra observed; another writer active; scope or authority outside the prompt
-HANDOFF: AGENT_OS_HANDOFF_V1 with the executor route, fallback reason and evidence, host-capability evidence and every
-  executing model id; SELF_AUDIT_ONLY_NOT_INDEPENDENT; the stage takes the replaced Claude stage's slot
-```
-
-```text
-TASK_INTENT: REAUDIT (the ONE whole-contract re-audit; READ_ONLY)
-SEMANTIC_BOUNDARY: <the same declared contract>; the whole contract, never only the repaired lines
-STATE_PIN: old head <sha>; repaired head <sha>; tree <sha|UNKNOWN>; changed files; required-check snapshot;
-  review-thread snapshot; PROTECTED yes/no with the trigger (the SOL_AUDIT_PREFLIGHT_PACKET state)
-MODEL_RUNTIME_PROOF: <as AUDIT>
-BLOCKER_INVENTORY: <the previous audit's complete P1/P2 set with identities — the repaired set>
-HANDOFF: COMPACT_AUDIT_HANDOFF — delta-aware but whole-contract (OLD_HEAD..REPAIRED_HEAD first, then the whole
-  contract): the COMPLETE current material P1/P2 set, not only the repaired lines. Any genuine material P1/P2 ->
-  FIXED_POINT_STOP after controller severity adjudication; P3 never blocks.
-```
-
-```text
-TASK_INTENT: ARCHITECTURE (ROOT_CAUSE_ESCAPE decision) — ChatGPT controller
-INPUT: the rejected candidate's blocker identities and evidence
-OUTPUT: the reconstructed root cause; the changed architecture or boundary; one new bounded semantic
-  closure starting from accepted main; the inherited blocker identities; what rejected history must never
-  become canonical. No automatic replacement PR.
-```
+- **Conditional implementation or repair:** under `MODEL_RUNTIME_PROOF` give the stage-specific A–G record,
+  including F's basis. Ask for both that source and the actual pre-mutation proof in `HANDOFF`.
+- **Audit:** place the §24.4 packet's check/thread snapshot in `STATE_PIN` and known findings in
+  `BLOCKER_INVENTORY`. Request the complete material P1/P2 set in one read-only pass.
+- **Consolidated repair:** supply that entire blocker set with the expected regression proof per defect.
+- **Whole-contract re-audit:** supply both heads and inherited identities. Inspect the delta first, then the
+  whole contract. Apply §24.8 to the result.
+- **Root-cause escape:** the controller's architecture decision names the failed invariant, changed boundary
+  and accepted starting point before a replacement implementation is routed.
 
 ## 4. Research packet and freshness
 

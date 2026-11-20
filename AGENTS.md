@@ -16,7 +16,7 @@
 This file is the entrypoint and holds the durable rails. The single canonical active workflow authority is
 `docs/crypto_core/agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`), whose active content is
 `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`,
-`GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1` and `CODEX_EXECUTOR_QUOTA_FALLBACK_V1`. The host
+`GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1`, `CODEX_EXECUTOR_QUOTA_FALLBACK_V1` and the prospective host/workflow closure in section 24.3. The host
 adapters (`CLAUDE.md`,
 `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`, `.codex/skills/crypto-core-max-safe/SKILL.md`,
 `.codex/skills/crypto-core-executor-fallback/SKILL.md`)
@@ -71,12 +71,10 @@ council and not routable, as a lane, fallback or dependency: GPT-6 Astra (`SUPER
 Codex GPT-5.6 Sol (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_ROUTING`), Claude Fable 5 (`INACTIVE_EXPIRED_RETIRED`),
 Claude Opus 5 (`SUPERSEDED_BY_OPUS_5_5`), Claude Opus 4.8 (`SUPERSEDED_BY_OPUS_5`), and Claude Sonnet 5, Codex
 GPT-5.6 Terra and Codex GPT-5.6 Luna (`NOT_IN_ACTIVE_COUNCIL`). A superseded lane is never an automatic
-fallback. Host effort labels are literal and never normalized across models or to an API
-effort enum (`HOST_UI_LABELS_ARE_LITERAL`): Claude Opus 5.5 `xhigh` and `max`; GPT-6.1 Sol `Ultra` for protected
-audits, any other label recorded as the selector shows it, and `Ultra` never translated to `max` or back; a Codex
-executor `xhigh` and `max` only, never `ultra` (section 24.12 `CODEX_EXECUTOR_EFFORT_POLICY`). The
-Claude lane requests `xhigh` for ordinary complex implementation and repair and `max` only on an explicitly named
-capability-critical or hardest-correctness-critical trigger (section 24.12).
+fallback. Section 24.12 governs literal host selection, raw execution evidence and effort by lane.
+For the conditional executor, section 24.3 requires an attributable controller decision before dispatch and
+the writer's current runtime and clean checkout proof before mutation. Only a separate GPT-6.1 Sol execution
+at the literal protected selector `Ultra` can perform the protected audit.
 
 Every serious routed task reports `MODEL_REQUESTED`, `MODEL_ID_REQUIRED`, `MODEL_ACTUAL`,
 `MODEL_EFFORT_REQUESTED`, `MODEL_EFFORT_ACTUAL`, `MODEL_FALLBACK`, `THINKING_ACTUAL`,
@@ -193,7 +191,7 @@ a rule. Unresolved load-bearing disputes stay `UNKNOWN` and block merge.
 
 ## Git and PR Discipline
 
-- One open PR at a time. Verify it live with `gh pr list --state open` at task start.
+- One open PR at a time. The controller verifies it live with `gh pr list --state open` at task start and pins the result.
 - Never push directly to `main`, force-push, self-approve, admin/bypass merge, or merge without exact
   human authorization naming the PR, the exact head and the command.
 - Standard merge only; never squash or rebase.
@@ -236,7 +234,7 @@ a rule. Unresolved load-bearing disputes stay `UNKNOWN` and block merge.
 ## Current Workflow State
 
 - `LIVE_STATE_POLICY` (workflow section 24.11): this durable file pins NO current `main` SHA,
-  latest-merged-PR number, open-PR count, blocker position, or setup status value. Re-prove current `main`
+  latest-merged-PR number, open-PR count, blocker position, or setup status value. The controller proves current `main`
   head, merged-PR history, open-PR count, the active blocker, and the next gated slice from live
   `git`/`gh`/connector evidence at the start of every task; current accepted state lives in controller
   handoffs, not here. Dated historical state may appear only in archival indexes, explicitly labelled.
