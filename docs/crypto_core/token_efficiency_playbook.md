@@ -6,9 +6,7 @@ doctrine: `agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`).
 
 ## 1. Context budgets per task class
 
-Lane and effort selection is NOT restated here. The single `AUTHORITATIVE_ROUTING_MATRIX` (class → lane →
-model id → effort) is `agent_workflow.md` section 24.3, and the effort/thinking architecture is section
-24.12. This table adds only the context budget for each class.
+These older class names describe context examples only. Use §24.3 for routing and §24.12 for effort.
 
 | Class | Context budget |
 |---|---|
@@ -52,49 +50,9 @@ generated output.
 
 ## 4. Report compression
 
-Reports are `AGENT_OS_HANDOFF_V1` packets: fixed fields, verdict first, failure tails only, evidence vs
-inference separated, missing facts `UNKNOWN`/`N/A`, exactly one next safe action. Always include
-`MODEL_REQUESTED`, `MODEL_ACTUAL`, `REASONING_REQUESTED`, `REASONING_ACTUAL`, `EXACT_MODEL_REQUIRED`,
-fallback, and the `SETUP_*` block.
-
-## 5. Model selection and proof
-
-Selection follows `MODEL_EXPECTED_VALUE_PER_TOKEN_POLICY` (workflow §24.10) — lowest capable lane by
-expected value per token: Luna or Sonnet 5 `low` for mechanics → runtime-proven Sonnet 5 `medium` or Terra
-for bounded T2 work → Opus 5.5 (default) for broad/complex local T3 work → Sol only for qualifying protected
-T4 on a narrow packet; non-Class-C read-only mapping/audit defaults to the ChatGPT read-only-first
-controller (`CONTROLLER_READONLY_FIRST_POLICY`). Effort is chosen per workflow §24.12: `xhigh` is the normal
-Opus 5.5 coding default, `max` only on an explicit T3B trigger, review at `medium`/`high`/`xhigh` by breadth.
-Claude Sonnet 5 is `NOT_IN_ACTIVE_COUNCIL` (§24.3) and is neither a lane nor a fallback, and no superseded
-Claude lane is one either; use measured session/harness cost, never hard-coded price
-rankings. The Claude mutation lane requires the exact model id (`claude-opus-5-5`) — an
-unresolved alias is not proof — plus session-level proof of the actual effort; if
-`EXACT_MODEL_REQUIRED=true`, requested/actual mismatch stops before mutation, and a human effort waiver is
-recorded with the TRUE actual value. Never claim unavailable-model quality. Model selection does not prove
-safety, repo state, or results.
-Claude Fable 5 is `INACTIVE_EXPIRED_RETIRED` — never a lane or fallback; pre-v5.2 Fable-era contracts stay
-archived in `fable_exit_contract_index.md` and are never routing.
-
-## 6. Codex reduction matrix
-
-Shifted AWAY from Codex (controller-owned): Class-A docs/setup/config audits; PR metadata and state proof;
-workflow/prompt consistency; routine CI state; broad repository discovery; already-proven scope/non-claim
-checks; mechanical low-risk audits. RETAINED by Codex (Class C, mandatory, never replaceable): digest/
-provenance/serialization/anchors, mutable/TOCTOU, denominator and record-set integrity, replay defense,
-Decimal/Fraction finance, governance thresholds, fail-closed trust transitions, READY/ADMITTED/ACCEPTED,
-SM-5/SM-6, Stage-4, machine-time, readiness/Deribit, live/order/scheduler/shadow/capital semantics,
-edge/profitability claims, complex security, current P1/P2 source findings. Codex capacity is preserved by
-narrowing the question, never by weakening the gate.
-
-## 7. Prompt-count budgets (LOW_PROMPT_MAXIMUM_WORK_POLICY)
-
-Class A: 1 executor prompt end-to-end, then controller audit → human merge authorization → mechanical
-merge/postverify. Class B: 1 implementation prompt + 1 controller audit/triage (+ Terra audit only when
-required; at most 1 consolidated repair prompt before re-audit). Class C: 1 implementation + 1 focused Codex
-audit + at most 1 consolidated same-branch repair per audit cycle + re-audit only on material head change +
-1 mechanical merge/postverify. Never split coherent work into micro-prompts unless a stop condition fires;
-never combine implementation with its own audit, merge with next feature, research with mutation, or two
-PRs/implementers.
+Use the handoff and runtime fields of `agent_workflow.md` §§24.6–24.7 and 24.12. Include failure tails,
+label unknowns and give one next safe action. Apply §§24.3–24.4 for model selection and independent review,
+and §24.8 for specialist execution counts. Use observed session usage when available.
 
 ## 8. Deep Research economy and freshness
 
@@ -109,8 +67,8 @@ UNKNOWN findings, and its refresh trigger. Research savings never outrank factua
 ## 9. Anti-patterns
 
 - Full-file reads where a symbol search answers the question; duplicate discovery already in the packet.
-- Sol/Opus status polling, implementer self-review, unavailable-model claims, unproven Sonnet 5 routing.
-- Routing everything to Opus 5.5, or every Opus task to `max`; `max` without a named T3B trigger.
+- Spending a specialist execution on status polling or counting self-review as independent review.
+- Requesting an effort label without checking its availability on the selected host.
 - Generic re-verification loops ("double-check everything") in place of the deterministic gate ladder;
   rerunning a passed gate on an unchanged head; subagents for polling, routine commands or small patches.
 - Spending Codex on questions the connector already answered; broad Codex repo reads without justification.

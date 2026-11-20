@@ -1,12 +1,6 @@
 # Claude Opus 5.5 Prompting Playbook (crypto_core, v4 — Opus 5.5 lane edition)
 
-How to prompt the one active Claude lane under `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by
-`ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`, `CLAUDE_OPUS_5_5_CONTROL_PLANE_UPGRADE_V1` and
-`GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1`. The file name is kept
-for path stability; the active lane is the one named below. Authority:
-`docs/crypto_core/agent_workflow.md` section 24 — council 24.3, audit 24.4, prompt shape 24.6, lifecycle and
-budget 24.8, runtime proof 24.12. This playbook never overrides it; on any conflict, section 24 and the
-stricter safety rule win.
+Use `docs/crypto_core/agent_workflow.md` section 24 for routing, prompt fields, lifecycle and runtime proof.
 
 **Claude Opus 5.5** (`claude-opus-5-5`) is the primary deep semantic IMPLEMENTATION and REPAIR lane, and it
 carries the repo-native navigation, mechanical, static-inspection, test-generation, local validation and
@@ -27,19 +21,14 @@ controller, a governance authority, or an independent or protected auditor.
   alias `opus` is not execution proof. `MODEL_ACTUAL` must positively be `claude-opus-5-5` and
   `THINKING_ACTUAL` positively `ENABLED`; either one `UNKNOWN` stops. Only `MODEL_EFFORT_ACTUAL` may be
   `UNKNOWN` when the host exposes no effort telemetry, and it is never restated from the request.
-- **Literal host labels and effort choice.** Labels are recorded verbatim, never decomposed and never mapped to
-  an API effort enum. Request `xhigh` for ordinary complex semantic implementation and repair — that is the
-  default heavy coding lane — and `max` only for capability-critical implementation or the hardest
-  correctness-critical consolidated repair, on an explicitly named trigger. `max` is never the general default.
-  The retired Opus 5 literal `xhighultracode` belongs to that superseded lane and is never carried onto Opus
-  5.5.
+- **Effort request.** Fill `MODEL_EFFORT_REQUESTED` from the current Opus selector under `CLAUDE_EFFORT_POLICY`
+  (§24.12). Name the source and stage-specific reason when requesting `max`.
 - **Thinking.** Thinking is always enabled on Opus 5.5, and `THINKING_ACTUAL` is still reported from runtime
   evidence rather than assumed. Control cost through scope and context, never by suppressing reasoning.
 - **Stops.** A wrong or `UNKNOWN` model, `UNKNOWN` or disabled required thinking, or a known prohibited fallback
   is `STOP_WITH_PROOF` before mutation. A human may waive an effort mismatch for one task; the waiver and the
   true actual effort are both recorded.
-- **De-escalation.** Effort follows the work: when the remaining work is narrower than expected, the controller
-  routes it to a lighter setting or lane rather than finishing at the original one.
+- **Stage boundary.** Keep the selected executor for the entire stage (§24.3).
 
 ---
 
@@ -57,9 +46,10 @@ follows the section 24.6 serious prompt shape:
 6. **INVARIANTS** — the properties that must remain true.
 7. **BLOCKER_INVENTORY** — inherited blocker identities; for a repair, the complete audited P1/P2 set.
 8. **VALIDATION_MATRIX** — targeted, full, wrapper and CI requirements.
-9. **GITHUB_AUTHORIZATION** — commit, push, PR and merge stated separately.
-10. **FORBIDDEN** and **STOP_CONDITIONS** — every state that must halt mutation.
-11. **HANDOFF** — `AGENT_OS_HANDOFF_V1`, compact, with the meaningful-prompt count and one next safe action.
+9. **GITHUB_AUTHORIZATION** — the exact permitted GitHub actions.
+10. **FORBIDDEN** — actions outside the authorization.
+11. **STOP_CONDITIONS** — conditions requiring the executor to stop.
+12. **HANDOFF** — `AGENT_OS_HANDOFF_V1`, including the specialist count and one next safe action.
 
 ### What NOT to do
 
@@ -109,22 +99,20 @@ SEMANTIC_BOUNDARY: <one coherent contract, closed as the largest safe semantic c
   negative cases, tests, docs/provenance genuinely required, validation>
 STATE_PIN: main @ <sha>; clean worktree; <n> open PRs; branch <name> absent
 MODEL_RUNTIME_PROOF: MODEL_REQUESTED Claude Opus 5.5 | MODEL_ID_REQUIRED claude-opus-5-5 |
-  MODEL_EFFORT_REQUESTED <literal host label> | MODEL_FALLBACK NONE | THINKING ENABLED |
+  MODEL_EFFORT_REQUESTED <exposed literal and source> | MODEL_FALLBACK PROHIBITED | THINKING_REQUIRED ENABLED |
   report MODEL_ACTUAL, MODEL_EFFORT_ACTUAL, THINKING_ACTUAL, MODEL_IDENTITY_EVIDENCE, MODEL_EFFORT_EVIDENCE
   before mutation; MODEL_ACTUAL or THINKING_ACTUAL UNKNOWN -> STOP_WITH_PROOF; MODEL_EFFORT_ACTUAL may be UNKNOWN
 ALLOWED_FILES: <exact files>
 INVARIANTS: <fail-closed / digest / paper-only / determinism properties>
 BLOCKER_INVENTORY: <inherited blocker identities, or NONE>
-VALIDATION_MATRIX: python -m ruff check <paths>; python -m ruff format --check <paths>;
-  targeted tests via scripts/crypto_core/run_logged_command.ps1;
-  powershell -File scripts/crypto_core/run_full_tests_logged.ps1 (PYTEST_EXIT=0); git diff --check;
-  exact changed-file proof
+VALIDATION_MATRIX: <applicable scoped Ruff checks, targeted tests via run_logged_command.ps1, full suite via
+  run_full_tests_logged.ps1 with PYTEST_EXIT=0 when required>, git diff --check, exact changed-file proof
 GITHUB_AUTHORIZATION: branch, exact-path stage, one commit, push, one PR AUTHORIZED; merge NOT AUTHORIZED
 FORBIDDEN: scope widening; product surfaces outside scope; direct main push; force-push; broad git add;
   self-approval; auto-merge; live/private API; orders; scheduler; BIST
 STOP_CONDITIONS: runtime-proof failure; dirty tree; head mismatch; open-PR collision; out-of-scope failure;
   readiness/connector transition; external-fact dependency; authorization gate
-HANDOFF: AGENT_OS_HANDOFF_V1; MEANINGFUL_PROMPT_COUNT_THIS_PR: 1; one next safe action
+HANDOFF: AGENT_OS_HANDOFF_V1; MEANINGFUL_PROMPT_COUNT_THIS_PR: <actual>; one next safe action
 ```
 
 ### 3.2 `OPUS5_ONE_CONSOLIDATED_REPAIR`
@@ -148,7 +136,7 @@ GITHUB_AUTHORIZATION: one normal same-branch commit and push AUTHORIZED; new PR 
 FORBIDDEN: <as 3.1>; any change beyond the blocker set
 STOP_CONDITIONS: a blocker cannot be reproduced; the repair needs files or authority outside the prompt; the
   finding disputes accepted design; head moved
-HANDOFF: AGENT_OS_HANDOFF_V1 with before/after evidence per blocker; MEANINGFUL_PROMPT_COUNT_THIS_PR: 3;
+HANDOFF: AGENT_OS_HANDOFF_V1 with before/after evidence per blocker; MEANINGFUL_PROMPT_COUNT_THIS_PR: <actual>;
   next = the ONE whole-contract re-audit
 ```
 

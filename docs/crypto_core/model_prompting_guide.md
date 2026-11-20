@@ -1,11 +1,8 @@
-# crypto_core Model Prompting Guide (v5.1, 2026-11-18 — Codex executor fallback amendment)
+# crypto_core Model Prompting Guide
 
-Durable authoring guide for the active council of `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by
-`ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`, `GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1` and
-`CODEX_EXECUTOR_QUOTA_FALLBACK_V1` (`docs/crypto_core/agent_workflow.md` section 24 — the authority; this guide
-teaches how to WRITE prompts for it and never overrides it). Claude prompt templates:
-`docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`. Codex executor adapter:
-`.codex/skills/crypto-core-executor-fallback/SKILL.md`. Research protocol:
+Use `docs/crypto_core/agent_workflow.md` section 24 for routing and evidence. Claude templates live in
+`docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`, the Codex executor adapter in
+`.codex/skills/crypto-core-executor-fallback/SKILL.md`, and research procedures in
 `docs/crypto_core/deep_research_protocol.md`. On any conflict, section 24 and the stricter safety rule win. Nothing
 in this guide proves repository state or authorizes a merge.
 
@@ -28,7 +25,7 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 - `TASK_INTENT` comes first, one per prompt; never an implementation together with its own independent audit.
 - `SEMANTIC_BOUNDARY` names the one contract the PR closes as the largest safe semantic closure (section
   24.8) — never a file-count or LOC target.
-- `STATE_PIN` carries exact SHAs, branch, PR and open-PR count; the executor re-proves them locally.
+- `STATE_PIN` carries the controller's fresh remote proof. The executor checks its local branch, head and tree.
 - `MODEL_RUNTIME_PROOF` carries the section 24.12 fields and requirements (`MODEL_ID_REQUIRED`, required
   thinking), with the host label written literally; identity and required thinking fail closed on `UNKNOWN`, and
   only effort may stay `UNKNOWN`.
@@ -110,10 +107,8 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   forensic debugging with long validation loops, the `ROOT_CAUSE_ESCAPE` implementation and the single
   consolidated repair of a candidate, together with the repo-native navigation, mechanical, static-inspection,
   test-generation, local validation and CI-diagnosis work of that same task.
-- **Rules:** host effort label recorded literally — `xhigh` for ordinary complex implementation and repair,
-  `max` only on an explicitly named capability-critical or hardest-correctness-critical trigger and never as a
-  general default; thinking enabled and still proven from runtime evidence; runtime
-  proof before mutation; one PR per semantic boundary; its self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`.
+- **Prompt:** name the invariant or complete repair set, its consumer, negative cases and validation. Supply
+  the stage's literal effort under `CLAUDE_EFFORT_POLICY` (§24.12). Require runtime proof before mutation.
 - **Templates:** `opus5_prompting_playbook.md` section 3.
 
 ### 2.5 Codex executor fallback — conditional implementation and repair
@@ -154,7 +149,15 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   of rerunning the full suite for duplication, runs the one re-audit delta-aware but whole-contract, and returns
   the `COMPACT_AUDIT_HANDOFF` with speed and usage telemetry when the host exposes them (`UNKNOWN` otherwise).
 
-### 2.7 Superseded lanes
+### 2.7 Candidate and superseded lanes
+
+The following profiles are for evaluation only. Neither model is routable under section 24.3.
+
+- `gpt-6.1-terra` — a bounded non-protected engineering evaluation would specify the exact files, deterministic
+  result and full validation ladder. Adoption needs evidence that it completes such a stage on the intended host.
+- `gpt-6.2-sol` — an auditor succession evaluation would supply a frozen historical candidate and established
+  material findings for an independent whole-contract comparison. Protected suitability and a separately audited
+  transition under the incumbent authority are required before any routing.
 
 GPT-6 Astra (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT`) and Codex GPT-5.6 Sol
 (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_ROUTING`) are no crypto_core lane, default, fallback or dependency, and their
@@ -163,83 +166,35 @@ conditional executor of section 2.5. The change that introduces GPT-6.1 Sol is a
 Astra audit under the plane before it (section 24.14 `GPT61_SOL_AUDIT_TRANSITION`); no other Astra or GPT-5.6 Sol
 prompt is written.
 
-## 3. Lifecycle prompt skeletons
+## 3. Compile one stage prompt
 
-The specialist skeletons (IMPLEMENTATION, AUDIT, REPAIR, REAUDIT) show only the fields that carry task-specific
-content: every serious prompt keeps all twelve top-level fields of section 24.6 in canonical order, and an
-abbreviated skeleton never reorders them. The ARCHITECTURE skeleton records a controller decision, not a specialist
-prompt.
+Fill all twelve fields, in order. Cite stable rules by section. Use the selected profile in section 2 and
+place each stage-specific value inside its field.
 
 ```text
-TASK_INTENT: IMPLEMENTATION
-SEMANTIC_BOUNDARY: <one coherent contract closed as the largest safe semantic closure>
-STATE_PIN: main @ <sha>; open PRs <n>; branch <name> absent
-MODEL_RUNTIME_PROOF: <section 24.12 fields; host label literal>
-ALLOWED_FILES: <exact>   INVARIANTS: <exact>   BLOCKER_INVENTORY: <inherited blocker identities or NONE>
-VALIDATION_MATRIX: <exact ladder>   GITHUB_AUTHORIZATION: branch/commit/push/one PR; merge NOT AUTHORIZED
-FORBIDDEN: <task-specific + standing rails>   STOP_CONDITIONS: <enumerated>
-HANDOFF: AGENT_OS_HANDOFF_V1; MEANINGFUL_PROMPT_COUNT_THIS_PR: 1
+TASK_INTENT: <one routed intent>
+SEMANTIC_BOUNDARY: <contract, completion condition and supported paths>
+STATE_PIN: <base, branch, PR, head, tree, open PRs and applicable check/thread snapshots>
+MODEL_RUNTIME_PROOF: <route, required id, literal effort and source, thinking, fallback, §24.12 proof>
+ALLOWED_FILES: <exact read and mutation scope>
+INVARIANTS: <load-bearing requirements and applicable §24 references>
+BLOCKER_INVENTORY: <complete known or inherited identities and evidence, or NONE>
+VALIDATION_MATRIX: <required commands, expected results and exact-head gates>
+GITHUB_AUTHORIZATION: <exact permitted actions, PR and head where applicable>
+FORBIDDEN: <standing rails by reference and task-specific exclusions>
+STOP_CONDITIONS: <applicable stops, including scope, evidence, state and runtime failures>
+HANDOFF: <§24.6 report, actual lifecycle count and one next action>
 ```
 
-```text
-TASK_INTENT: AUDIT (GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1; exhaustive, fresh context, READ_ONLY)
-SEMANTIC_BOUNDARY: <the declared contract of PR #<n>>; judge it, do not expand it (FINITE_AUDIT_RULE)
-STATE_PIN: PR #<n>; base <sha>; head <sha>; tree <sha|UNKNOWN>; changed files; required-check snapshot;
-  review-thread snapshot; PROTECTED yes/no with the trigger (the SOL_AUDIT_PREFLIGHT_PACKET state)
-MODEL_RUNTIME_PROOF: GPT-6.1 Sol | MODEL_ID_REQUIRED gpt-6.1-sol | THINKING ENABLED | effort Ultra (mandatory when
-  PROTECTED; otherwise Ultra by default or the controller-supplied available literal) | speed STANDARD; for
-  non-protected work only, the section 24.4 controller fallback with FALLBACK_REASON recorded
-BLOCKER_INVENTORY: <known P1/P2 identities, including review-thread ids, or NONE>
-HANDOFF: COMPACT_AUDIT_HANDOFF — the COMPLETE current material P1/P2 set in one pass, each with invariant,
-  file:line evidence, supported entry/consumer path, effect, materiality and minimum regression proof
-  (AUDIT_MATERIALITY_BOUNDARY_V1); P3 separately; for protected work this one audit is also the protected Class-C
-  verdict. Zero mutation.
-```
+| Stage | Values to supply |
+|---|---|
+| Opus implementation | Name the consumer, its invariant and negative case. Use the Opus playbook for the local validation ladder. |
+| Astra implementation or repair | Put §24.3 A–G in `MODEL_RUNTIME_PROOF`, including the same-stage quota observation (source, observer, time and any reset), host capability, execution proof location, whole-stage feasibility and remaining auditor eligibility. Pin prior executing ids in `STATE_PIN`. |
+| Consolidated repair | Pin the existing branch and audited head. Supply the entire material P1/P2 set with identities, the regression proof for each, and the same-branch push authority. |
+| GPT-6.1 Sol audit or re-audit | Supply the §24.4 packet in its fields, including protected classification, exact head and known blockers. Require fresh context, READ_ONLY, runtime proof and the complete material findings. For re-audit include old and repaired heads, the previous findings and whole-contract coverage. Return `COMPACT_AUDIT_HANDOFF`. |
 
-```text
-TASK_INTENT: REPAIR (the ONE consolidated repair)
-SEMANTIC_BOUNDARY: repair the complete set by root cause in one change on the same branch; no new scope
-MODEL_RUNTIME_PROOF: Claude Opus 5.5 | MODEL_ID_REQUIRED claude-opus-5-5 | section 24.12 fields
-BLOCKER_INVENTORY: <the complete audited P1/P2 set, verbatim, with identities>
-STOP_CONDITIONS: a blocker cannot be reproduced; the repair needs files or authority outside the prompt
-HANDOFF: AGENT_OS_HANDOFF_V1; this is the candidate's only repair
-```
-
-```text
-TASK_INTENT: <IMPLEMENTATION | REPAIR — exactly one> (one whole stage routed to the conditional Codex executor)
-SEMANTIC_BOUNDARY: <as the Claude IMPLEMENTATION or REPAIR skeleton: the whole contract or the complete audited set>
-STATE_PIN: <as the replaced stage>; the stage's starting state; every model id that already implemented or repaired
-  any part of this candidate
-MODEL_RUNTIME_PROOF: EXECUTOR_ROUTE=CODEX_EXECUTOR_QUOTA_FALLBACK_V1 | FALLBACK_REASON CLAUDE_OPUS_5_5_QUOTA_BLOCKED or
-  CLAUDE_OPUS_5_5_UNAVAILABLE with source and time | MODEL_ID_REQUIRED gpt-6.2-astra (an adopted id, never Sol-family) |
-  THINKING ENABLED | effort xhigh (max only on a named trigger; never ultra) | speed STANDARD | subagents 0 |
-  HOST_CAPABILITY_EVIDENCE requested fresh | whole-stage judgement | independent GPT-6.1 Sol audit preserved
-BLOCKER_INVENTORY: <NONE or inherited identities for an implementation; the complete audited P1/P2 set for a repair>
-STOP_CONDITIONS: any activation gate missing, stale, UNKNOWN or contradicted; runtime proof fails; requested effort
-  not exposed or ultra observed; another writer active; scope or authority outside the prompt
-HANDOFF: AGENT_OS_HANDOFF_V1 with the executor route, fallback reason and evidence, host-capability evidence and every
-  executing model id; SELF_AUDIT_ONLY_NOT_INDEPENDENT; the stage takes the replaced Claude stage's slot
-```
-
-```text
-TASK_INTENT: REAUDIT (the ONE whole-contract re-audit; READ_ONLY)
-SEMANTIC_BOUNDARY: <the same declared contract>; the whole contract, never only the repaired lines
-STATE_PIN: old head <sha>; repaired head <sha>; tree <sha|UNKNOWN>; changed files; required-check snapshot;
-  review-thread snapshot; PROTECTED yes/no with the trigger (the SOL_AUDIT_PREFLIGHT_PACKET state)
-MODEL_RUNTIME_PROOF: <as AUDIT>
-BLOCKER_INVENTORY: <the previous audit's complete P1/P2 set with identities — the repaired set>
-HANDOFF: COMPACT_AUDIT_HANDOFF — delta-aware but whole-contract (OLD_HEAD..REPAIRED_HEAD first, then the whole
-  contract): the COMPLETE current material P1/P2 set, not only the repaired lines. Any genuine material P1/P2 ->
-  FIXED_POINT_STOP after controller severity adjudication; P3 never blocks.
-```
-
-```text
-TASK_INTENT: ARCHITECTURE (ROOT_CAUSE_ESCAPE decision) — ChatGPT controller
-INPUT: the rejected candidate's blocker identities and evidence
-OUTPUT: the reconstructed root cause; the changed architecture or boundary; one new bounded semantic
-  closure starting from accepted main; the inherited blocker identities; what rejected history must never
-  become canonical. No automatic replacement PR.
-```
+After `FIXED_POINT_STOP`, the controller's `ROOT_CAUSE_ESCAPE` decision identifies the root cause, inherited
+blockers and a changed architecture or boundary from accepted main (§24.8).
 
 ## 4. Research packet and freshness
 

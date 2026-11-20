@@ -5,11 +5,7 @@ description: Compact execution checklist for crypto_core implementation and cons
 
 # Crypto Core Token-Efficient Loop
 
-Authority: `AGENTS.md` and `docs/crypto_core/agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`,
-active content `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`
-and `GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1`). This checklist restates no authority. Token
-saving is subordinate to correctness; no gate may be skipped to save tokens. Operate under
-`CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2).
+Apply `AGENTS.md` and `docs/crypto_core/agent_workflow.md` section 24, including the domain profile in §24.2.
 
 ## Loop
 
@@ -22,19 +18,15 @@ saving is subordinate to correctness; no gate may be skipped to save tokens. Ope
    `MODEL_IDENTITY_EVIDENCE`, `MODEL_EFFORT_EVIDENCE`. Fail closed: `MODEL_ACTUAL` must be positively
    `claude-opus-5-5` and thinking positively `ENABLED` on execution evidence; `UNKNOWN`, a mismatch, disabled
    thinking, a known prohibited fallback, or selector/config/default/cache/request text alone →
-   `STOP_WITH_PROOF`. Only effort may stay `UNKNOWN`. Host labels stay literal: `xhigh` for ordinary complex
-   implementation and repair, `max` only on a named capability-critical or hardest-correctness-critical
-   trigger.
-3. Prove LOCAL state once with `git`/`gh`: HEAD, clean tree, branch, open PRs — local proof stays Claude's
-   own responsibility even with a controller packet.
+   `STOP_WITH_PROOF`. Only effort may stay `UNKNOWN`. Apply `CLAUDE_EFFORT_POLICY` (§24.12).
+3. Prove the local branch, HEAD and clean tree. Bind them to the controller's fresh remote state packet.
 4. Read the named set; use symbol search before full files; build one source surface map.
 5. Close the whole semantic boundary as the largest safe semantic closure (§24.8) inside the allowed files,
    preserving paper-only, fail-closed and digest-boundary rules. A repair is the single consolidated repair:
    the complete audited P1/P2 set, by root cause, in one change.
 6. Validate one command at a time: scoped Ruff/format, targeted tests, logged full suite when code changed,
    `git diff --check`, exact changed-file proof.
-7. Publish with scoped `git add`, one commit, one PR, and natural CI to a terminal state. Pending is
-   `NOT_READY`.
+7. Publish the authorized scoped commit and PR. Give the controller the pushed head for CI and thread proof (§24.10).
 8. End with an `AGENT_OS_HANDOFF_V1` handoff: runtime proof, setup fields (`SETUP_REQUESTED`/`SETUP_ACTUAL`/
    `SETUP_FILES_READ`/`SETUP_GAPS`), exact scope, validation, PR/CI/thread evidence, the meaningful-prompt
    count, `SELF_AUDIT_ONLY_NOT_INDEPENDENT`, and exactly one next safe action.

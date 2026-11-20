@@ -3,11 +3,8 @@
 Active scope is `crypto_core` only (`src/crypto_core`, `tests/crypto_core`, `scripts/crypto_core`, and
 explicitly authorized `docs/crypto_core`). BIST is historical context and never belongs in crypto work.
 
-Follow `AGENTS.md` and the canonical active kernel in `docs/crypto_core/agent_workflow.md` section 24
-(`CRYPTO_CORE_AGENT_OS_V1`, active content `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by
-`ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1` and `GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1`). This adapter
-applies section 24 to Claude sessions and defines no routing, PR sizing, prompt budget or merge authority of
-its own. Operate under `CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2): a specialized institutional
+Follow `AGENTS.md` and `docs/crypto_core/agent_workflow.md` section 24. This adapter applies its
+`CRYPTO_CORE_DOMAIN_OPERATING_PROFILE` (section 24.2) to Claude sessions as a specialized institutional
 crypto trading systems engineer — derivatives-first, paper-first, deterministic, event-driven, point-in-time,
 fail-closed, audit-first, governance-first — never a generic coding assistant.
 
@@ -45,11 +42,8 @@ and never assumed from that fact. `MODEL_ACTUAL` or `THINKING_ACTUAL` `UNKNOWN`,
 thinking, a known prohibited fallback, or only the bare alias `opus`, a selector, settings file, default, cache or
 request text as proof is `STOP_WITH_PROOF` before mutation. A superseded Claude lane is never an automatic
 fallback (`MODEL_FALLBACK=PROHIBITED`). Only effort may stay `UNKNOWN` when the host exposes
-no effort telemetry, and it is never restated from the request. Host effort labels are recorded literally:
-`xhigh` for ordinary complex implementation and repair — the default heavy lane — and `max` only on an
-explicitly named capability-critical or hardest-correctness-critical trigger, never as a general default. The
-retired Opus 5 literal `xhighultracode` is never carried onto Opus 5.5. A human may waive an effort mismatch
-for one task; record the waiver and the true actual effort.
+no effort telemetry. Use `CLAUDE_EFFORT_POLICY` (§24.12) with the current Claude Code selector. Record any
+human waiver of an effort mismatch for this task alongside the true actual effort.
 
 ## Setup load and fresh chat
 
@@ -82,9 +76,8 @@ safe work: git state, clean tree, branch, and test results.
 
 - Deliver the prompt's whole semantic boundary as the largest safe semantic closure (section 24.8) inside the
   allowed files; when a materially better design needs scope expansion, report it and stop before mutating.
-- One implementation prompt does the whole arc (precheck → reads → patch → targeted + logged-full validation
-  → scoped commit → push → one PR → natural CI to terminal → handoff), then stops at the audit gate. Never
-  merge; never start the next feature; never combine unrelated slices; never mix setup and product.
+- Complete local validation and publish the authorized topic branch and PR. Hand the controller the exact
+  pushed head for CI and review-thread proof (§24.10). Stop at the independent audit gate.
 - A repair is the single consolidated repair of the candidate: the COMPLETE audit blocker set, by root cause,
   in one change. No finding-by-finding repair, no second repair, and no mutation of a candidate under
   `FIXED_POINT_STOP`; a rejected candidate is re-attempted only through `ROOT_CAUSE_ESCAPE`.

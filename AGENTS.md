@@ -14,10 +14,7 @@
 ## Canonical Workflow
 
 This file is the entrypoint and holds the durable rails. The single canonical active workflow authority is
-`docs/crypto_core/agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`), whose active content is
-`MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`,
-`GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1` and `CODEX_EXECUTOR_QUOTA_FALLBACK_V1`. The host
-adapters (`CLAUDE.md`,
+`docs/crypto_core/agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`). The host adapters (`CLAUDE.md`,
 `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`, `.codex/skills/crypto-core-max-safe/SKILL.md`,
 `.codex/skills/crypto-core-executor-fallback/SKILL.md`)
 and the prompting guides (`docs/crypto_core/model_prompting_guide.md`,
@@ -71,12 +68,7 @@ council and not routable, as a lane, fallback or dependency: GPT-6 Astra (`SUPER
 Codex GPT-5.6 Sol (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_ROUTING`), Claude Fable 5 (`INACTIVE_EXPIRED_RETIRED`),
 Claude Opus 5 (`SUPERSEDED_BY_OPUS_5_5`), Claude Opus 4.8 (`SUPERSEDED_BY_OPUS_5`), and Claude Sonnet 5, Codex
 GPT-5.6 Terra and Codex GPT-5.6 Luna (`NOT_IN_ACTIVE_COUNCIL`). A superseded lane is never an automatic
-fallback. Host effort labels are literal and never normalized across models or to an API
-effort enum (`HOST_UI_LABELS_ARE_LITERAL`): Claude Opus 5.5 `xhigh` and `max`; GPT-6.1 Sol `Ultra` for protected
-audits, any other label recorded as the selector shows it, and `Ultra` never translated to `max` or back; a Codex
-executor `xhigh` and `max` only, never `ultra` (section 24.12 `CODEX_EXECUTOR_EFFORT_POLICY`). The
-Claude lane requests `xhigh` for ordinary complex implementation and repair and `max` only on an explicitly named
-capability-critical or hardest-correctness-critical trigger (section 24.12).
+fallback. Record literal host labels and apply the selected lane's effort policy in sections 24.3 and 24.12.
 
 Every serious routed task reports `MODEL_REQUESTED`, `MODEL_ID_REQUIRED`, `MODEL_ACTUAL`,
 `MODEL_EFFORT_REQUESTED`, `MODEL_EFFORT_ACTUAL`, `MODEL_FALLBACK`, `THINKING_ACTUAL`,

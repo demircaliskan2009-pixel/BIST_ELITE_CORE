@@ -73,12 +73,10 @@ A stop at any of these steps did no substantive work and consumes no specialist 
 - Deliver the prompt's whole semantic boundary (implementation) or the COMPLETE audited blocker set by root cause in
   one change (repair) inside the allowed files, as the largest safe semantic closure. When a materially better
   design needs scope expansion, report it and stop before mutating.
-- Validate one command at a time: scoped Ruff; targeted pytest through `scripts/crypto_core/run_logged_command.ps1`;
-  the full suite only through `scripts/crypto_core/run_full_tests_logged.ps1` (`PYTEST_EXIT=0` is authoritative);
-  `git diff --check`; exact changed-file proof.
-- Publish with exact-path `git add`, one commit (or the one same-branch repair commit), a normal push of the topic
-  branch, one PR for an implementation, and natural CI to a terminal state; pending is `NOT_READY`. Then stop at the
-  audit gate.
+- Run the applicable AGENTS.md validation ladder one command at a time. For docs-only work prove the exact paths
+  and run `git diff --check`, plus checks required by the changed surface.
+- Publish with exact-path staging, one scoped commit and a normal topic-branch push. Open one PR for an
+  implementation. Hand the controller the exact head and local proof for the CI and thread gate (section 24.10).
 - Stage boundary: never hand this stage to another executor, and never continue a stage another executor started
   unless the controller's prompt names that continuation and its exact starting state.
 - `INTERRUPTED_STAGE` (section 24.3): if this session loses quota or availability after substantive work, stop
