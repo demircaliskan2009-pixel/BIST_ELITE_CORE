@@ -701,3 +701,11 @@ pending, and it adds no policy artifact, approval-table entry or admission path.
   every entry. REAL_PAPER_EXECUTION stays BLOCKED. Every trade, policy and reading in the tests is synthetic;
 - pending: the KD-7 100-trade bootstrap (n_w = 100 stays BLOCKED); HC-16a, HC-16c and HC-16d; incubation (companion
   items 1.4–1.8); FCD-17 and H^(e); M1; D1; risk-policy production approval; C1-C9; DEC-1; and Stage-4.
+
+## 18. S1 paper incubation — doctrine adoption candidate (decision of 2026-11-21)
+
+The [S1 paper incubation adoption record](s1_paper_incubation_doctrine_adoption_v1.md) gives the forward-only
+disposition of companion items 1.4–1.8 under human decision packet r1. Its adoption conditions govern when the
+methodology takes effect. RECORD A supplies the U5 class-completion boundary. Section 17 describes the existing
+executable behavior. Separate policy artifacts, individual record approval and product construction are still
+required. REAL_PAPER_EXECUTION and Stage-4 remain blocked.
