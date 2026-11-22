@@ -9,7 +9,8 @@ never what the current state is.
 1. `AGENTS.md` — entrypoint and durable rails.
 2. `docs/crypto_core/agent_workflow.md` section 24 — the canonical active kernel.
 3. The relevant host adapter: `CLAUDE.md` + `.claude/skills/crypto-core-token-efficient-loop/SKILL.md` for
-   Claude, `.codex/skills/crypto-core-max-safe/SKILL.md` for Codex.
+   Claude, `.codex/skills/crypto-core-executor-fallback/SKILL.md` for a routed Codex writer, or
+   `.codex/skills/crypto-core-max-safe/SKILL.md` for an independent Codex audit (§24.7).
 4. This index.
 5. The latest accepted bounded handoff or continuity pointer, if one exists (below).
 6. Fresh local repository proof and live GitHub proof.

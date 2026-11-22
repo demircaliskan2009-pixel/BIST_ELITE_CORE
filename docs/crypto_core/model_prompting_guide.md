@@ -108,7 +108,9 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 
 ### 2.5 GPT-6.2 Astra — conditional whole-stage executor
 
-- **Prompt:** supply the same complete contract and validation, plus the §24.3 A–G controller record inside
+- **Prompt:** name the dependency chain, financial or authority boundary, and the negative case that would
+  expose a broken link. For difficult repairs, supply the complete blocker set and require root-cause and
+  regression evidence. Supply the same complete contract and validation, plus the §24.3 A–G controller record inside
   `MODEL_RUNTIME_PROOF`. For a CLI writer, name the literal config option and require proof this execution
   accepted it. For desktop, name the actual selector label and the §24.12 evidence path. Ask for the writer's
   separate session and checkout proof, then a scoped commit and exact-head handoff where authorized.
@@ -139,13 +141,16 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 
 ### Evaluation profiles outside the council
 
-These are questions for evaluating a future capability change. They dispatch no agent and grant no repository,
-implementation or audit role. Any adoption requires separate evidence and independent acceptance under §24.
+The controller may use these profiles to design a separate evaluation under §24.3. Each uses the same twelve
+fields. Name fixed inputs, a verifiable outcome and allowed tools. These examples grant no candidate role.
+Effort and speed for an evaluation must be supported on the exact host, with the selected literals and
+runtime/thinking evidence reported separately. A prospective profile cannot authorize an evaluation run.
 
-| Model | Bounded evaluation question |
+| Model and question | What to put in the prompt |
 |---|---|
-| GPT-6.1 Terra (`gpt-6.1-terra`) | On a fixed example with a known answer, does it identify the required evidence and flag missing inputs? Compare the output with the expected result and record omissions. |
-| GPT-6.2 Sol (`gpt-6.2-sol`) | On a fixed historical example, does it distinguish material findings from unsupported concerns? Compare with an independently established answer. The result cannot satisfy a candidate audit. |
+| GPT-6.2 Sol (`gpt-6.2-sol`), bounded implementation or repair | Use a non-protected historical fixture, explicit acceptance criteria, finite dependencies and a complete validation ladder. Ask for the smallest sufficient tool reads and one checked result. Compare total work through independent acceptance with the usual writer. Exclude open-ended architecture and financial trust boundaries. |
+| GPT-6.2 Sol, independent non-protected audit | Use a different fixture with independently established material defects and clean paths. Withhold the answer key. Request one fresh-context, read-only whole-contract verdict with evidence for every blocker. Score misses and false findings, exclude every implementing/repairing ID, and examine shared-family misses. The production audit remains with §24.4. |
+| GPT-6.1 Terra (`gpt-6.1-terra`), mechanical or visual evidence | Supply an exact image or UI state, permitted observations/actions, expected output and independently checkable reference. Require a stop on ambiguous or missing inputs. Keep ordinary GitHub verification with the controller. Exclude repository writing, governance and audit. |
 
 ### 2.7 Superseded lanes
 
@@ -153,8 +158,8 @@ GPT-6 Astra (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT`) and Codex GPT-5.6 Sol
 (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_ROUTING`) are no crypto_core lane, default, fallback or dependency, and their
 dated records are HISTORICAL. GPT-6.2 Astra (`gpt-6.2-astra`) is a different model id, routable only as the
 conditional executor of section 2.5. The change that introduces GPT-6.1 Sol is accepted by the final legacy GPT-6
-Astra audit under the plane before it (section 24.14 `GPT61_SOL_AUDIT_TRANSITION`); no other Astra or GPT-5.6 Sol
-prompt is written.
+Astra audit under its accepted base (section 24.14 `GPT61_SOL_AUDIT_TRANSITION`). Neither superseded model ID
+receives a new audit prompt.
 
 ## 3. Shared serious prompt
 
@@ -177,6 +182,9 @@ HANDOFF: <§24.6 packet, specialist count and one next safe action>
 
 - **Conditional implementation or repair:** under `MODEL_RUNTIME_PROOF` give the stage-specific A–G record,
   including F's basis. Ask for both that source and the actual pre-mutation proof in `HANDOFF`.
+- **External decision:** put the §24.5 `APPROVAL_SOURCE_PACKET` in `STATE_PIN` and carry it into `HANDOFF`.
+  Keep the direct grant and its limits in `GITHUB_AUTHORIZATION`. Link the exact accessible source to avoid
+  replaying the surrounding conversation.
 - **Audit:** place the §24.4 packet's check/thread snapshot in `STATE_PIN` and known findings in
   `BLOCKER_INVENTORY`. Request the complete material P1/P2 set in one read-only pass.
 - **Consolidated repair:** supply that entire blocker set with the expected regression proof per defect.
