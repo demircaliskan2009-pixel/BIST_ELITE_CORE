@@ -684,7 +684,9 @@ of 24.6, the Sol effort, speed, subagent and telemetry policies of 24.12 and the
 interrupted-stage rules of 24.3, the independence sentence of 24.4, the executor handoff fields of 24.6, the executor
 adapter of 24.7, the budget wording of 24.8, `CODEX_EXECUTOR_EFFORT_POLICY` of 24.12 and the transition rule of
 24.14), and by `CRYPTO_CORE_AGENT_OS_HOST_AND_WORKFLOW_CLOSURE_V1` (stage authorization and host evidence in
-24.3 and 24.12, controller and writer responsibilities in 24.5, prospective adoption in 24.14). It is the single canonical active authority for how crypto_core
+24.3 and 24.12, controller and writer responsibilities in 24.5, prospective adoption in 24.14). The prospective
+`CRYPTO_CORE_AGENT_OS_FINAL_EFFICIENCY_AND_MODEL_ROUTING_V1` amendment covers stage selection (24.3), approval
+provenance and remote closeout (24.4–24.6), subject to its own 24.14 transition. This section governs how crypto_core
 development work is routed, sized, audited, repaired, stopped and resumed. Sections 1-19 bind where they agree
 with it; on any conflict this section wins, and between safety rules the stricter rule wins. Sections 20-23 are
 HISTORICAL/SUPERSEDED. The kernel governs only the operational workflow needed to develop crypto_core safely
@@ -774,6 +776,48 @@ everywhere (24.12).
   can close a complete bounded stage and its validation. No Sol-family model id (`gpt-6.1-sol` or any other GPT Sol
   id) is ever a Codex executor. GPT-6.2 Astra is a different model id from GPT-6 Astra (`gpt-6-astra`), which stays
   `SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT` and outside the council.
+
+**Controller stage selection.** Apply these decisions in order at the stage boundary. Record the decision in
+the existing prompt fields (24.6).
+
+1. Identify the semantic contract, task intent, protected triggers (24.4), exact pin, approvals and allowed
+   actions. Keep GitHub evidence collection with the controller. Bind every prospective audit to the set of
+   model IDs that implemented or repaired this candidate. An unresolved classification or missing authority
+   stops the dependent stage.
+2. For an audit, apply independence before availability (24.4). Route protected work only to `gpt-6.1-sol`
+   at literal `Ultra`. If unavailable, hold the protected audit on its exact head. For non-protected work use
+   the existing primary and recorded last-resort path in 24.4. Distinct Sol IDs confer no rights on one another.
+3. For implementation or the one repair, use Claude when available and feasible. Only gate A evidence for
+   this stage permits consideration of the adopted Codex executor. Unknown Claude availability goes back to
+   the controller. Price, a host listing or a preference cannot trigger fallback.
+4. Match the entire stage to an adopted role. Check its dependencies, trust boundaries, host, validation
+   access, known quota/context constraints and separate eligible auditor against A–G as applicable. A bounded
+   edit still has to pass the complete validation ladder for its scope. A known shortfall blocks dispatch.
+   Among equally qualified, authorized choices within the same routing priority, prefer the one with better
+   observed usage per independently accepted comparable contract, including interruptions, repairs and
+   re-audits. Keep API price, subscription allowance, credits and observed usage separate. With no comparable
+   evidence, retain the accepted priority and record usage benefit as unproven. An unresolved tie with no
+   adopted order returns to the controller before dispatch.
+5. The controller fixes one exact ID before substantive execution. The executing host confirms 24.12 and its
+   local preconditions. An unmet gate returns to the controller. An interruption after work starts follows
+   `INTERRUPTED_STAGE` below and retains the consumed slot.
+
+**Prospective roles.** `gpt-6.2-sol` for bounded **non-protected** implementation or its one repair is
+`CONDITIONALLY_ELIGIBLE_PENDING_RUNTIME`: a qualification candidate with no dispatch authority. Its
+non-protected audit profile and the `gpt-6.1-terra` mechanical/visual profile are `EVALUATION_ONLY`:
+questions for separately authorized evaluation on fixed examples outside a candidate lifecycle.
+`REJECTED` excludes a role from consideration on the evidence reviewed. `ADOPTED_PROSPECTIVE` describes a
+role expressly approved for future stages, routable only after the complete 24.14 transition and subject
+to every stage gate. These labels grant no permissions.
+
+Changing an executor or audit role requires a separate prospective controller adoption decision and protected
+control-plane amendment. For the exact proposed ID and role, supply attributable host selection, supported
+effort and speed, actual runtime and thinking, and a representative whole-stage result with independent
+correctness and validation evidence. Compare end-to-end usage and completion risk against the accepted lane.
+For an audit role, test detection of known material defects and false findings. Evaluate family-correlated
+errors separately from the absolute same-ID exclusion. Any future Sol executor requires an explicit bounded
+exception to the Sol-family prohibition. This amendment proposes no such exception.
+
 - `EXECUTOR_EVIDENCE_KINDS` — the host supplies selection and capability (`HOST_CAPABILITY_EVIDENCE`). The
   executing session supplies raw model, thinking and effort (`EXECUTION_IDENTITY_EVIDENCE`). The controller
   authorizes one stage prospectively (`CONTROLLER_AUTHORIZATION`). The assigned writer confirms runtime,
@@ -921,6 +965,7 @@ everywhere (24.12).
   allowance — an audit is never narrowed, shortened or fragmented to save usage — and a prompt is never inflated to
   consume it.
   - `SOL_AUDIT_PREFLIGHT_PACKET` — before every Sol audit or re-audit the controller supplies, as governance (24.8):
+    the applicable external decision and approval evidence under `APPROVAL_SOURCE_PACKET` (24.5),
     the PR number, base SHA, head SHA, head tree when known, changed files, the semantic boundary, the
     required-check snapshot, the review-thread snapshot, the known P1/P2 identities and, for a re-audit, the old
     head and the previous audit's blocker identities. These values travel inside the canonical serious-prompt
@@ -928,6 +973,9 @@ everywhere (24.12).
     `SEMANTIC_BOUNDARY`, the known and previous blocker identities in `BLOCKER_INVENTORY` — never as a separate,
     reordered block. The auditor re-proves its exact head, changed scope and required checks once; it does not poll
     CI, rediscover the PR, enumerate unrelated history, replay chat history or reread every repository document.
+    A stale base/head or missing, pending or failed required exact-head CI/CodeQL returns to the controller
+    before substantive audit. A verdict missing the complete material P1/P2 inventory cannot support
+    acceptance or dispatch of the one consolidated repair.
   - Read scope — the whole declared semantic contract, approached from the exact changed files, their direct
     authority, their immediate load-bearing dependencies and the exact-head tests and CI, with targeted
     adversarial probes for material trust questions. It widens only where a concrete material concern requires it,
@@ -971,9 +1019,34 @@ steps are controller governance and consume no specialist prompt (24.8).
 The writer proves its local checkout, changed scope, validation, commit/tree and clean status at handoff.
 The controller supplies the live GitHub state, polls CI and CodeQL to terminal, collects reviews and threads,
 and refreshes the exact-head merge preflight (section 7). After the authorized mechanical standard merge,
-it verifies the remote PR, merge commit and resulting main (section 12). An executor may diagnose a named CI
-failure from that evidence. Specialists reuse current pinned snapshots and surface contradictions. The auditor
-still independently re-proves its exact head, scope and required checks once (24.4).
+it verifies the merged PR, the merge commit's ordered parents against the authorized base/head and its
+tree against the accepted head tree at that base. Verify the resulting main SHA/tree, required post-merge
+checks on that SHA, source-branch preservation where required, and open-PR count. Incomplete proof keeps
+closeout pending. Use the existing GitHub connector or `gh` for the exact evidence, including pagination or
+check runs the available connector view omits. Bind an authorized merge to the expected head. Ready-for-review
+and merge each require authority for that action. A tool's Always Allow setting grants no publication,
+merge, capital or governance authority.
+
+Keep local validation and checkout hygiene attributable to the executing host. For a Markdown-only stage,
+the local ladder in sections 5–6 uses exact changed paths, `git diff --check`, applicable existing setup
+checks and semantic checks of touched rules, references and negative cases. Product implementation and
+repair keep the full validation obligations in sections 5–6. Required remote CI and CodeQL still apply. A writer may diagnose a named failure
+from the controller's evidence. The auditor independently re-proves its head, scope and checks once (24.4).
+
+**`APPROVAL_SOURCE_PACKET`.** When a task depends on an external human decision, the controller puts the
+complete exact decision text or an authenticated, revision-bound source accessible to the recipient in
+`STATE_PIN`. Include revision, scope, source type and provenance, the direct approval statement, attributable
+human actor and the exact scope approved. Give observation and approval times when known. Mark unavailable
+times, signatures and historical digests `UNKNOWN`. An unknown optional historical detail does not invalidate
+an otherwise attributable decision unless that detail is required for the gate. In `GITHUB_AUTHORIZATION`
+state only the actions actually granted. A methodology approval grants no publication or merge permission.
+
+Keep the human statement distinct from controller interpretation, attributed host observations, fresh runtime
+proof, GitHub/CI evidence, accepted repository authority and implementer claims. Carry the same source into
+the existing handoff and the independent audit preflight (24.4). A candidate may cite its authority but cannot
+supply that authority by asserting its own adoption. If the original decision or direct approval is missing,
+inaccessible, superseded or inconsistent with the requested scope, stop before dependent mutation or
+substantive audit. The controller resolves the source and revision before resumption.
 
 ### 24.6 SERIOUS_PROMPT_COMPILER and AGENT_OS_HANDOFF_V1
 
@@ -1268,6 +1341,16 @@ a CI gate) and holds no authority. Its lane-set and role-keyword assertions pred
 it never overrides this section.
 
 ### 24.14 SETUP_FREEZE and PRODUCT_DEFAULT
+
+The reopening reason for `CRYPTO_CORE_AGENT_OS_FINAL_EFFICIENCY_AND_MODEL_ROUTING_V1` is
+`MATERIAL_CAPABILITY_CHANGE`. Its introduction is governed by
+accepted-base section 24 and its host adapters. Its rules apply only to later stages after independent
+protected `gpt-6.1-sol` acceptance at literal `Ultra`, terminal required CI and CodeQL at the accepted head,
+human authorization naming that PR, exact head and standard merge, the standard merge, and controller
+verification of its remote result (24.5). The controller then synchronizes the external ChatGPT Project
+Instructions with the merged routing, candidate-role limits, approval-source and closeout rules, and
+verifies their use from a fresh context. Only after all these gates may the controller record
+`CLOSED_FROZEN` in the handoff. This transition activates neither candidate model.
 
 `CRYPTO_CORE_AGENT_OS_HOST_AND_WORKFLOW_CLOSURE_V1` applies prospectively after independent protected acceptance
 under accepted-main rules, terminal exact-head CI and CodeQL, explicit exact-head human authorization, standard

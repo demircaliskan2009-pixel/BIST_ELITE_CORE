@@ -106,7 +106,7 @@ Use for the first implementation prompt of a PR lifecycle (meaningful prompt 1).
 TASK_INTENT: IMPLEMENTATION
 SEMANTIC_BOUNDARY: <one coherent contract, closed as the largest safe semantic closure: dependency closure,
   negative cases, tests, docs/provenance genuinely required, validation>
-STATE_PIN: main @ <sha>; clean worktree; <n> open PRs; branch <name> absent
+STATE_PIN: main @ <sha>; clean worktree; <n> open PRs; branch <name> absent; §24.5 approval source if applicable
 MODEL_RUNTIME_PROOF: MODEL_REQUESTED Claude Opus 5.5 | MODEL_ID_REQUIRED claude-opus-5-5 |
   MODEL_EFFORT_REQUESTED <literal host label> | MODEL_FALLBACK PROHIBITED | THINKING ENABLED |
   report MODEL_ACTUAL, MODEL_EFFORT_ACTUAL, THINKING_ACTUAL, MODEL_IDENTITY_EVIDENCE, MODEL_EFFORT_EVIDENCE
@@ -114,11 +114,12 @@ MODEL_RUNTIME_PROOF: MODEL_REQUESTED Claude Opus 5.5 | MODEL_ID_REQUIRED claude-
 ALLOWED_FILES: <exact files>
 INVARIANTS: <fail-closed / digest / paper-only / determinism properties>
 BLOCKER_INVENTORY: <inherited blocker identities, or NONE>
-VALIDATION_MATRIX: python -m ruff check <paths>; python -m ruff format --check <paths>;
-  targeted tests via scripts/crypto_core/run_logged_command.ps1;
-  powershell -File scripts/crypto_core/run_full_tests_logged.ps1 (PYTEST_EXIT=0); git diff --check;
-  exact changed-file proof
-GITHUB_AUTHORIZATION: branch, exact-path stage, one commit, push, one PR AUTHORIZED; merge NOT AUTHORIZED
+VALIDATION_MATRIX: <exact changed files, git diff --check, scope-specific checks under §24.5>
+  <for product changes: scoped Ruff/format, targeted tests via scripts/crypto_core/run_logged_command.ps1,
+  required full suite via scripts/crypto_core/run_full_tests_logged.ps1 with PYTEST_EXIT=0>
+  <for Markdown-only changes: applicable setup checks, affected rules, references and negative cases>
+GITHUB_AUTHORIZATION: <explicit branch, exact-path stage, commit, push and PR grants, including draft status>;
+  merge NOT AUTHORIZED
 FORBIDDEN: scope widening; product surfaces outside scope; direct main push; force-push; broad git add;
   self-approval; auto-merge; live/private API; orders; scheduler; BIST
 STOP_CONDITIONS: runtime-proof failure; dirty tree; head mismatch; open-PR collision; out-of-scope failure;
@@ -135,7 +136,7 @@ Never for a candidate under `FIXED_POINT_STOP`, never for a second repair, never
 TASK_INTENT: REPAIR (the ONE consolidated repair of this candidate)
 SEMANTIC_BOUNDARY: repair the complete set by root cause in one change on branch <branch> at head <sha>;
   the original contract is unchanged except for the defects; no opportunistic cleanup
-STATE_PIN: PR <n> OPEN; head <sha> == local == origin; base <sha>
+STATE_PIN: PR <n> OPEN; head <sha> == local == origin; base <sha>; current §24.5 approval source if applicable
 MODEL_RUNTIME_PROOF: <as 3.1>
 ALLOWED_FILES: <exact files>; no new files unless named
 INVARIANTS: <as 3.1; the original contract's invariants are unchanged by the repair>

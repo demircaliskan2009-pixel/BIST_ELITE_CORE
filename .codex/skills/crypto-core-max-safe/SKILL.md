@@ -69,7 +69,9 @@ the old head and the previous audit's blocker identities. The packet travels ins
 state in `STATE_PIN`, the boundary in `SEMANTIC_BOUNDARY`, blocker identities in `BLOCKER_INVENTORY` — and the
 twelve top-level fields keep their canonical order. Re-prove the exact head, changed scope and required checks
 once. Do not poll CI, rediscover the PR, enumerate unrelated history, replay chat history or reread every
-repository document. Implementer conclusions are never audit premises.
+repository document. When human authority comes from outside the repository, verify the `APPROVAL_SOURCE_PACKET`
+(§24.5) against its original decision and direct approval before substantive review. An inaccessible source or
+candidate-only adoption claim returns to the controller at preflight. Implementer conclusions are never audit premises.
 
 ## Audit contract (section 24.4)
 

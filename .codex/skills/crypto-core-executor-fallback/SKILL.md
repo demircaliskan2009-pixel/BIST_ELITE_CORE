@@ -54,9 +54,10 @@ in §24.12. An executor `Ultra` selection or execution always stops.
 - Deliver the prompt's whole semantic boundary (implementation) or the COMPLETE audited blocker set by root cause in
   one change (repair) inside the allowed files, as the largest safe semantic closure. When a materially better
   design needs scope expansion, report it and stop before mutating.
-- Validate one command at a time: scoped Ruff; targeted pytest through `scripts/crypto_core/run_logged_command.ps1`;
-  the full suite only through `scripts/crypto_core/run_full_tests_logged.ps1` (`PYTEST_EXIT=0` is authoritative);
-  `git diff --check`; exact changed-file proof.
+- Use the stage's validation matrix (§24.5), one command at a time. Markdown-only changes prove exact scope,
+  whitespace, applicable setup checks and affected rules. For product changes use scoped Ruff, targeted pytest
+  through `scripts/crypto_core/run_logged_command.ps1`, and the full suite when required only through
+  `scripts/crypto_core/run_full_tests_logged.ps1` (`PYTEST_EXIT=0`). Verify exact scope and `git diff --check`.
 - Publish with exact-path `git add`, one commit (or the one same-branch repair commit), a normal push of the topic
   branch, one PR for an implementation, and hand off the exact head, tree and clean local status. The controller verifies CI, CodeQL and reviews before the audit.
 - Stage boundary: never hand this stage to another executor, and never continue a stage another executor started

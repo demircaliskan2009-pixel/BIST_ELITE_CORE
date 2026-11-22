@@ -79,7 +79,7 @@ safe work: git state, clean tree, branch, and test results.
 
 - Deliver the prompt's whole semantic boundary as the largest safe semantic closure (section 24.8) inside the
   allowed files; when a materially better design needs scope expansion, report it and stop before mutating.
-- One implementation prompt does the whole arc (precheck → reads → patch → targeted + logged-full validation
+- One implementation prompt does the whole arc (precheck → reads → patch → scope-specific validation under section 24.5
   → scoped commit → push → one PR → exact-head handoff for controller CI and review checks), then stops at the audit gate. Never
   merge; never start the next feature; never combine unrelated slices; never mix setup and product.
 - A repair is the single consolidated repair of the candidate: the COMPLETE audit blocker set, by root cause,
