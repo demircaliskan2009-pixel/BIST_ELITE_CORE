@@ -709,3 +709,13 @@ disposition of companion items 1.4–1.8 under human decision packet r1. Its ado
 methodology takes effect. RECORD A supplies the U5 class-completion boundary. Section 17 describes the existing
 executable behavior. Separate policy artifacts, individual record approval and product construction are still
 required. REAL_PAPER_EXECUTION and Stage-4 remain blocked.
+
+## 19. S1 incubation authority registry — doctrine adoption candidate (decision of 2026-11-22)
+
+The [S1 incubation authority registry adoption record](s1_incubation_authority_registry_doctrine_adoption_v1.md) records
+human decision `HD-INC-AUTH-1` revision `r2`. It names one versioned registry as the positive authority index for
+`PAPER_INCUBATION_RECORD_V1`. A row, digest or label never proves an approver, a complete revocation view or
+currentness on its own. Without qualified per-decision currentness, revocation-completeness and temporal provenance
+bases, production `ACTIVE` stays unreachable and every incubation entry refuses. Its adoption conditions govern when it
+takes effect. The registry, the policy artifact, every record approval and product construction
+(`S1_PAPER_INCUBATION_RECORD_V1_CONSTRUCTION`) remain separate. REAL_PAPER_EXECUTION and Stage-4 remain blocked.
