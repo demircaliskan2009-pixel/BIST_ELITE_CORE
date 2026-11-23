@@ -16,17 +16,21 @@ a per-decision currentness basis (A6). No qualified source of any of them exists
 and production ACTIVE is unreachable; the test-only registry admits ``TEST_ONLY_SYNTHETIC`` bases only. A missing row never
 proves non-revocation (A5): without a complete revocation view no record is ACTIVE.
 
-Lifecycle at an instant (pre-decision view; the first final transition is permanent):
+Lifecycle at an instant (pre-decision view; the first final transition is permanent). Knowledge is point-in-time: the record
+is known only from its approval row's publication ``P``, so every instant before ``P`` keeps the exact no-record state (a
+later row never rewrites an earlier decision or prefix) and no final transition lies before ``P``:
 
 * ``TERMINATED`` (final): a verification failure of the record (digest, schema, lineage, edge, validation, coverage, bounds,
   approval before the start, horizon), a second approval for the same lineage-edge key (both records, from the later
-  publication) or a ``VALIDATION_NOT_CURRENT`` end: a PROVEN loss of currentness;
+  publication) or a ``VALIDATION_NOT_CURRENT`` end, from its effective instant: a PROVEN loss of currentness;
 * ``REVOKED`` (final): a ``REVOKED`` end, from its effective instant;
 * ``EXPIRED_HOLD`` (final): the end ``X = min(S + T_max, G + H)``, or the admission of the 21st attempt, with a selected
   reading still covered;
 * ``GRADUATED`` (final): every selected reading's coverage ended before the bound;
-* ``NOT_ESTABLISHED``: no approval row yet, before ``max(S, P)``, the policy not admitted, a missing authority basis or a known
-  ``ADVERSE_SIGNAL`` end. This is UNKNOWN currentness or authority: BLOCKED/HOLD with no ACTIVE basis, never final by itself;
+* ``NOT_ESTABLISHED``: no approval row yet, before ``max(S, P)``, the policy not admitted, a missing authority basis, or any
+  KNOWN end row of the record (``ADVERSE_SIGNAL``, or a ``REVOKED``/``VALIDATION_NOT_CURRENT`` end before its effective
+  instant), from that row's publication. This is UNKNOWN currentness or authority: BLOCKED/HOLD with no ACTIVE basis, never
+  final by itself;
 * ``ACTIVE``: everything else.
 
 Coverage (PRDV4 §1.21; the adoption record's reading O1 and PIT-5). U5 is covered while the known closed trades hold no win
@@ -34,7 +38,8 @@ or no loss (RECORD A), and is BLOCKED while a closed trade is not yet known. U3 
 has sent no order of any kind: every order definition then counts zero, and after it the count depends on the pending
 HC-14a/HC-14b method. U1 and U2 are never covered while the FCD-13 method is pending (a method choice is never absence).
 An attempt is an entry admitted on the incubation basis, counted at admission whether or not it fills. No permission
-survives the end: the incubation fill windows end at the first final instant, which includes the 21st admission.
+survives the end: the incubation fill windows end at the first final instant, which includes the 21st admission, or at the
+publication of the first known end row of the record, whichever is earlier.
 
 Nothing here approves a record, a policy or a value, or creates an approval-table or registry entry, an order or capital.
 """
@@ -107,8 +112,9 @@ class GovernedPaperIncubationRowKind(str, Enum):
 
 
 class GovernedPaperIncubationEndCause(str, Enum):
-    """REVOKED is final REVOKED; VALIDATION_NOT_CURRENT is a proven loss (final TERMINATED); ADVERSE_SIGNAL blocks every
-    new incubation entry from its instant without proving a loss (O1: no ACTIVE basis, not final by itself)."""
+    """Every end blocks the record from its publication (no ACTIVE basis, no new incubation entry, no fill authority).
+    REVOKED is then final REVOKED and VALIDATION_NOT_CURRENT a proven loss (final TERMINATED), each from its effective
+    instant; ADVERSE_SIGNAL proves no loss (O1: never final by itself)."""
 
     REVOKED = "REVOKED"
     VALIDATION_NOT_CURRENT = "VALIDATION_NOT_CURRENT"
@@ -319,6 +325,7 @@ class GovernedPaperIncubationEvidence:
     policy_approval_digest: str
     policy_admitted: bool
     record_digest: str
+    record_published_ns: int | None
     start_ns: int | None
     end_ns: int | None
     horizon_ns: int
@@ -843,14 +850,21 @@ def governed_paper_incubation_projection_digest(
 
 @dataclass(frozen=True)
 class _View:
-    """One lineage-edge key's registry view up to the horizon, verified once."""
+    """One lineage-edge key's registry view up to the horizon, verified once. The record is known from its approval's
+    publication ``P`` only: before ``P`` every instant sees the exact no-record state, and no final transition, end signal
+    or block lies before ``P``. ``block`` is the first instant (and reason) at which an end row of the record is KNOWN:
+    from its publication it removes every positive incubation basis, while a REVOKED or VALIDATION_NOT_CURRENT row
+    becomes final only at its effective instant (``finals``)."""
 
     record: GovernedPaperIncubationRecord | None
     approval_row: GovernedPaperIncubationRow | None
     end_ns: int | None
     finals: tuple[tuple[int, int, GovernedPaperIncubationState, str], ...]
-    adverse_at_ns: int | None
+    block: tuple[int, str] | None
     bases: tuple[GovernedPaperIncubationBasis, ...]
+
+    def known_at(self, time_ns: int) -> bool:
+        return self.approval_row is not None and self.approval_row.published_at_ns <= time_ns
 
 
 def _view(
@@ -872,11 +886,12 @@ def _view(
         return _View(None, None, None, (), None, ())
     first = approvals[0]
     record = first.record
+    known = first.published_at_ns  # P: nothing about the record is knowledge before its approval's publication
     finals: list[tuple[int, int, GovernedPaperIncubationState, str]] = []
     terminated = _RANK[GovernedPaperIncubationState.TERMINATED]
     failures = _record_failures(record, first, authority, policy)  # type: ignore[arg-type]
     if failures:
-        finals.append((first.published_at_ns, terminated, GovernedPaperIncubationState.TERMINATED, failures[0]))
+        finals.append((known, terminated, GovernedPaperIncubationState.TERMINATED, failures[0]))
     if len(approvals) > 1:  # a second approved record for the same key terminates both, from its publication
         finals.append(
             (
@@ -886,26 +901,30 @@ def _view(
                 "incubation_duplicate_record",
             )
         )
-    adverse: int | None = None
+    blocks: list[tuple[int, str]] = []
     for row in rows:
         if row.row_kind is not GovernedPaperIncubationRowKind.RECORD_END or row.record_digest != first.record_digest:
             continue
-        at = row.effective_at_ns
+        # knowledge time: the signal is known at its publication (never before P) and blocks from then on
+        published = max(row.published_at_ns, known)
+        effective = max(row.effective_at_ns, known)  # type: ignore[type-var]
         if row.end_cause is GovernedPaperIncubationEndCause.REVOKED:
+            blocks.append((published, "incubation_revocation_known"))
             finals.append(
                 (
-                    at,
+                    effective,
                     _RANK[GovernedPaperIncubationState.REVOKED],
                     GovernedPaperIncubationState.REVOKED,
                     "incubation_revoked",
                 )
             )  # type: ignore[arg-type]
         elif row.end_cause is GovernedPaperIncubationEndCause.VALIDATION_NOT_CURRENT:
+            blocks.append((published, "incubation_validation_loss_known"))
             finals.append(
-                (at, terminated, GovernedPaperIncubationState.TERMINATED, "incubation_validation_not_current")
+                (effective, terminated, GovernedPaperIncubationState.TERMINATED, "incubation_validation_not_current")
             )  # type: ignore[arg-type]
-        else:
-            adverse = at if adverse is None else min(adverse, at)  # type: ignore[type-var]
+        else:  # never final by itself (O1)
+            blocks.append((published, "incubation_adverse_signal_known"))
     end_ns: int | None = None
     if not failures:
         end_ns = min(
@@ -913,7 +932,7 @@ def _view(
             genesis.genesis_start_ns + genesis.bootstrap_horizon_days * _DAY_NS,
         )
     bases = tuple(basis for basis in registry.bases if basis.record_digest == first.record_digest)
-    return _View(record, first, end_ns, tuple(sorted(finals)), adverse, bases)
+    return _View(record, first, end_ns, tuple(sorted(finals)), min(blocks) if blocks else None, bases)
 
 
 def _class_completion_ns(kelly: GovernedPaperKellyEvidence | None) -> int | None:
@@ -951,20 +970,21 @@ def _first_final(
 ) -> tuple[int, int, GovernedPaperIncubationState, str] | None:
     events = [item for item in view.finals if item[0] <= time_ns]
     record = view.record
-    if view.end_ns is not None and record is not None:
-        if graduated_ns is not None and graduated_ns < view.end_ns and graduated_ns <= time_ns:
+    if view.end_ns is not None and record is not None and view.approval_row is not None:
+        known = view.approval_row.published_at_ns  # never final before the record is known (no retroactive end)
+        if graduated_ns is not None and graduated_ns < view.end_ns and max(graduated_ns, known) <= time_ns:
             events.append(
                 (
-                    graduated_ns,
+                    max(graduated_ns, known),
                     _RANK[GovernedPaperIncubationState.GRADUATED],
                     GovernedPaperIncubationState.GRADUATED,
                     "incubation_graduated",
                 )
             )
-        if view.end_ns <= time_ns:
+        if max(view.end_ns, known) <= time_ns:
             events.append(
                 (
-                    view.end_ns,
+                    max(view.end_ns, known),
                     _RANK[GovernedPaperIncubationState.EXPIRED_HOLD],
                     GovernedPaperIncubationState.EXPIRED_HOLD,
                     "incubation_expired",
@@ -1081,7 +1101,7 @@ def derive_governed_paper_incubation_evidence(  # noqa: C901, PLR0913, PLR0915 -
     results: list[GovernedPaperIncubationDecision] = []
     for sequence, instant, increasing in items:
         final = _first_final(view, instant, graduated_ns, exhausted_ns)
-        record = view.record
+        record = view.record if view.known_at(instant) else None  # publication-visible only: the past never changes
         if final is not None:
             state, reason = final[2], final[3]
         elif admission_reason:
@@ -1093,8 +1113,8 @@ def derive_governed_paper_incubation_evidence(  # noqa: C901, PLR0913, PLR0915 -
             state, reason = GovernedPaperIncubationState.NOT_ESTABLISHED, "incubation_record_absent"
         elif instant < max(record.start_ns, view.approval_row.published_at_ns):
             state, reason = GovernedPaperIncubationState.NOT_ESTABLISHED, "incubation_not_started"
-        elif view.adverse_at_ns is not None and view.adverse_at_ns <= instant:
-            state, reason = GovernedPaperIncubationState.NOT_ESTABLISHED, "incubation_adverse_signal_known"
+        elif view.block is not None and view.block[0] <= instant:  # a known end signal, before any final transition
+            state, reason = GovernedPaperIncubationState.NOT_ESTABLISHED, view.block[1]
         elif attempts >= policy.attempt_bound:  # a later decision at the instant of the final admitted attempt
             state, reason = GovernedPaperIncubationState.EXPIRED_HOLD, "incubation_attempts_exhausted"
         else:
@@ -1140,8 +1160,8 @@ def derive_governed_paper_incubation_evidence(  # noqa: C901, PLR0913, PLR0915 -
     if record is not None and view.approval_row is not None and view.end_ns is not None and not admission_reason:
         start = max(record.start_ns, view.approval_row.published_at_ns)
         end = view.end_ns if final is None else min(view.end_ns, final[0])
-        if view.adverse_at_ns is not None:
-            end = min(end, view.adverse_at_ns)
+        if view.block is not None:  # no fill authority survives a known end signal, whatever its effective instant
+            end = min(end, view.block[0])
         # the fill basis survives only where every r2 basis covers the instant (re-checked at fill, A3-A6)
         for kind in GovernedPaperIncubationBasisKind:
             spans = [(b.valid_from_ns, b.valid_until_ns) for b in view.bases if b.basis_kind is kind]
@@ -1165,6 +1185,7 @@ def derive_governed_paper_incubation_evidence(  # noqa: C901, PLR0913, PLR0915 -
         policy_approval_digest="" if context.policy_approval is None else context.policy_approval.approval_digest,
         policy_admitted=not admission_reason,
         record_digest="" if view.approval_row is None else view.approval_row.record_digest,
+        record_published_ns=None if view.approval_row is None else view.approval_row.published_at_ns,
         start_ns=None if record is None else record.start_ns,
         end_ns=view.end_ns,
         horizon_ns=horizon,
@@ -1190,19 +1211,21 @@ def governed_paper_incubation_evidence_to_dict(evidence: GovernedPaperIncubation
 
 
 def governed_paper_incubation_prefix_digest(evidence: GovernedPaperIncubationEvidence, *, before_ns: int) -> str:
-    """The run-independent X1 content before ``before_ns``: the policy, the registry identity, the key's record and every
-    decision before it, with the final transition only once it lies before it. A later seal re-derives it unchanged."""
+    """The run-independent X1 content before ``before_ns``: the policy, the registry identity, the key's record once its
+    approval was published before it, and every decision before it, with the final transition only once it lies before
+    it. A later seal re-derives it unchanged: a row published later never enters an earlier prefix."""
 
     if type(evidence) is not GovernedPaperIncubationEvidence:
         raise _fail("evidence_malformed")
     _instant(before_ns, "prefix_instant")
     final = evidence.final_at_ns is not None and evidence.final_at_ns < before_ns
+    known = evidence.record_published_ns is not None and evidence.record_published_ns < before_ns
     payload = {
         "schema_version": evidence.schema_version,
         "registry_id": evidence.registry_id,
         "policy_digest": evidence.policy_digest,
         "policy_approval_digest": evidence.policy_approval_digest,
-        "record_digest": evidence.record_digest,
+        "record_digest": evidence.record_digest if known else "",
         "decisions": [_to_payload(item) for item in evidence.decisions if item.decision_time_ns < before_ns],
         "final": [evidence.final_state.value, evidence.final_at_ns, evidence.final_reason] if final else None,  # type: ignore[union-attr]
     }

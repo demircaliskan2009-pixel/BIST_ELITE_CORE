@@ -37,10 +37,12 @@ from crypto_core.validation.governed_paper_incubation import (
     GovernedPaperIncubationApprovalKind,
     GovernedPaperIncubationBasisKind,
     GovernedPaperIncubationContext,
+    GovernedPaperIncubationEndCause,
     GovernedPaperIncubationPolicyTable,
     GovernedPaperIncubationRegistry,
     build_governed_paper_incubation_approval_row,
     build_governed_paper_incubation_basis,
+    build_governed_paper_incubation_end_row,
     build_governed_paper_incubation_policy,
     build_governed_paper_incubation_policy_approval,
     governed_paper_incubation_record_for_lineage,
@@ -178,6 +180,36 @@ def active_registry() -> GovernedPaperIncubationRegistry:
     return GovernedPaperIncubationRegistry("test_only", SYNTHETIC, (row,), bases)
 
 
+@functools.cache
+def future_registry() -> GovernedPaperIncubationRegistry:
+    """A TEST-ONLY row for world G's record first published after day 2's seal, at P = S = G + 3 days + 1 ns. World G's
+    30-day bootstrap horizon cannot hold the 91-day bound, so the record terminates, from its publication only; the
+    200-day synthetic horizon of the unit tests proves the same prospective rule for an ACTIVE record."""
+
+    authority = est.run_and_evidence(kr.kelly_days(1)[0])[0]
+    published = authority.genesis.genesis_start_ns + 3 * DAY + 1
+    record = governed_paper_incubation_record_for_lineage(authority, covered=("U3", "U4", "U5"), start_ns=published)
+    row = build_governed_paper_incubation_approval_row(
+        record=record,
+        approval_kind=SYNTHETIC,
+        approver_reference="test-only",
+        approval_time_ns=published,
+        decision_record_digest="a" * 64,
+        published_at_ns=published,
+    )
+    bases = tuple(
+        build_governed_paper_incubation_basis(
+            basis_kind=kind,
+            record_digest=record.record_digest,
+            valid_from_ns=published,
+            valid_until_ns=published + 400 * DAY,
+            basis_reference=f"test-only-{kind.value.lower()}",
+        )
+        for kind in GovernedPaperIncubationBasisKind
+    )
+    return GovernedPaperIncubationRegistry("test_only", SYNTHETIC, (row,), bases)
+
+
 REGISTRIES = {
     "empty": lambda: (EMPTY, TEST_POLICY_TABLE),
     "active": lambda: (active_registry(), TEST_POLICY_TABLE),
@@ -279,6 +311,74 @@ def test_a_backdated_or_removed_row_rewrites_a_sealed_day_and_is_refused() -> No
     active = incubation_days(3, "active")
     with pytest.raises(GovernedPaperExecutionError, match="incubation_registry_rewritten"):
         incubation_day(active, EMPTY)  # the sealed row removed
+
+
+def test_a_row_published_after_the_sealed_days_applies_prospectively_and_rewrites_no_seal() -> None:  # P2-1
+    sealed = incubation_days(3)
+    future = future_registry()
+    (row,) = future.rows
+    day3 = incubation_day(sealed, future)
+    prior, seal = sealed[2].seal, day3.seal
+    assert (seal.schema_version, seal.status, seal.reason_codes) == (V13_SEAL, GovernedPaperDaySealStatus.SEALED, ())
+    # X1: the opening prefix and projection equal the previous closing ones; the row enters only after them
+    assert seal.incubation_prefix_digest_open == prior.incubation_prefix_digest_close
+    assert seal.incubation_projection_digest_open == prior.incubation_projection_digest_close
+    assert seal.incubation_projection_digest_close != prior.incubation_projection_digest_close
+    assert seal.incubation_record_digest == row.record_digest
+    assert seal.incubation_final_state == "TERMINATED"  # from its publication P, inside day 3
+    # every sealed day re-derives byte-identically under the appended registry
+    assert incubation_day(sealed[:2], future).seal == prior
+    with installed(future):
+        assert all(rlt.verified(item).intact for item in sealed)
+    days = (*sealed, day3)
+    evidence, verification = lineage_evidence(days, future)
+    assert (evidence.status, verification.intact, verification.reason_codes) == (
+        GovernedPaperExecutionStatus.READY,
+        True,
+        (),
+    )
+    # a later row published inside the sealed days is still refused
+    backdated = build_governed_paper_incubation_end_row(
+        lineage_genesis_digest=row.lineage_genesis_digest,
+        edge_id=row.edge_id,
+        record_digest=row.record_digest,
+        end_cause=GovernedPaperIncubationEndCause.ADVERSE_SIGNAL,
+        effective_at_ns=row.published_at_ns - DAY,
+        approval_kind=SYNTHETIC,
+        approver_reference="test-only",
+        approval_time_ns=row.published_at_ns - DAY,
+        decision_record_digest="a" * 64,
+        published_at_ns=row.published_at_ns - DAY,
+    )
+    with pytest.raises(GovernedPaperExecutionError, match="incubation_registry_rewritten"):
+        incubation_day(days, replace(future, rows=(backdated, row)))
+
+
+def test_an_end_row_published_after_a_seal_rewrites_no_sealed_day() -> None:  # P2-2
+    sealed = incubation_days(3, "active")
+    active = active_registry()
+    (row,) = active.rows
+    published = row.published_at_ns + 3 * DAY + 1  # known inside day 3, effective a day later
+    signal = build_governed_paper_incubation_end_row(
+        lineage_genesis_digest=row.lineage_genesis_digest,
+        edge_id=row.edge_id,
+        record_digest=row.record_digest,
+        end_cause=GovernedPaperIncubationEndCause.REVOKED,
+        effective_at_ns=published + DAY,
+        approval_kind=SYNTHETIC,
+        approver_reference="test-only",
+        approval_time_ns=published,
+        decision_record_digest="a" * 64,
+        published_at_ns=published,
+    )
+    appended = replace(active, rows=(row, signal))
+    prior, seal = sealed[2].seal, incubation_day(sealed, appended).seal
+    assert (seal.status, seal.reason_codes) == (GovernedPaperDaySealStatus.SEALED, ())
+    assert seal.incubation_prefix_digest_open == prior.incubation_prefix_digest_close
+    assert seal.incubation_projection_digest_open == prior.incubation_projection_digest_close
+    assert seal.incubation_projection_digest_close != prior.incubation_projection_digest_close
+    with installed(appended):
+        assert all(rlt.verified(item).intact for item in sealed)
 
 
 def test_the_incubation_lineage_starts_at_day_0_or_never_and_never_switches() -> None:

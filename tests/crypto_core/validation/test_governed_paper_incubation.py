@@ -156,7 +156,10 @@ def approval_row(item: object, published: int | None = None, approved: int | Non
     )
 
 
-def end_row(item: object, cause: GovernedPaperIncubationEndCause, at: int):  # noqa: ANN201
+def end_row(item: object, cause: GovernedPaperIncubationEndCause, at: int, published: int | None = None):  # noqa: ANN201
+    """An end row effective at ``at`` and published (known) at ``published`` (default: ``at``)."""
+
+    known = at if published is None else published
     return build_governed_paper_incubation_end_row(
         lineage_genesis_digest=item.genesis_digest,  # type: ignore[attr-defined]
         edge_id=item.edge_id,  # type: ignore[attr-defined]
@@ -165,9 +168,9 @@ def end_row(item: object, cause: GovernedPaperIncubationEndCause, at: int):  # n
         effective_at_ns=at,
         approval_kind=SYNTHETIC,
         approver_reference="test-only",
-        approval_time_ns=at,
+        approval_time_ns=known,
         decision_record_digest=DECISION_RECORD,
-        published_at_ns=at,
+        published_at_ns=known,
     )
 
 
@@ -406,6 +409,132 @@ def test_revocation_proven_loss_duplicates_and_adverse_signals_follow_o1_and_fin
         assert [state for state, _ in states(derive(decisions))][-1] == "REVOKED"
     with installed(active_registry(item, (duplicate,))):  # T-INC-15: a second approval terminates the live record
         assert states(derive(decisions))[-1] == ("TERMINATED", "incubation_duplicate_record")
+
+
+def prefix(evidence: object, instant: int) -> str:
+    return governed_paper_incubation_prefix_digest(evidence, before_ns=instant)  # type: ignore[arg-type]
+
+
+def test_a_future_approval_applies_prospectively_and_never_rewrites_an_earlier_decision_or_prefix() -> None:  # P2-1
+    published = g0() + 3 * DAY + 1
+    item = record(start=published)
+    future = registry((approval_row(item, published=published, approved=published),), bases(item))
+    decisions = tuple(
+        (index, instant, True)
+        for index, instant in enumerate((g0() + DAY, g0() + 2 * DAY, published - 1, published, g0() + 4 * DAY), start=1)
+    )
+    with installed(registry()):
+        before = derive(decisions[:3])
+    with installed(future):
+        after = derive(decisions)
+    # before P the exact no-record history: state, reason, readings and Kelly facts unchanged
+    assert after.decisions[:3] == before.decisions
+    assert states(after)[3:] == [("ACTIVE", ""), ("ACTIVE", "")]
+    for instant in (g0() + DAY, g0() + 2 * DAY, g0() + 3 * DAY, published):
+        assert prefix(after, instant) == prefix(before, instant), instant
+    assert prefix(after, published + 1) != prefix(before, published + 1)  # the record enters at its publication
+    assert after.fill_windows == (HistoricalExecutionIncubationWindow(published, published + 91 * DAY),)
+    # a record already past its end X when published is final only from its publication, never retroactively
+    stale = record(start=g0() + DAY)
+    late = g0() + 100 * DAY
+    with installed(registry((approval_row(stale, published=late),), bases(stale))):
+        evidence = derive(((1, g0() + 50 * DAY, True), (2, late, True)))
+    assert states(evidence) == [("NOT_ESTABLISHED", "incubation_record_absent"), ("EXPIRED_HOLD", "incubation_expired")]
+    assert (evidence.final_state, evidence.final_at_ns) == (GovernedPaperIncubationState.EXPIRED_HOLD, late)
+    # an end row published before the approval it names takes effect no earlier than that approval's publication
+    later = record(start=g0() + 20 * DAY)
+    early_end = end_row(later, GovernedPaperIncubationEndCause.REVOKED, g0() + 10 * DAY)
+    with installed(registry((early_end, approval_row(later, published=g0() + 20 * DAY)), bases(later))):
+        evidence = derive(((1, g0() + 15 * DAY, True), (2, g0() + 20 * DAY, True)))
+    assert states(evidence) == [("NOT_ESTABLISHED", "incubation_record_absent"), ("REVOKED", "incubation_revoked")]
+    assert evidence.final_at_ns == g0() + 20 * DAY
+
+
+def test_a_known_signal_blocks_from_its_publication_and_finality_waits_for_its_effective_instant() -> None:  # P2-2
+    item = record()
+    t = item.start_ns
+    known, effective = t + 3 * DAY, t + 4 * DAY
+    instants = (known - 1, known, known + 10, effective - 1, effective, effective + 1)
+    decisions = tuple((index, instant, True) for index, instant in enumerate(instants, start=1))
+    with installed(active_registry(item)):
+        baseline = derive(decisions)
+    assert [state for state, _ in states(baseline)] == ["ACTIVE"] * 6
+    end_x = t + 91 * DAY
+    cases = {
+        GovernedPaperIncubationEndCause.REVOKED: (
+            "incubation_revocation_known",
+            ("REVOKED", "incubation_revoked"),
+            (GovernedPaperIncubationState.REVOKED, effective),
+        ),
+        GovernedPaperIncubationEndCause.VALIDATION_NOT_CURRENT: (
+            "incubation_validation_loss_known",
+            ("TERMINATED", "incubation_validation_not_current"),
+            (GovernedPaperIncubationState.TERMINATED, effective),
+        ),
+        GovernedPaperIncubationEndCause.ADVERSE_SIGNAL: (  # never final by itself: the record's own end X stays final
+            "incubation_adverse_signal_known",
+            ("NOT_ESTABLISHED", "incubation_adverse_signal_known"),
+            (GovernedPaperIncubationState.EXPIRED_HOLD, end_x),
+        ),
+    }
+    for cause, (pending, settled, final) in cases.items():
+        with installed(active_registry(item, (end_row(item, cause, effective, published=known),))):
+            evidence = derive(decisions)
+        observed = states(evidence)
+        assert evidence.decisions[0] == baseline.decisions[0], cause  # before P the prior authority is unchanged
+        assert observed[1:4] == [("NOT_ESTABLISHED", pending)] * 3, cause  # blocked at P, not yet final
+        assert observed[4:] == [settled] * 2, cause  # the final transition at E, never resurrected
+        for decision in evidence.decisions[1:]:
+            assert all(
+                reading.status is not GovernedPaperIncubationReadingStatus.COVERED for reading in decision.readings
+            ), cause
+        assert evidence.fill_windows == (HistoricalExecutionIncubationWindow(t, known),), cause
+        assert (evidence.final_state, evidence.final_at_ns) == final, cause
+        assert prefix(evidence, known) == prefix(baseline, known), cause
+    # P = E: the block and any final transition coincide at P
+    for cause, (_, settled, _) in cases.items():
+        with installed(active_registry(item, (end_row(item, cause, known),))):
+            evidence = derive(decisions)
+        assert states(evidence) == [("ACTIVE", ""), *[settled] * 5], cause
+        assert evidence.fill_windows == (HistoricalExecutionIncubationWindow(t, known),), cause
+    # equal-instant precedence: a duplicate approval and a revocation at one instant terminate (TERMINATED first)
+    duplicate = approval_row(record(covered=("U5",)), published=known, approved=t)
+    revoked = end_row(item, GovernedPaperIncubationEndCause.REVOKED, known)
+    rows = tuple(sorted((duplicate, revoked), key=lambda row: (row.published_at_ns, row.row_digest)))
+    with installed(active_registry(item, rows)):
+        assert states(derive(decisions))[1:] == [("TERMINATED", "incubation_duplicate_record")] * 5
+
+
+def test_an_incumbent_incubation_entry_keeps_no_fill_authority_once_a_signal_is_known() -> None:  # P2-2
+    item = record()
+    t = item.start_ns
+    known, effective = t + 3 * DAY, t + 4 * DAY
+    decisions = ((1, known - 1, True), (2, known + 1, True))
+    for cause in GovernedPaperIncubationEndCause:
+        with installed(active_registry(item, (end_row(item, cause, effective, published=known),))):
+            evidence = derive(decisions, (1,))
+        assert evidence.decisions[0].state is GovernedPaperIncubationState.ACTIVE, cause
+        assert evidence.decisions[1].attempts_before == 1, cause  # the attempt still counts at admission
+        assert evidence.fill_windows == (HistoricalExecutionIncubationWindow(t, known),), cause
+    # schedule v9: an entry declared before the signal and filling after it reads no incubation basis at its fill
+    result, world = rmt.hold_v2()
+    v7 = kr.governed(result, kr.hold_schedule(world, "SHORT", kr.V7))
+    fill = rmt.entry_fill(v7)
+    sequence, decided = next(
+        (item.decision_sequence, item.decision_time_ns) for item in v7.intents if item.intent_id == fill.intent_id
+    )
+    pending = v9_schedule(
+        world,
+        "SHORT",
+        incubation_entry_decision_sequences=(sequence,),
+        kelly_cold_start_cover=True,
+        incubation_fill_windows=(HistoricalExecutionIncubationWindow(0, decided + 1),),  # the signal known at P
+    )
+    refused = rmt.entry_fill(kr.governed(result, pending))
+    assert (refused.outcome, refused.reason) == (
+        HistoricalExecutionFillOutcome.REJECTED,
+        "governed_paper_kelly_unproven_at_fill",
+    )
 
 
 def test_attempts_count_at_admission_and_the_21st_exhausts_the_record_and_its_fill_window() -> None:  # T-INC-05, I14
