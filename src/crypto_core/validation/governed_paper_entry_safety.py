@@ -329,6 +329,20 @@ from crypto_core.validation.governed_paper_allocation_envelope import (
 )
 from crypto_core.validation.governed_paper_ctr_qualification import GovernedPaperCtrDepthStatus, GovernedPaperCtrError
 from crypto_core.validation.governed_paper_execution_authority import GovernedPaperGenesisAuthority
+from crypto_core.validation.governed_paper_incubation import (
+    GOVERNED_PAPER_INCUBATION_CONTRACT_ID,
+    GOVERNED_PAPER_INCUBATION_NON_CLAIM_FLAGS,
+    GovernedPaperIncubationContext,
+    GovernedPaperIncubationDecision,
+    GovernedPaperIncubationError,
+    GovernedPaperIncubationEvidence,
+    GovernedPaperIncubationReadingStatus,
+    GovernedPaperIncubationState,
+    derive_governed_paper_incubation_evidence,
+    governed_paper_incubation_canonical_context,
+    governed_paper_incubation_decision_of,
+    governed_paper_incubation_reading_status,
+)
 from crypto_core.validation.governed_paper_kelly_reading import (
     GOVERNED_PAPER_KELLY_CONTRACT_ID,
     GOVERNED_PAPER_KELLY_COVERAGE,
@@ -340,6 +354,7 @@ from crypto_core.validation.governed_paper_kelly_reading import (
     GovernedPaperKellyReading,
     GovernedPaperKellyStatus,
     derive_governed_paper_kelly_evidence,
+    governed_paper_kelly_evidence_to_dict,
     governed_paper_kelly_reading_digest,
 )
 from crypto_core.validation.governed_paper_kill_switch import (
@@ -423,6 +438,7 @@ from crypto_core.validation.governed_paper_system_state import (
 )
 from crypto_core.validation.historical_decision_run import HistoricalDecisionRun
 from crypto_core.validation.historical_execution_economics import (
+    HISTORICAL_EXECUTION_INCUBATION_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP,
     HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS,
@@ -551,6 +567,10 @@ GOVERNED_PAPER_ENTRY_SAFETY_SIZING_CHAIN_RULE_SET_ID = "governed-paper-entry-saf
 GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID = "governed-paper-entry-safety.v9"
 GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID = "governed-paper-entry-safety.v10"
 GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID = "governed-paper-entry-safety.v11"
+# Rule set v12 (S1_PAPER_INCUBATION_RECORD_V1_CONSTRUCTION): rule set v11 with COLD_START_EXCEPTED on covered own-history
+# readings under an ACTIVE record (NT-X02 by U3, SCALE-1's Kelly term by U5's KD-13, ENVELOPE-FIT for an incubation
+# member), the ORDINARY / INCUBATION / REFUSED basis and the attempt index; never PASS and never admitting on its own.
+GOVERNED_PAPER_ENTRY_SAFETY_INCUBATION_RULE_SET_ID = "governed-paper-entry-safety.v12"
 
 GOVERNED_PAPER_ENTRY_SAFETY_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
     ("paper_only", True),
@@ -578,6 +598,9 @@ class GovernedPaperEntrySafetyStatus(str, Enum):
     BLOCKED_ON_MISSING_INPUT = "BLOCKED_ON_MISSING_INPUT"
     BLOCKED_PROTECTION_UNREPRESENTABLE = "BLOCKED_PROTECTION_UNREPRESENTABLE"
     PROVEN_NOT_APPLICABLE = "PROVEN_NOT_APPLICABLE"
+    # Rule set v12 only (an incubation lineage): a covered own-history reading under an ACTIVE record. Never PASS, never
+    # admitting on its own: it admits only on the separate incubation basis (PRDV4 §0.3, §1.21).
+    COLD_START_EXCEPTED = "COLD_START_EXCEPTED"
 
 
 class GovernedPaperEntrySafetyFamily(str, Enum):
@@ -768,6 +791,17 @@ class GovernedPaperEntrySafetyKelly:
 
 
 @dataclass(frozen=True)
+class GovernedPaperEntrySafetyIncubation:
+    """The incubation facts of one decision (rule set v12), read from its evaluation's derived incubation evidence:
+    the record state, the attempts admitted before it and each selected reading's coverage at its instant, never
+    accepted from a caller."""
+
+    decision: GovernedPaperIncubationDecision
+    evidence_digest: str
+    record_digest: str = ""  # the key's verified record ("" when none)
+
+
+@dataclass(frozen=True)
 class GovernedPaperEntrySafetyObservation:
     """The point-in-time facts one decision is evaluated on (derived by this module, never caller authority)."""
 
@@ -830,6 +864,8 @@ class GovernedPaperEntrySafetyObservation:
     risk: GovernedPaperEntrySafetyRisk | None = None
     # Rule set v11 only: the RECORD A Kelly facts of the decision (absent without them, as in rule sets v1-v10).
     kelly: GovernedPaperEntrySafetyKelly | None = None
+    # Rule set v12 only: the incubation facts of the decision (absent without them, as in rule sets v1-v11).
+    incubation: GovernedPaperEntrySafetyIncubation | None = None
 
 
 @dataclass(frozen=True)
@@ -885,6 +921,14 @@ class GovernedPaperEntrySafetyDecision:
     entry_permitted: bool
     first_failure_check_id: str
     first_failure_reason: str
+    # Rule set v12 only (absent from every v1-v11 payload): ORDINARY, INCUBATION or REFUSED, the record and the attempt
+    # index an INCUBATION admission consumes (1-based).
+    basis: str = ""
+    incubation_record_digest: str = ""
+    incubation_attempt_index: int | None = None
+
+
+_DECISION_V12_FIELDS = ("basis", "incubation_record_digest", "incubation_attempt_index")
 
 
 @dataclass(frozen=True)
@@ -930,8 +974,11 @@ class GovernedPaperEntrySafetyEvidence:
     protective_ledger_evidence: GovernedPaperProtectiveLedgerEvidence | None = None
     # Rule set v10 on: the derived RECORD B risk evidence of its horizon (never in a v1-v9 payload).
     risk_evidence: GovernedPaperRiskEvidence | None = None
-    # Rule set v11 only: the derived RECORD A Kelly evidence of its horizon (never in a v1-v10 payload).
+    # Rule set v11 on: the derived RECORD A Kelly evidence of its horizon (never in a v1-v10 payload).
     kelly_evidence: GovernedPaperKellyEvidence | None = None
+    # Rule set v12 only: the derived incubation evidence and the entries admitted on the incubation basis.
+    incubation_evidence: GovernedPaperIncubationEvidence | None = None
+    incubation_decision_sequences: tuple[int, ...] = ()
 
 
 # --- helpers -----------------------------------------------------------------------------------------------------------
@@ -947,6 +994,8 @@ def _fail(code: str) -> GovernedPaperEntrySafetyError:
 
 def _serialize(value: object) -> object:
     if is_dataclass(value) and not isinstance(value, type):
+        if type(value) is GovernedPaperKellyEvidence:  # the Kelly module's own (versioned) wire payload
+            return governed_paper_kelly_evidence_to_dict(value)
         return _to_payload(value)
     if isinstance(value, Enum):
         return value.value
@@ -956,7 +1005,11 @@ def _serialize(value: object) -> object:
 
 
 def _to_payload(artifact: object) -> dict[str, object]:
-    return {item.name: _serialize(getattr(artifact, item.name)) for item in fields(artifact)}  # type: ignore[arg-type]
+    payload = {item.name: _serialize(getattr(artifact, item.name)) for item in fields(artifact)}  # type: ignore[arg-type]
+    if isinstance(artifact, GovernedPaperEntrySafetyDecision) and artifact.basis == "":
+        for name in _DECISION_V12_FIELDS:
+            del payload[name]
+    return payload
 
 
 def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, object]:
@@ -975,6 +1028,7 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
         GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_INCUBATION_RULE_SET_ID,
     ):
         if evidence.kill_switch_ladder is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_kill_switch_ladder")
@@ -986,6 +1040,7 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
         GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_INCUBATION_RULE_SET_ID,
     ):
         if evidence.regime_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_regime_evidence")
@@ -996,6 +1051,7 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
         GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_INCUBATION_RULE_SET_ID,
     ):
         if evidence.system_state_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_system_state_evidence")
@@ -1005,6 +1061,7 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
         GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_INCUBATION_RULE_SET_ID,
     ):
         if evidence.sizing_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_sizing_evidence")
@@ -1013,6 +1070,7 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
         GOVERNED_PAPER_ENTRY_SAFETY_PROTECTIVE_LEDGER_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_INCUBATION_RULE_SET_ID,
     ):
         if evidence.protective_ledger_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_protective_ledger_evidence")
@@ -1020,14 +1078,25 @@ def _evidence_payload(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, o
     if evidence.rule_set_id not in (
         GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID,
         GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_INCUBATION_RULE_SET_ID,
     ):
         if evidence.risk_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_risk_evidence")
         del payload["risk_evidence"]
-    if evidence.rule_set_id != GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID:
+    if evidence.rule_set_id not in (
+        GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID,
+        GOVERNED_PAPER_ENTRY_SAFETY_INCUBATION_RULE_SET_ID,
+    ):
         if evidence.kelly_evidence is not None:
             raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_a_kelly_evidence")
         del payload["kelly_evidence"]
+    if evidence.rule_set_id != GOVERNED_PAPER_ENTRY_SAFETY_INCUBATION_RULE_SET_ID:
+        if evidence.incubation_evidence is not None or evidence.incubation_decision_sequences:
+            raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_an_incubation_evidence")
+        if any(item.basis for item in evidence.decisions):
+            raise ValueError(f"{_PREFIX}:legacy_rule_set_carries_an_incubation_basis")
+        del payload["incubation_evidence"]
+        del payload["incubation_decision_sequences"]
     return payload
 
 
@@ -1058,6 +1127,27 @@ class _Check:
 def _missing(reason: str) -> Callable[[_Observation], _Outcome]:
     def evaluate(observation: _Observation) -> _Outcome:
         return _Outcome(_Status.BLOCKED_ON_MISSING_INPUT, "", reason)
+
+    return evaluate
+
+
+def _covered(reading_id: str, ordinary: Callable[[_Observation], _Outcome]) -> Callable[[_Observation], _Outcome]:
+    """Rule set v12: a check whose only undefined input is the own-history reading ``reading_id`` (no non-history
+    component, and no completion of an empty window can fail) is COLD_START_EXCEPTED while that reading is COVERED under
+    an ACTIVE record; otherwise, and in rule sets v1-v11, it is exactly the ordinary check."""
+
+    def evaluate(observation: _Observation) -> _Outcome:
+        facts = observation.incubation
+        if facts is not None:
+            reading = governed_paper_incubation_reading_status(facts.decision, reading_id)
+            if reading.status is GovernedPaperIncubationReadingStatus.COVERED:
+                return _Outcome(
+                    _Status.COLD_START_EXCEPTED,
+                    "",
+                    f"{reading_id.lower()}_own_history_window_empty_covered_under_an_active_record",
+                    (facts.evidence_digest,),
+                )
+        return ordinary(observation)
 
     return evaluate
 
@@ -1499,6 +1589,9 @@ def governed_paper_entry_safety_system_state_reading(
     if facts is None:
         raise _fail("observation_malformed:system_safety_without_the_kill_switch_facts")
     by_id = {item.check_id: item for item in _CHECKS}
+    # Rule set v12: a cold-start exception excuses an entry check, never a §1.29 signal, so S4 and S5 read the ordinary
+    # statuses (an excepted own-history reading is unproven there); without incubation facts nothing changes.
+    observation = replace(observation, incubation=None)
     risk: dict[str, object] = {}
     if observation.risk is not None:  # rule set v10: S3 (C-11) and S6 (L-8) from the decision's RECORD B reading
         reading = observation.risk.reading
@@ -1660,8 +1753,10 @@ _SIZING_STATUS = {
     "PASS": _Status.PASS,
     "FAIL": _Status.FAIL,
     "BLOCKED": _Status.BLOCKED_ON_MISSING_INPUT,
+    "COLD_START_EXCEPTED": _Status.COLD_START_EXCEPTED,  # an INCUBATION_MEMBER within W_INC x B (rule set v12)
 }
 _PROVEN_ONE, _PROVEN_BELOW_ONE, _UNPROVEN = "PROVEN_ONE", "PROVEN_BELOW_ONE", "UNPROVEN"
+_COLD_START = "COLD_START_EXCEPTED"  # rule set v12: a term covered under an ACTIVE record (U5's Kelly fit)
 
 
 def _sizing_facts(observation: _Observation) -> GovernedPaperEntrySafetySizing:
@@ -1732,8 +1827,20 @@ def governed_paper_entry_safety_a9_multipliers(
     else:
         correlation = (_UNPROVEN, "edge_return_correlation_not_measured")
     kelly_facts = observation.kelly
+    covered = observation.incubation is not None and (
+        governed_paper_incubation_reading_status(observation.incubation.decision, "U5").status
+        is GovernedPaperIncubationReadingStatus.COVERED
+    )
     if kelly_facts is None:  # rule sets v8-v10: no Kelly reading exists
         kelly = (_UNPROVEN, "kelly_fit_pending_items_5_1_and_5_2")
+    elif covered:  # rule set v12: U5 covered under an ACTIVE record reads RECORD A's KD-13 at the R-4 fraction
+        status = kelly_facts.reading.cold_start_status
+        if status == "COLD_START_EXCEPTED":
+            kelly = (_COLD_START, "kelly_kd13_cold_start_excepted_at_the_r4_fraction")
+        elif status == "FAIL":
+            kelly = (_PROVEN_BELOW_ONE, kelly_facts.reading.cold_start_reason.lower())
+        else:
+            kelly = (_UNPROVEN, (kelly_facts.reading.cold_start_reason or "kelly_kd13_not_read").lower())
     elif kelly_facts.reading.status is GovernedPaperKellyStatus.PASS:
         kelly = (_PROVEN_ONE, "kelly_fit_proven_at_the_r4_fraction")
     elif kelly_facts.reading.status is GovernedPaperKellyStatus.FAIL:
@@ -1790,11 +1897,26 @@ def _scale_a9(observation: _Observation) -> _Outcome:
         return _Outcome(
             _Status.FAIL, "ENVELOPE_FIT=FAIL", f"envelope_fit_fail_under_a9_prime:{sizing.envelope_reason}", evidence
         )
-    unproven = [term[0] for term in terms if term[1] != _PROVEN_ONE]
+    unproven = [term[0] for term in terms if term[1] not in (_PROVEN_ONE, _COLD_START)]
+    excepted = [term[0] for term in terms if term[1] == _COLD_START]
+    envelope_excepted = sizing.envelope_status is GovernedPaperEnvelopeFitStatus.COLD_START_EXCEPTED
+    if (
+        not unproven
+        and (excepted or envelope_excepted)
+        and (envelope_excepted or sizing.envelope_status is GovernedPaperEnvelopeFitStatus.PASS)
+    ):  # rule set v12: every non-PASS term a covered reading resolving COLD_START_EXCEPTED (§4.7)
+        return _Outcome(
+            _Status.COLD_START_EXCEPTED, "A9_PRIME=COLD_START_EXCEPTED", "a9_prime_cold_start_excepted", evidence
+        )
     if sizing.envelope_status is GovernedPaperEnvelopeFitStatus.PASS and not unproven:  # pragma: no cover - unreachable
         return _Outcome(_Status.PASS, "ENVELOPE_FIT=PASS", "a9_prime_every_term_proven", evidence)
     names = [
-        *(["envelope_fit"] if sizing.envelope_status is not GovernedPaperEnvelopeFitStatus.PASS else []),
+        *(
+            ["envelope_fit"]
+            if sizing.envelope_status
+            not in (GovernedPaperEnvelopeFitStatus.PASS, GovernedPaperEnvelopeFitStatus.COLD_START_EXCEPTED)
+            else []
+        ),
         *unproven,
     ]
     reason = f"a9_prime_unproven_{'_'.join(names)}"
@@ -1944,7 +2066,7 @@ _CHECKS: tuple[_Check, ...] = (
         _X,
         "PRDV4 §1.21 NT-X02 fill rate degradation",
         "last_10_orders_fill_rate_lt_50pct",
-        _missing("exchange_order_fill_rate_not_observable_on_the_paper_path"),
+        _covered("U3", _missing("exchange_order_fill_rate_not_observable_on_the_paper_path")),
     ),
     _Check(
         "NT-X03",
@@ -2205,6 +2327,7 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
     protective_ledger: bool = False,
     risk_measurement: bool = False,
     kelly: bool = False,
+    incubation: bool = False,
 ) -> dict[str, object]:
     """The rule set this module evaluates: every check, in order, with its PRDV4 clause and published threshold.
 
@@ -2231,6 +2354,8 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
     the RECORD A Kelly evidence (``S1_KELLY_DEFINED_READING_CONSTRUCTION_V1``).
     """
 
+    if incubation and not kelly:
+        raise _fail("incubation_rule_set_needs_the_kelly_rule_set")
     if kelly and not risk_measurement:
         raise _fail("kelly_rule_set_needs_the_risk_measurement_rule_set")
     if risk_measurement and not protective_ledger:
@@ -2572,6 +2697,33 @@ def governed_paper_entry_safety_rule_set(  # noqa: PLR0913
                 "unchanged",
             },
         )
+    if incubation:
+        rule_set.update(
+            rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_INCUBATION_RULE_SET_ID,
+            contract_id=GOVERNED_PAPER_INCUBATION_CONTRACT_ID,
+            incubation_rule={
+                "approved_doctrine": "s1_incubation_authority_registry_doctrine_adoption_v1 (HD-INC-AUTH-1 r2) over "
+                "s1_paper_incubation_doctrine_adoption_v1 (r1); PRDV4 §0.3 and §1.21; RECORD A A1.3 and KD-13",
+                "status": "COLD_START_EXCEPTED_never_pass_never_admitting_alone",
+                "covered": {
+                    "NT-X02": "U3_while_the_lineage_has_sent_no_order",
+                    "SCALE-1": "the_kelly_fit_term_reads_kd13_at_the_r4_fraction_while_U5_is_covered_every_other_term_"
+                    "must_be_proven_1",
+                    "ENVELOPE-FIT": "an_incubation_member_within_w_inc_times_nav",
+                    "never": "U1_U2_while_fcd_13_is_pending_U3_U4_after_any_order_and_every_excluded_class",
+                },
+                "basis": "ORDINARY_every_check_admits_INCUBATION_an_active_record_an_exposure_increasing_entry_at_least_"
+                "one_cold_start_exception_every_other_check_admitting_REFUSED_otherwise_a_proven_fail_dominates",
+                "attempt": "an_incubation_admission_counted_at_admission_whether_or_not_it_fills_21_at_most",
+                "authority": "the_active_registry_a_positive_index_only_active_needs_every_r2_basis_a3_a4_a5_a6_none_"
+                "qualified_in_production",
+                "fill": "the_engine_schedule_v9_reads_kd13_at_the_r5_fraction_only_for_a_declared_incubation_entry_"
+                "inside_an_incubation_window_no_permission_survives_the_end",
+                "admission": "the_fixed_point_of_refusals_and_incubation_admissions_every_fact_causal_in_earlier_"
+                "decisions",
+                "non_claims": dict(GOVERNED_PAPER_INCUBATION_NON_CLAIM_FLAGS),
+            },
+        )
     return rule_set
 
 
@@ -2594,6 +2746,7 @@ def governed_paper_entry_safety_rule_set_digest(  # noqa: PLR0913
     protective_ledger: bool = False,
     risk_measurement: bool = False,
     kelly: bool = False,
+    incubation: bool = False,
 ) -> str:
     return edge_sha256_text(
         edge_canonical_json(
@@ -2608,6 +2761,7 @@ def governed_paper_entry_safety_rule_set_digest(  # noqa: PLR0913
                 protective_ledger=protective_ledger,
                 risk_measurement=risk_measurement,
                 kelly=kelly,
+                incubation=incubation,
             )
         )
     )
@@ -2729,6 +2883,19 @@ GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_DIGEST = governed_paper_entry_safety_
     risk_measurement=True,
     kelly=True,
 )
+GOVERNED_PAPER_ENTRY_SAFETY_INCUBATION_RULE_SET_DIGEST = governed_paper_entry_safety_rule_set_digest(
+    protective=True,
+    portfolio=True,
+    market_data=True,
+    kill_switch=True,
+    regime=True,
+    system_safety=True,
+    sizing_chain=True,
+    protective_ledger=True,
+    risk_measurement=True,
+    kelly=True,
+    incubation=True,
+)
 
 
 # --- one decision ------------------------------------------------------------------------------------------------------
@@ -2786,6 +2953,14 @@ def _canonical_observation(observation: object) -> GovernedPaperEntrySafetyObser
     _canonical_protective_ledger(observation)
     _canonical_risk(observation)
     _canonical_kelly(observation)
+    facts = observation.incubation
+    if facts is not None and (
+        type(facts) is not GovernedPaperEntrySafetyIncubation
+        or type(facts.decision) is not GovernedPaperIncubationDecision
+        or observation.kelly is None
+        or facts.decision.decision_sequence != observation.decision_sequence
+    ):
+        raise _fail("observation_malformed:incubation")
     return observation
 
 
@@ -3251,6 +3426,41 @@ def evaluate_governed_paper_entry_safety(
         checks.append(check)
         if first is None and outcome.status not in _ADMITTING:
             first = check
+    facts = observation.incubation
+    if facts is None:  # rule sets v1-v11: exactly the accepted decision
+        return GovernedPaperEntrySafetyDecision(
+            decision_sequence=observation.decision_sequence,
+            decision_time_ns=observation.decision_time_ns,
+            decision_digest=observation.decision_digest,
+            instrument=observation.instrument,
+            target_direction=observation.target_direction,
+            checks=tuple(checks),
+            entry_permitted=first is None,
+            first_failure_check_id="" if first is None else first.check_id,
+            first_failure_reason="" if first is None else first.reason,
+        )
+    # Rule set v12: ORDINARY when every check admits; INCUBATION only under an ACTIVE record, on an exposure-increasing
+    # entry, with at least one COLD_START_EXCEPTED and every other check admitting (PRDV4 §1.21); REFUSED otherwise, by
+    # the first check that neither admits nor is excepted (a proven FAIL always dominates an exception).
+    excepted = [item for item in checks if item.status is _Status.COLD_START_EXCEPTED]
+    blocking = next((item for item in checks if item.status not in (*_ADMITTING, _Status.COLD_START_EXCEPTED)), None)
+    decision = facts.decision
+    record = facts.decision.state is GovernedPaperIncubationState.ACTIVE and decision.exposure_increasing
+    if blocking is None and not excepted:
+        basis, refusal = "ORDINARY", None
+    elif blocking is None and record:
+        basis, refusal = "INCUBATION", None
+    else:
+        basis = "REFUSED"
+        refusal = blocking or GovernedPaperEntrySafetyCheck(
+            check_id=excepted[0].check_id,
+            family=excepted[0].family,
+            status=excepted[0].status,
+            observed=excepted[0].observed,
+            threshold=excepted[0].threshold,
+            reason=_reason(f"{excepted[0].check_id}:cold_start_exception_without_an_active_incubation_entry"),
+            evidence_record_digests=excepted[0].evidence_record_digests,
+        )
     return GovernedPaperEntrySafetyDecision(
         decision_sequence=observation.decision_sequence,
         decision_time_ns=observation.decision_time_ns,
@@ -3258,9 +3468,12 @@ def evaluate_governed_paper_entry_safety(
         instrument=observation.instrument,
         target_direction=observation.target_direction,
         checks=tuple(checks),
-        entry_permitted=first is None,
-        first_failure_check_id="" if first is None else first.check_id,
-        first_failure_reason="" if first is None else first.reason,
+        entry_permitted=refusal is None,
+        first_failure_check_id="" if refusal is None else refusal.check_id,
+        first_failure_reason="" if refusal is None else refusal.reason,
+        basis=basis,
+        incubation_record_digest="" if basis != "INCUBATION" else facts.record_digest,
+        incubation_attempt_index=decision.attempts_before + 1 if basis == "INCUBATION" else None,
     )
 
 
@@ -3909,6 +4122,30 @@ def governed_paper_entry_safety_sequential_refusals(
     raise _fail("sequential_admission_not_converged")
 
 
+def governed_paper_entry_safety_sequential_admissions(
+    entries: tuple[int, ...], admissions_under: Callable[[tuple[object, ...]], tuple[object, ...]]
+) -> tuple[object, ...]:
+    """Rule set v12's sequential admission: the unique schedule ``(refused, incubation)`` that refuses exactly its own
+    refusals and admits on the incubation basis exactly its own incubation admissions.
+
+    ``admissions_under(state)`` evaluates every entry under the schedule ``state``. A decision's facts (its portfolio, its
+    incubation state and the attempts admitted before it) and every fill bound an earlier fill reads depend only on the
+    assignments of earlier decisions (INV-CAUSAL), so round k is exact for the first k entries; the fill bounds (incubation
+    windows, cover) follow from the admissions, so the rounds settle on the unique fixed point within ``len(entries) + 2``
+    evaluations. A non-converging evaluation raises.
+    """
+
+    # (refused, incubation admissions, incubation fill windows, cold-start cover): every entry refused to start with
+    state: tuple[object, ...] = (entries, (), (), False)
+    # the admissions settle within len(entries) + 1 rounds and the fill bounds they imply one round after
+    for _ in range(len(entries) + 2):
+        following = admissions_under(state)
+        if following == state:
+            return state
+        state = following
+    raise _fail("sequential_admission_not_converged")
+
+
 def build_governed_paper_entry_safety_evidence(
     *,
     authority: GovernedPaperGenesisAuthority,
@@ -3925,6 +4162,7 @@ def build_governed_paper_entry_safety_evidence(
     protective_ledger: GovernedPaperProtectiveLedgerContext | None = None,
     risk: GovernedPaperRiskContext | None = None,
     kelly: bool = False,
+    incubation: GovernedPaperIncubationContext | None = None,
 ) -> GovernedPaperEntrySafetyEvidence:
     """Evaluate every entry decision of ``run`` over the archive ``dataset`` it was built from (see the module docstring).
 
@@ -3993,6 +4231,13 @@ def build_governed_paper_entry_safety_evidence(
         raise _fail("kelly_flag_malformed")
     if kelly and risk is None:
         raise _fail("kelly_without_the_risk_measurement_rule_set")
+    if incubation is not None:
+        if not kelly:
+            raise _fail("incubation_without_the_kelly_rule_set")
+        try:
+            incubation = governed_paper_incubation_canonical_context(incubation)
+        except GovernedPaperIncubationError as exc:
+            raise _fail("incubation_context_malformed") from exc
     genesis = authority.genesis
     protection = _canonical_protection(protection, instrument=genesis.instrument)
     if run.status is not EdgeEvidenceStatus.READY or run.gate_verdict is not EdgeGateVerdict.PASS:
@@ -4033,7 +4278,12 @@ def build_governed_paper_entry_safety_evidence(
     if (
         governed is not None
         and (
-            portfolio.schedule.schema_version == HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION  # type: ignore[union-attr]
+            portfolio.schedule.schema_version  # type: ignore[union-attr]
+            == (
+                HISTORICAL_EXECUTION_INCUBATION_ADMISSION_SCHEDULE_SCHEMA_VERSION
+                if incubation is not None
+                else HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION
+            )
         )
         is not kelly
     ):
@@ -4091,6 +4341,7 @@ def build_governed_paper_entry_safety_evidence(
                     instrument=genesis.instrument,
                     start_ns=genesis.genesis_start_ns,
                     horizon_ns=run.evaluation_end_ns,
+                    cold_start=incubation is not None,
                 )
             except GovernedPaperKellyError as exc:
                 raise _fail("kelly_evidence_not_derivable") from exc
@@ -4235,11 +4486,40 @@ def build_governed_paper_entry_safety_evidence(
             )
             for item in pending
         ]
+    incubation_evidence: GovernedPaperIncubationEvidence | None = None
+    if incubation is not None:
+        try:  # derived, never accepted: the active registry, the genesis-bound validation and this re-run's own facts
+            incubation_evidence = derive_governed_paper_incubation_evidence(
+                context=incubation,
+                authority=authority,
+                decisions=tuple(
+                    (item.decision_sequence, item.decision_time_ns, _exposure_increasing(item)) for item in pending
+                ),
+                incubation_admissions=portfolio.schedule.incubation_entry_decision_sequences,  # type: ignore[union-attr]
+                outcome=governed.outcome,  # type: ignore[union-attr,arg-type]
+                kelly=kelly_evidence,
+                horizon_ns=run.evaluation_end_ns,
+            )
+        except GovernedPaperIncubationError as exc:
+            raise _fail("incubation_evidence_not_derivable") from exc
+        pending = [
+            replace(
+                item,
+                incubation=GovernedPaperEntrySafetyIncubation(
+                    governed_paper_incubation_decision_of(incubation_evidence, item.decision_sequence),  # type: ignore[arg-type]
+                    incubation_evidence.evidence_digest,
+                    incubation_evidence.record_digest,
+                ),
+            )
+            for item in pending
+        ]
     decisions = [evaluate_governed_paper_entry_safety(item) for item in pending]
     protective, measured = protection is not None, snapshots is not None
     seed = GovernedPaperEntrySafetyEvidence(
         schema_version=_SCHEMA_VERSION,
-        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID
+        rule_set_id=GOVERNED_PAPER_ENTRY_SAFETY_INCUBATION_RULE_SET_ID
+        if incubation is not None
+        else GOVERNED_PAPER_ENTRY_SAFETY_KELLY_RULE_SET_ID
         if kelly
         else GOVERNED_PAPER_ENTRY_SAFETY_RISK_MEASUREMENT_RULE_SET_ID
         if risk is not None
@@ -4271,6 +4551,7 @@ def build_governed_paper_entry_safety_evidence(
             protective_ledger=protective_ledger is not None,
             risk_measurement=risk is not None,
             kelly=kelly,
+            incubation=incubation is not None,
         ),
         genesis_id=genesis.genesis_id,
         genesis_digest=genesis.genesis_digest,
@@ -4297,8 +4578,29 @@ def build_governed_paper_entry_safety_evidence(
         protective_ledger_evidence=ledger_evidence,
         risk_evidence=risk_evidence,
         kelly_evidence=kelly_evidence,
+        incubation_evidence=incubation_evidence,
+        incubation_decision_sequences=tuple(
+            sorted(item.decision_sequence for item in decisions if item.basis == "INCUBATION")
+        ),
     )
     return replace(seed, evidence_digest=edge_payload_digest(_evidence_payload(seed), _DIGEST_FIELD))
+
+
+def _exposure_increasing(observation: GovernedPaperEntrySafetyObservation) -> bool:
+    """Whether the decision's candidate increases the magnitude of the position (its snapshot's own facts)."""
+
+    current, candidate = observation.position_quantity, observation.candidate_position_quantity
+    if current is None or candidate is None:
+        return False
+    return abs(Fraction(candidate)) > abs(Fraction(current))
+
+
+def governed_paper_entry_safety_decision_to_dict(decision: GovernedPaperEntrySafetyDecision) -> dict[str, object]:
+    """Canonical JSON-ready mapping of one decision: a rule set v1-v11 decision carries exactly its accepted fields."""
+
+    if type(decision) is not GovernedPaperEntrySafetyDecision:
+        raise _fail("decision_malformed")
+    return _to_payload(decision)
 
 
 def governed_paper_entry_safety_evidence_to_dict(evidence: GovernedPaperEntrySafetyEvidence) -> dict[str, object]:

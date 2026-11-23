@@ -259,6 +259,18 @@ record exists, so no reading is ever covered and a re-run that starts flat refus
 refusal is whole, never a resize, and never reaches a reduction, a close or a protective close-only fill; a schedule v2-v7
 never evaluates the fit, so its payload, digest and re-run are exactly the accepted ones.
 
+Fill-time incubation cover (``S1_PAPER_INCUBATION_RECORD_V1_CONSTRUCTION``, schedule v9). Schedule v9 is schedule v8 with
+three neutral declared facts: the entries admitted on the incubation basis, a cold-start cover flag and the incubation fill
+windows. After every earlier rule admitted it, the R-5 and C-10 bounds included, an exposure-increasing fill of a declared
+incubation entry executing inside an incubation window, under the cover, reads RECORD A's KD-13
+(``historical_execution_kelly_cold_start``) at its own R-5 fraction on the closed trades known at its decision instant
+while they hold no win or no loss: FAIL (``rho > 0.04``, a ruinous known outcome, ``n_g >= 2`` with the product not above
+1) and BLOCKED (an unknown trade, an unproven rho or R_j) refuse it whole (``governed_paper_kelly_cold_start_*_at_fill``),
+COLD_START_EXCEPTED admits it. A class-complete history, an undeclared entry, a fill outside every window and a schedule
+without the cover read KD-12 exactly as schedule v8: no permission survives the end. The windows end at the record's
+first final instant, which follows the 21st admission, so that attempt's own fill reads KD-12. Exits, reductions and
+protective close-only fills never reach it; schedules v2-v8 carry none of the three facts.
+
 Governed decision portfolio. ``simulate_historical_execution_governed_paper_decision_portfolio`` (schedule v4 only) is the
 same governed re-run, which also records, at every decision of the frozen trace, the portfolio as known at that instant
 BEFORE the decision is admitted (after the funding settlements and protective rules of the same nanosecond, before its
@@ -1619,6 +1631,7 @@ class _Simulation:
         # such admission and consumed by the transition that opens the trade.
         self.trade_exact_values: list[HistoricalExecutionTradeExactValues] = []
         self.admitted_fill_risk: Fraction | None = None
+        self.admitted_fill_time: int = 0
 
     def _transformed_marks(self, marks: _MarkCursor) -> _MarkCursor:
         """Construction hook: the mark observations as the simulation reads them (identity; a stress run overrides)."""
@@ -1888,7 +1901,8 @@ class _Simulation:
 
     def _kelly_fill_admission(self, order: object, equity: Fraction) -> str | None:
         """Admission hook of an exposure-increasing fill past every risk rule: the order and its positive
-        publication-visible candidate equity. A refusal reason, or None (the historical model admits every one)."""
+        publication-visible candidate equity (its instant is ``admitted_fill_time``). A refusal reason, or None (the
+        historical model admits every one)."""
 
         return None
 
@@ -2557,6 +2571,7 @@ class _Simulation:
             if candidate_equity <= 0 or notional > self.max_leverage * candidate_equity:
                 return reject("risk_limit_exceeded", **quoted)
             self.admitted_fill_risk = None  # only this fill's own admission measures it
+            self.admitted_fill_time = book.visibility  # the instant the schedule v9 incubation windows are read at
             refused = (
                 self._exposure_fill_admission(notional, candidate_equity)
                 or self._sizing_fill_admission(
@@ -3527,32 +3542,42 @@ _RISK_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_
 # (S1_KELLY_DEFINED_READING_CONSTRUCTION_V1, module docstring); it declares no new field and its re-run's outcome is v4.
 HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v8"
 _KELLY_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION
+# Schedule v9: the v8 schedule with the declared incubation entries, the cold-start cover flag and the incubation fill
+# windows (S1_PAPER_INCUBATION_RECORD_V1_CONSTRUCTION, module docstring); its re-run's outcome is v4.
+HISTORICAL_EXECUTION_INCUBATION_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v9"
+_INCUBATION_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_INCUBATION_ADMISSION_SCHEDULE_SCHEMA_VERSION
+_KELLY_FIT_SCHEDULES = (_KELLY_SCHEDULE_SCHEMA_VERSION, _INCUBATION_SCHEDULE_SCHEMA_VERSION)
 _INFORMATION_TIME_SCHEDULES = (
     _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION,
     _SIZING_SCHEDULE_SCHEMA_VERSION,
     _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
     _RISK_SCHEDULE_SCHEMA_VERSION,
     _KELLY_SCHEDULE_SCHEMA_VERSION,
+    _INCUBATION_SCHEDULE_SCHEMA_VERSION,
 )
-# The schedules carrying the declared fill-time sizing bounds: schedule v5 and, on top of it, schedules v6, v7 and v8.
+# The schedules carrying the declared fill-time sizing bounds: schedule v5 and, on top of it, schedules v6 to v9.
 HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS = (
     _SIZING_SCHEDULE_SCHEMA_VERSION,
     _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
     _RISK_SCHEDULE_SCHEMA_VERSION,
     _KELLY_SCHEDULE_SCHEMA_VERSION,
+    _INCUBATION_SCHEDULE_SCHEMA_VERSION,
 )
 _SIZING_BOUND_SCHEDULES = HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS
-# The schedules carrying the declared protective-ledger bounds (exposure halt, flatten windows): schedule v6, v7 and v8.
+# The schedules carrying the declared protective-ledger bounds (exposure halt, flatten windows): schedule v6 to v9.
 HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS = (
     _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
     _RISK_SCHEDULE_SCHEMA_VERSION,
     _KELLY_SCHEDULE_SCHEMA_VERSION,
+    _INCUBATION_SCHEDULE_SCHEMA_VERSION,
 )
 _PROTECTIVE_LEDGER_SCHEDULES = HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS
-# The schedules carrying the declared CVaR bounds and the FCD-01 R-5 stop-risk bound: schedule v7 and, on top of it, v8.
+# The schedules carrying the declared CVaR bounds and the FCD-01 R-5 stop-risk bound: schedule v7 and, on top of it, v8
+# and v9.
 HISTORICAL_EXECUTION_RISK_BOUND_SCHEDULE_SCHEMA_VERSIONS = (
     _RISK_SCHEDULE_SCHEMA_VERSION,
     _KELLY_SCHEDULE_SCHEMA_VERSION,
+    _INCUBATION_SCHEDULE_SCHEMA_VERSION,
 )
 _RISK_BOUND_SCHEDULES = HISTORICAL_EXECUTION_RISK_BOUND_SCHEDULE_SCHEMA_VERSIONS
 # PRDV4 §1.21 NT-R04 and §8.2: no single position strictly above 25% of NAV; schedule v4 enforces it at every fill.
@@ -3594,6 +3619,23 @@ _KELLY_FILL_REFUSALS = {
     "KELLY_LOG_UTILITY_NON_POSITIVE": "governed_paper_kelly_log_utility_non_positive_at_fill",
 }
 _KELLY_FILL_UNPROVEN = "governed_paper_kelly_unproven_at_fill"
+# Schedule v9: RECORD A's KD-13 under the cold-start cover (A1.3): the covered reading's fixed codes, FAIL first.
+HISTORICAL_EXECUTION_KELLY_COLD_START_FAILURES = (
+    "KELLY_COLD_START_CAP_EXCEEDED",  # KD-13: rho > 0.04 (sum f <= 0.04 on actual risk at the stop is never covered)
+    "KELLY_LOG_DOMAIN_RUIN",  # A1.3, KD-10b: from the first known trade, including under coverage
+    "KELLY_LOG_UTILITY_NON_POSITIVE",  # KD-13: n_g >= 2 and the exact product not above 1
+)
+HISTORICAL_EXECUTION_KELLY_COLD_START_BLOCKS = (
+    "KELLY_TRADE_COUNT_UNPROVEN",  # A1.3: a closed trade not yet known is never covered
+    "KELLY_RISK_FRACTION_UNPROVEN",  # KD-0 C-2: no proven FCD-01 rho_t
+    "KELLY_OUTCOME_UNPROVEN",  # KD-10a: a known trade without a proven R_j is never covered
+)
+_KELLY_COLD_START_FILL_REFUSALS = {
+    "KELLY_COLD_START_CAP_EXCEEDED": "governed_paper_kelly_cold_start_cap_exceeded_at_fill",
+    "KELLY_LOG_DOMAIN_RUIN": "governed_paper_kelly_cold_start_log_domain_ruin_at_fill",
+    "KELLY_LOG_UTILITY_NON_POSITIVE": "governed_paper_kelly_cold_start_log_utility_non_positive_at_fill",
+}
+_KELLY_COLD_START_FILL_UNPROVEN = "governed_paper_kelly_cold_start_unproven_at_fill"
 # A v7 CVaR bound is an exact rational of at most this many decimal digits per part (below CPython's int-to-text limit).
 _RISK_RATIONAL_DIGITS = 4_000
 _RISK_RATIONAL_BOUND = 10**_RISK_RATIONAL_DIGITS
@@ -3694,6 +3736,18 @@ class HistoricalExecutionCvarBound:
 
 
 @dataclass(frozen=True)
+class HistoricalExecutionIncubationWindow:
+    """One declared incubation fill window ``[window_start_ns, window_end_ns)`` (schema v9 only).
+
+    Inside it the fill of a declared incubation entry may read RECORD A's KD-13 under the cold-start cover; outside every
+    window no incubation permission survives, and the fill reads the ordinary schedule v8 rules.
+    """
+
+    window_start_ns: int
+    window_end_ns: int
+
+
+@dataclass(frozen=True)
 class HistoricalExecutionAdmissionSchedule:
     """One neutral declared admission schedule: ordered, disjoint windows and an optional invalidation instant.
 
@@ -3706,7 +3760,10 @@ class HistoricalExecutionAdmissionSchedule:
     then side), the declared fill-time sizing bounds; schema v6 carries them too. Schema v6 is schema v5 with
     ``exposure_halt_from_ns`` (the instant from which no exposure may increase) and ``flatten_windows`` (ordered, disjoint,
     each at or after the halt), the declared protective-ledger bounds; schema v7 carries them too. Schema v7 is schema v6
-    with ``cvar_bounds`` (ordered, disjoint), the declared fill-time CVaR bounds; no other schema carries them.
+    with ``cvar_bounds`` (ordered, disjoint), the declared fill-time CVaR bounds; schemas v8 and v9 carry them too. Schema
+    v9 is schema v8 with ``incubation_entry_decision_sequences`` (strictly increasing: the entries admitted on the
+    incubation basis), ``kelly_cold_start_cover`` (whether those entries' fills may read KD-13) and
+    ``incubation_fill_windows`` (ordered, disjoint); no other schema carries them.
     """
 
     schema_version: str
@@ -3720,6 +3777,9 @@ class HistoricalExecutionAdmissionSchedule:
     exposure_halt_from_ns: int | None = None
     flatten_windows: tuple[HistoricalExecutionFlattenWindow, ...] = ()
     cvar_bounds: tuple[HistoricalExecutionCvarBound, ...] = ()
+    incubation_entry_decision_sequences: tuple[int, ...] = ()
+    kelly_cold_start_cover: bool = False
+    incubation_fill_windows: tuple[HistoricalExecutionIncubationWindow, ...] = ()
 
 
 HISTORICAL_EXECUTION_GOVERNED_PAPER_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
@@ -3915,6 +3975,39 @@ class HistoricalExecutionTradeExactValues:
     knowledge_ns: int
 
 
+def historical_execution_kelly_cold_start(fit: HistoricalExecutionKellyFit, rho: Fraction | None) -> tuple[str, str]:
+    """RECORD A's KD-13 for one Kelly reading the caller has established as covered (an ACTIVE record selecting U5;
+    A1.3): ``("NOT_COVERED", "KELLY_CLASS_COMPLETE")`` once the known trades hold a win and a loss (coverage never
+    returns), otherwise ``FAIL`` (a defined covered component fails: rho above 0.04, a known outcome with
+    ``1 + rho * R_j <= 0``, or ``n_g >= 2`` with the exact product not above 1), else ``BLOCKED`` (an unknown closed
+    trade, an unproven rho or an unproven R_j: never covered), else ``COLD_START_EXCEPTED``. FAIL dominates BLOCKED.
+    Pure and exact; it reads only the fit's own exact components.
+    """
+
+    if type(fit) is not HistoricalExecutionKellyFit:
+        raise _fail("kelly_fit_malformed")
+    if rho is not None and type(rho) is not Fraction:
+        raise _fail("kelly_rho_malformed")
+    if fit.wins > 0 and fit.losses > 0:
+        return "NOT_COVERED", "KELLY_CLASS_COMPLETE"
+    failures = []
+    if rho is not None and rho > HISTORICAL_EXECUTION_KELLY_CAP:
+        failures.append("KELLY_COLD_START_CAP_EXCEEDED")
+    failures.extend(
+        code for code in ("KELLY_LOG_DOMAIN_RUIN", "KELLY_LOG_UTILITY_NON_POSITIVE") if code in fit.failures
+    )
+    if failures:
+        return "FAIL", failures[0]
+    blocks = [
+        code
+        for code in HISTORICAL_EXECUTION_KELLY_COLD_START_BLOCKS
+        if code in fit.blocks or (code == "KELLY_RISK_FRACTION_UNPROVEN" and rho is None)
+    ]
+    if blocks:
+        return "BLOCKED", blocks[0]
+    return "COLD_START_EXCEPTED", ""
+
+
 class HistoricalExecutionKellyStatus(str, Enum):
     PASS = "PASS"  # noqa: S105 - reading status label, not a credential.
     FAIL = "FAIL"
@@ -3997,6 +4090,7 @@ _GOVERNED_V4_FIELDS = (
 _SCHEDULE_V5_FIELDS = ("exposure_envelopes", "depth_caps")
 _SCHEDULE_V6_FIELDS = ("exposure_halt_from_ns", "flatten_windows")
 _SCHEDULE_V7_FIELDS = ("cvar_bounds",)
+_SCHEDULE_V9_FIELDS = ("incubation_entry_decision_sequences", "kelly_cold_start_cover", "incubation_fill_windows")
 # Per versioned artifact: the legacy schema versions and the extension fields their legacy payloads never carry.
 _VERSIONED_PAYLOADS: dict[type, tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]] = {
     HistoricalExecutionEconomicsResult: (((_SCHEMA_VERSION,), _RESULT_V2_FIELDS),),
@@ -4024,6 +4118,18 @@ _VERSIONED_PAYLOADS: dict[type, tuple[tuple[tuple[str, ...], tuple[str, ...]], .
                 _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
             ),
             _SCHEDULE_V7_FIELDS,
+        ),
+        (
+            (
+                _SCHEDULE_SCHEMA_VERSION,
+                _PROTECTIVE_SCHEDULE_SCHEMA_VERSION,
+                _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION,
+                _SIZING_SCHEDULE_SCHEMA_VERSION,
+                _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
+                _RISK_SCHEDULE_SCHEMA_VERSION,
+                _KELLY_SCHEDULE_SCHEMA_VERSION,
+            ),
+            _SCHEDULE_V9_FIELDS,
         ),
     ),
     HistoricalExecutionGovernedPaperOutcome: (
@@ -4082,7 +4188,14 @@ class _GovernedPaperSimulation(_Simulation):
         # Schedule v7: the declared CVaR bounds (FCD-02 C-10) and the FCD-01 stop-risk bound (R-5) of every entry fill;
         # schedule v8 carries them too and adds RECORD A's Kelly fit (S1_KELLY_DEFINED_READING_CONSTRUCTION_V1).
         self.risk_bounds = schedule.schema_version in _RISK_BOUND_SCHEDULES
-        self.kelly_fit = schedule.schema_version == _KELLY_SCHEDULE_SCHEMA_VERSION
+        self.kelly_fit = schedule.schema_version in _KELLY_FIT_SCHEDULES
+        # Schedule v9: the declared incubation entries, the cold-start cover and the incubation fill windows.
+        self.incubation_entries = frozenset(schedule.incubation_entry_decision_sequences)
+        self.kelly_cold_start_cover = schedule.kelly_cold_start_cover is True
+        self.incubation_windows = tuple(
+            (item.window_start_ns, item.window_end_ns) for item in schedule.incubation_fill_windows
+        )
+        self.incubation_starts = [start for start, _ in self.incubation_windows]
         self.cvar_bounds = tuple(
             (item.window_start_ns, item.window_end_ns, Fraction(item.long_unit_cvar), Fraction(item.short_unit_cvar))
             for item in schedule.cvar_bounds
@@ -4267,6 +4380,10 @@ class _GovernedPaperSimulation(_Simulation):
         self.admitted_fill_risk = risk
         return None
 
+    def _in_incubation_window(self, time_ns: int) -> bool:
+        index = bisect.bisect_right(self.incubation_starts, time_ns) - 1
+        return index >= 0 and time_ns < self.incubation_windows[index][1]
+
     def _kelly_fill_admission(self, order: object, equity: Fraction) -> str | None:
         """Schedule v8: RECORD A's Kelly reading of an exposure-increasing fill at its own R-5 stop-risk fraction (the
         risk its R-5 admission measured over its candidate equity; module docstring), on the closed trades known at the
@@ -4289,6 +4406,18 @@ class _GovernedPaperSimulation(_Simulation):
             if item.knowledge_ns <= decided
         ]
         fit = historical_execution_kelly_fit(known, unknown_count=len(self.trade_exact_values) - len(known), rho=rho)
+        if (
+            self.kelly_cold_start_cover
+            and getattr(order, "decision_sequence", None) in self.incubation_entries
+            and self._in_incubation_window(self.admitted_fill_time)
+        ):
+            # Schedule v9: a declared incubation entry filling inside an incubation window reads KD-13 while its known
+            # trades are class-incomplete; a class-complete history reads KD-12 below (coverage never returns).
+            status, reason = historical_execution_kelly_cold_start(fit, rho)
+            if status == "COLD_START_EXCEPTED":
+                return None
+            if status != "NOT_COVERED":
+                return _KELLY_COLD_START_FILL_REFUSALS.get(reason, _KELLY_COLD_START_FILL_UNPROVEN)
         if fit.status is HistoricalExecutionKellyStatus.PASS:
             return None
         return _KELLY_FILL_REFUSALS.get(fit.reason, _KELLY_FILL_UNPROVEN)
@@ -4460,6 +4589,40 @@ def _canonical_risk_bounds(value: HistoricalExecutionAdmissionSchedule) -> None:
         previous_end = bound.window_end_ns
 
 
+def _canonical_incubation_bounds(value: HistoricalExecutionAdmissionSchedule) -> None:
+    """Schema v9's incubation entries (strictly increasing), cover flag and fill windows (ordered, disjoint, nonempty);
+    none on another schema."""
+
+    entries, cover, windows = (
+        value.incubation_entry_decision_sequences,
+        value.kelly_cold_start_cover,
+        value.incubation_fill_windows,
+    )
+    if type(entries) is not tuple or type(cover) is not bool or type(windows) is not tuple:
+        raise _fail("admission_schedule_malformed:incubation_bounds")
+    if value.schema_version != _INCUBATION_SCHEDULE_SCHEMA_VERSION and (entries or cover or windows):
+        raise _fail("admission_schedule_malformed:incubation_bounds_need_schema_v9")
+    for item in entries:
+        if not historical_execution_wire_int_is_valid(item, minimum=0):
+            raise _fail("admission_schedule_malformed:incubation_entry_decision_sequences")
+    if list(entries) != sorted(set(entries)):
+        raise _fail("admission_schedule_invalid:incubation_entries_not_strictly_increasing")
+    if set(entries) & set(value.entry_refused_decision_sequences):
+        raise _fail("admission_schedule_invalid:incubation_entry_also_refused")
+    previous_end: int | None = None
+    for window in windows:
+        if type(window) is not HistoricalExecutionIncubationWindow:
+            raise _fail("admission_schedule_malformed:incubation_fill_window")
+        for name in ("window_start_ns", "window_end_ns"):
+            if not historical_execution_wire_int_is_valid(getattr(window, name), minimum=0):
+                raise _fail(f"admission_schedule_malformed:incubation_fill_window_{name}")
+        if window.window_end_ns <= window.window_start_ns:
+            raise _fail("admission_schedule_invalid:incubation_fill_window_empty")
+        if previous_end is not None and window.window_start_ns < previous_end:
+            raise _fail("admission_schedule_invalid:incubation_fill_windows_not_ordered_disjoint")
+        previous_end = window.window_end_ns
+
+
 def canonical_historical_execution_admission_schedule(value: object) -> HistoricalExecutionAdmissionSchedule:
     """Validate one declared admission schedule exactly: types, canonical decimals and ordered disjoint windows."""
 
@@ -4473,12 +4636,14 @@ def canonical_historical_execution_admission_schedule(value: object) -> Historic
         _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
         _RISK_SCHEDULE_SCHEMA_VERSION,
         _KELLY_SCHEDULE_SCHEMA_VERSION,
+        _INCUBATION_SCHEDULE_SCHEMA_VERSION,
     ):
         raise _fail("admission_schedule_malformed:schema_version")
     _canonical_protective_windows(value)
     _canonical_sizing_bounds(value)
     _canonical_protective_ledger_bounds(value)
     _canonical_risk_bounds(value)
+    _canonical_incubation_bounds(value)
     _require_text(value.schedule_id, "schedule_id")
     if type(value.windows) is not tuple:
         raise _fail("admission_schedule_malformed:windows")
@@ -5997,6 +6162,11 @@ __all__ = [
     "HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS",
     "HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_SCHEDULE_SCHEMA_VERSION",
     "HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION",
+    "HISTORICAL_EXECUTION_INCUBATION_ADMISSION_SCHEDULE_SCHEMA_VERSION",
+    "HISTORICAL_EXECUTION_KELLY_COLD_START_BLOCKS",
+    "HISTORICAL_EXECUTION_KELLY_COLD_START_FAILURES",
+    "HistoricalExecutionIncubationWindow",
+    "historical_execution_kelly_cold_start",
     "HISTORICAL_EXECUTION_KELLY_BLOCKS",
     "HISTORICAL_EXECUTION_KELLY_CAP",
     "HISTORICAL_EXECUTION_KELLY_DECAY",

@@ -719,3 +719,30 @@ currentness on its own. Without qualified per-decision currentness, revocation-c
 bases, production `ACTIVE` stays unreachable and every incubation entry refuses. Its adoption conditions govern when it
 takes effect. The registry, the policy artifact, every record approval and product construction
 (`S1_PAPER_INCUBATION_RECORD_V1_CONSTRUCTION`) remain separate. REAL_PAPER_EXECUTION and Stage-4 remain blocked.
+
+## 20. S1 paper incubation record — construction (recorded 2026-11-23)
+
+Contract `S1_PAPER_INCUBATION_RECORD_V1_CONSTRUCTION` constructs the r1 incubation methodology under the HD-INC-AUTH-1 r2
+authority architecture inside the existing governed paper substrate. It is an implementation candidate: its protected
+independent audit is pending, and it adds no registry row, policy approval, record approval or admission path in
+production.
+
+- `governed_paper_incubation.py` derives, and never accepts, the incubation evidence of one evaluation: the canonical
+  `PAPER_INCUBATION_RECORD_V1` and its recomputed digest, the policy that fixes 21 attempts, 91 UTC days and `W_INC = 0.08`,
+  the source-controlled registry of `RECORD_APPROVAL` and `RECORD_END` rows (production empty), and the lifecycle. ACTIVE
+  needs a policy approval the active table admits, a verified record and every r2 basis (A3-A6) covering the instant; no
+  basis source is qualified, so production ACTIVE is unreachable. Unproven currentness is NOT_ESTABLISHED (BLOCKED/HOLD,
+  not final); a proven loss, failed verification or duplicate approval is TERMINATED; a revocation is REVOKED; the
+  end, or the 21st admission, is EXPIRED_HOLD unless every selected reading ended first (GRADUATED);
+- coverage: U5 while the known closed trades hold no win or no loss; U3 and U4 only while the lineage has sent no order;
+  U1 and U2 never while FCD-13 is pending. An attempt is an incubation admission, counted whether or not it fills;
+- entry gate rule set v12 adds `COLD_START_EXCEPTED` (never PASS) and the ORDINARY / INCUBATION / REFUSED basis; a
+  proven FAIL dominates. The engine's schedule v9 reads KD-13 at the R-5 fraction only for a declared incubation entry
+  inside an incubation window, and no permission survives the end. The allocation envelope adds the §4.1
+  INCUBATION_MEMBER rule and the `W_INC` fit, which the governed timeline never reaches while U1 is uncovered;
+- day seal v13 and lineage evidence v13 bind the policy, the registry projection and the incubation evidence with X1
+  chains. Every v1-v12 artifact, schedules v2-v8 and rule sets v1-v11 stay byte-identical (pinned on main 523c140e);
+- admission effect: none. World G's entry is still refused first by NT-D01 under every registry. REAL_PAPER_EXECUTION
+  and Stage-4 stay blocked; the A3-A6 bases, the signed decision record, policy and record approvals, C1-C9, M1, D1,
+  HD-07, X-H1, FCD-13, HC-13a, HC-14a/b, KD-7 at `n_w = 100`, DEC-1 and production risk-policy approval stay open. Every
+  value, row, basis and approval in the tests is synthetic.

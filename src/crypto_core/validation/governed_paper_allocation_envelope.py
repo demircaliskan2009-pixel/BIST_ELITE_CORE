@@ -14,8 +14,11 @@ Eligibility at one rebalance (§4.1), per candidate edge:
 * NON_MEMBER: ``A_e`` proven FAIL, EHS defined and below 0.30 (DISABLE), or proven outside the top five;
 * UNKNOWN: anything else. One UNKNOWN candidate leaves the member count and every weight unproven, so the whole
   allocation is BLOCKED: no unknown is excluded, defaulted or normalized into a weight.
-* INCUBATION_MEMBER is not represented: it needs an ACTIVE incubation record whose schema (item 1.7) and parameters
-  (A_max, T_max, W_INC) are pending, so no candidate can reach it and no ``COLD_START_EXCEPTED`` is ever produced.
+* INCUBATION_MEMBER (S1_PAPER_INCUBATION_RECORD_V1_CONSTRUCTION, §4.1 and the r1 adoption record): exactly one
+  candidate, an ACTIVE record, U4 the only non-PASS leg of ``A_e`` and U1 the only undefined EHS input, each
+  ``COLD_START_EXCEPTED`` and neither FAIL (``governed_paper_allocation_incubation_eligibility``). U1 is never
+  ``COLD_START_EXCEPTED`` while the FCD-13 Sharpe and EHS methods are pending, so the governed path's timeline never
+  produces it; ENVELOPE_FIT reads ``W_INC`` from the admitted incubation policy for one that does.
 
 Share vector (§4.2): ``v_i = max(EHS_i x Sharpe_30d_i, 0)``, ``r_i = v_i / sum(v)``, or ``1/n`` when every numerator is
 0. BOOST ``beta_i = 6/5`` when "Sharpe_30d > 3/2 AND EHS > 4/5 AND no DECAY_ALERT" is proven true and 1 when it is proven
@@ -113,6 +116,7 @@ class GovernedPaperAllocationEligibility(str, Enum):
     MEMBER = "MEMBER"
     NON_MEMBER = "NON_MEMBER"
     UNKNOWN = "UNKNOWN"
+    INCUBATION_MEMBER = "INCUBATION_MEMBER"  # incubation lineages only; never part of a v1 allocation
 
 
 class GovernedPaperAllocationStatus(str, Enum):
@@ -125,6 +129,7 @@ class GovernedPaperEnvelopeFitStatus(str, Enum):
     PASS = "PASS"  # noqa: S105 - check status label, not a credential.
     FAIL = "FAIL"
     BLOCKED = "BLOCKED"
+    COLD_START_EXCEPTED = "COLD_START_EXCEPTED"  # an INCUBATION_MEMBER within W_INC x B (§4.6); never PASS
 
 
 @dataclass(frozen=True)
@@ -586,6 +591,33 @@ def governed_paper_allocation_reading_at(
 # --- ENVELOPE_FIT (§4.6) -----------------------------------------------------------------------------------------------
 
 
+def governed_paper_allocation_incubation_eligibility(  # noqa: PLR0913 - every §4.1 condition, named
+    *,
+    candidate_count: int,
+    record_active: bool,
+    activation_only_non_pass_leg_is_u4: bool,
+    ehs_only_undefined_input_is_u1: bool,
+    u4_cold_start_excepted: bool,
+    u1_cold_start_excepted: bool,
+) -> GovernedPaperAllocationEligibility:
+    """§4.1 INCUBATION_MEMBER at one rebalance: exactly one candidate under an ACTIVE record whose only non-PASS
+    activation leg is U4 and whose only undefined EHS input is U1, both ``COLD_START_EXCEPTED`` (so neither FAIL);
+    anything else is UNKNOWN here (the ordinary rules decide MEMBER and NON_MEMBER). Pure."""
+
+    flags = (
+        record_active,
+        activation_only_non_pass_leg_is_u4,
+        ehs_only_undefined_input_is_u1,
+        u4_cold_start_excepted,
+        u1_cold_start_excepted,
+    )
+    if type(candidate_count) is not int or any(type(item) is not bool for item in flags):
+        raise _fail("incubation_eligibility_inputs_malformed")
+    if candidate_count == 1 and all(flags):
+        return GovernedPaperAllocationEligibility.INCUBATION_MEMBER
+    return GovernedPaperAllocationEligibility.UNKNOWN
+
+
 def evaluate_governed_paper_envelope_fit(
     *,
     eligibility: GovernedPaperAllocationEligibility,
@@ -593,8 +625,13 @@ def evaluate_governed_paper_envelope_fit(
     nav: Fraction | None,
     usage_lower: Fraction | None,
     usage_exact: bool,
+    incubation_fraction: Fraction | None = None,
 ) -> GovernedPaperEnvelopeFit:
     """ENVELOPE_FIT of one exposure-increasing entry at one instant (§4.6 status table). Pure.
+
+    An INCUBATION_MEMBER needs ``incubation_fraction`` (``W_INC`` of the admitted incubation policy) and no weight: a usage
+    above ``W_INC x B`` is FAIL, an exact usage within it (equality included) is ``COLD_START_EXCEPTED``, never PASS, and
+    every stricter bound still applies.
 
     ``usage_lower`` is a proven lower bound of the usage (its exact value when ``usage_exact``), ``nav`` the
     publication-visible NAV ``B`` at the same instant and ``weight`` the edge's weight there. A FAIL needs only a proven
@@ -613,6 +650,11 @@ def evaluate_governed_paper_envelope_fit(
         raise _fail("envelope_inputs_malformed:weight_outside_the_bounds")
     if usage_exact and usage_lower is None:
         raise _fail("envelope_inputs_malformed:exact_usage_missing")
+    incubation = eligibility is GovernedPaperAllocationEligibility.INCUBATION_MEMBER
+    if incubation_fraction is not None and (type(incubation_fraction) is not Fraction or not 0 < incubation_fraction):
+        raise _fail("envelope_inputs_malformed:incubation_fraction")
+    if incubation and (incubation_fraction is None or weight is not None):
+        raise _fail("envelope_inputs_malformed:incubation_member_needs_w_inc_and_no_weight")
     fail, blocked, passed = (
         GovernedPaperEnvelopeFitStatus.FAIL,
         GovernedPaperEnvelopeFitStatus.BLOCKED,
@@ -629,6 +671,16 @@ def evaluate_governed_paper_envelope_fit(
         return GovernedPaperEnvelopeFit(blocked, observed, "publication_visible_nav_not_positive")
     if usage_lower is not None and usage_lower > GOVERNED_PAPER_ALLOCATION_CAP * nav:
         return GovernedPaperEnvelopeFit(fail, observed, "usage_above_0_40_of_nav_for_any_eligibility")
+    if incubation:
+        if usage_lower is not None and usage_lower > incubation_fraction * nav:  # type: ignore[operator]
+            return GovernedPaperEnvelopeFit(fail, observed, "incubation_member_usage_above_w_inc_times_nav")
+        if usage_exact:
+            return GovernedPaperEnvelopeFit(
+                GovernedPaperEnvelopeFitStatus.COLD_START_EXCEPTED,
+                observed,
+                "incubation_member_usage_within_w_inc_times_nav",
+            )
+        return GovernedPaperEnvelopeFit(blocked, observed, "usage_not_proven_exactly")
     if eligibility is GovernedPaperAllocationEligibility.MEMBER and weight is not None:
         if usage_lower is not None and usage_lower > weight * nav:
             return GovernedPaperEnvelopeFit(fail, observed, "member_usage_above_its_weight_times_nav")
@@ -667,6 +719,7 @@ __all__ = [
     "derive_governed_paper_allocation",
     "derive_governed_paper_allocation_timeline",
     "evaluate_governed_paper_envelope_fit",
+    "governed_paper_allocation_incubation_eligibility",
     "governed_paper_allocation_rational",
     "governed_paper_allocation_reading_at",
     "governed_paper_allocation_timeline_digest",

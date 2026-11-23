@@ -36,7 +36,9 @@ yet known keeps the windows undefined. The candidate's ``rho_t`` is its FCD-01 R
 engine's ``historical_execution_kelly_fit`` (KD-1..KD-12 with the D-A1 Alternative 1 fit ``rho_t * max(1, Lbar) <= f_cap``),
 the same the engine's schedule v8 applies at the R-5 fill. Coverage (KD-13) needs an ACTIVE PAPER_INCUBATION_V1 record,
 and none can exist (companion items 1.4-1.7 are pending): no reading is ever covered, so a class-incomplete window is
-``KELLY_RATIO_UNDEFINED`` (BLOCKED), never COLD_START_EXCEPTED. The undecided 100-trade bootstrap (KD-7) and HC-16a, HC-16c
+``KELLY_RATIO_UNDEFINED`` (BLOCKED), never COLD_START_EXCEPTED. An incubation lineage (``cold_start=True``) also records each reading's KD-13 at its R-4 fraction
+(``historical_execution_kelly_cold_start``); every other lineage's readings and evidence keep their bytes. The undecided
+100-trade bootstrap (KD-7) and HC-16a, HC-16c
 and HC-16d are never read. Every recorded value is a scale-18 ROUND_HALF_EVEN rendering of the exact one (KD-10e); a value
 outside the representation domain leaves the reading BLOCKED (``KELLY_VALUE_UNREPRESENTABLE``), and KD-10c's product is
 decided by one exact comparison and never formed or rendered.
@@ -92,6 +94,7 @@ from crypto_core.validation.historical_execution_economics import (
     HistoricalExecutionTradeExactValues,
     HistoricalExecutionTradeStatus,
     HistoricalExecutionValuationKind,
+    historical_execution_kelly_cold_start,
     historical_execution_kelly_fit,
     simulate_historical_execution_governed_paper_derivation,
 )
@@ -217,6 +220,11 @@ class GovernedPaperKellyReading:
     product_exceeds_one: bool | None
     diagnostic: str | None
     reading_digest: str
+    # Incubation lineages only (S1_PAPER_INCUBATION_RECORD_V1_CONSTRUCTION): RECORD A's KD-13 at the decision's R-4
+    # fraction, as if the reading were covered; whether it is covered is the incubation evidence's decision. Empty, and
+    # absent from the payload, on every other lineage, so every v12 reading keeps its bytes.
+    cold_start_status: str = ""
+    cold_start_reason: str = ""
 
 
 @dataclass(frozen=True)
@@ -278,8 +286,15 @@ def _serialize(value: object) -> object:
     return value
 
 
+_COLD_START_FIELDS = ("cold_start_status", "cold_start_reason")
+
+
 def _to_payload(artifact: object) -> dict[str, object]:
-    return {item.name: _serialize(getattr(artifact, item.name)) for item in fields(artifact)}  # type: ignore[arg-type]
+    payload = {item.name: _serialize(getattr(artifact, item.name)) for item in fields(artifact)}  # type: ignore[arg-type]
+    if isinstance(artifact, GovernedPaperKellyReading) and not artifact.cold_start_status:
+        for name in _COLD_START_FIELDS:
+            del payload[name]
+    return payload
 
 
 def _digest_of(payload: object) -> str:
@@ -676,6 +691,7 @@ def build_governed_paper_kelly_reading(  # noqa: PLR0913
     trades: Sequence[GovernedPaperKellyKnownTrade],
     rho: Fraction | None,
     rho_reason: str,
+    cold_start: bool = False,
 ) -> GovernedPaperKellyReading:
     """The Kelly reading of one entry decision at ``decision_time_ns`` on the re-proven trades of its evaluation (in
     engine close order): the trades known by then, the closed but not yet known ones, the candidate's exact FCD-01 R-4
@@ -695,6 +711,8 @@ def build_governed_paper_kelly_reading(  # noqa: PLR0913
         raise _fail("rho_malformed")
     if type(rho_reason) is not str or (rho is None) is (rho_reason == ""):
         raise _fail("rho_reason_malformed")
+    if type(cold_start) is not bool:
+        raise _fail("cold_start_flag_malformed")
     items = tuple(trades)
     if any(type(item) is not GovernedPaperKellyKnownTrade for item in items):
         raise _fail("trades_malformed")
@@ -708,6 +726,7 @@ def build_governed_paper_kelly_reading(  # noqa: PLR0913
     )
     status, reason = _STATUS[fit.status], fit.reason
     failures, blocks = fit.failures, fit.blocks
+    cold_status, cold_reason = historical_execution_kelly_cold_start(fit, rho) if cold_start else ("", "")
     try:
         rendered_rho = _render(rho)
         values = _reading_values(fit)
@@ -738,6 +757,8 @@ def build_governed_paper_kelly_reading(  # noqa: PLR0913
         zeros=fit.zeros,
         product_exceeds_one=fit.product_exceeds_one,
         reading_digest="",
+        cold_start_status=cold_status,
+        cold_start_reason=cold_reason,
         **values,  # type: ignore[arg-type]
     )
     return replace(seed, reading_digest=governed_paper_kelly_reading_digest(seed))
@@ -787,8 +808,12 @@ def derive_governed_paper_kelly_evidence(  # noqa: PLR0913 - the replay authorit
     instrument: str,
     start_ns: int,
     horizon_ns: int,
+    cold_start: bool = False,
 ) -> GovernedPaperKellyEvidence:
     """The Kelly evidence of one governed evaluation, derived from its authenticated replay (module docstring).
+
+    ``cold_start=True`` (an incubation lineage only) also records each reading's RECORD A KD-13 at its R-4 fraction
+    (``historical_execution_kelly_cold_start``); otherwise every reading and the evidence keep their v12 bytes.
 
     The supplied outcome and exact trade facts must be the replay's own (``_authenticated_replay``). The trades are the
     replay's closed trades re-proven against the sealed records. The entry decisions are every LONG/SHORT decision of
@@ -863,6 +888,7 @@ def derive_governed_paper_kelly_evidence(  # noqa: PLR0913 - the replay authorit
             trades=known,
             rho=fractions[sequence][0],
             rho_reason=fractions[sequence][1],
+            cold_start=cold_start is True,
         )
         for sequence, instant, direction in entries
     )
