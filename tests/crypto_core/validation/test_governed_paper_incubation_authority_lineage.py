@@ -16,10 +16,16 @@ from dataclasses import replace
 import pytest
 
 import crypto_core.validation.governed_paper_incubation_authority as inc
+from crypto_core.validation.edge_artifact_core import edge_authority_binding_snapshot
+from crypto_core.validation.edge_paper_admission_decision import edge_paper_admission_decision_digest
+from crypto_core.validation.edge_pre_paper_validation_evidence import edge_pre_paper_validation_evidence_from_payload
+from crypto_core.validation.edge_trial_count_chain import edge_trial_count_chain_from_payload
 from crypto_core.validation.governed_admitted_variant_paper_execution import (
     GovernedPaperExecutionStatus,
     build_governed_paper_day_seal,
+    build_governed_paper_execution_evidence,
     governed_paper_day_seal_to_dict,
+    verify_governed_paper_execution_evidence,
 )
 from crypto_core.validation.governed_paper_entry_safety import (
     GOVERNED_PAPER_ENTRY_SAFETY_INCUBATION_RULE_SET_DIGEST,
@@ -27,12 +33,20 @@ from crypto_core.validation.governed_paper_entry_safety import (
     GovernedPaperEntrySafetyPortfolio,
     build_governed_paper_entry_safety_evidence,
 )
+from crypto_core.validation.governed_paper_execution_authority import (
+    build_governed_paper_cycle_authority,
+    build_governed_paper_genesis,
+    governed_paper_genesis_authority,
+)
 from crypto_core.validation.governed_paper_incubation_authority import (
     GOVERNED_PAPER_INCUBATION_PRODUCTION_TABLE,
     GovernedPaperIncubationBasis,
     GovernedPaperIncubationBasisKind,
     GovernedPaperIncubationContext,
+    GovernedPaperIncubationEndKind,
+    GovernedPaperIncubationError,
     GovernedPaperIncubationInterval,
+    GovernedPaperIncubationLineage,
     GovernedPaperIncubationPolicy,
     GovernedPaperIncubationRecord,
     GovernedPaperIncubationRow,
@@ -46,6 +60,7 @@ from crypto_core.validation.governed_paper_incubation_authority import (
     governed_paper_incubation_record_digest,
     governed_paper_incubation_row_digest,
 )
+from crypto_core.validation.governed_paper_protective_authority import build_governed_paper_protective_authority
 from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_INCUBATION_ADMISSION_SCHEDULE_SCHEMA_VERSION,
 )
@@ -55,6 +70,7 @@ try:  # the module objects pytest collects (basename import), so cached worlds a
     import test_governed_paper_entry_safety as est
     import test_governed_paper_kelly_reading as kt
     import test_governed_paper_kill_switch as kst
+    import test_governed_paper_protective_authority as prot
     import test_governed_paper_protective_ledger as plt
     import test_governed_paper_protective_lineage as lineage_tests
     import test_governed_paper_regime_state as rst
@@ -67,6 +83,7 @@ except ImportError:  # imported outside a pytest session
     from tests.crypto_core.validation import test_governed_paper_entry_safety as est
     from tests.crypto_core.validation import test_governed_paper_kelly_reading as kt
     from tests.crypto_core.validation import test_governed_paper_kill_switch as kst
+    from tests.crypto_core.validation import test_governed_paper_protective_authority as prot
     from tests.crypto_core.validation import test_governed_paper_protective_ledger as plt
     from tests.crypto_core.validation import test_governed_paper_protective_lineage as lineage_tests
     from tests.crypto_core.validation import test_governed_paper_regime_state as rst
@@ -134,33 +151,50 @@ def _policy() -> GovernedPaperIncubationPolicy:
 POLICY = _policy()
 
 
+STATIC_FIELDS = ("ef5_preregistration_digest", "ef7_decision_digest", "trial_chain_head_digest")
+
+
+@functools.cache
+def world_key() -> GovernedPaperIncubationLineage:
+    """World G's lineage key, from its VERIFIED genesis authority: the static validation identities are genuine."""
+
+    world = gpe.scenario("G")
+    return governed_paper_incubation_lineage(governed_paper_genesis_authority(world.genesis, world.genesis_inputs))
+
+
+def record_of(key: GovernedPaperIncubationLineage, start: int, **changes: object) -> GovernedPaperIncubationRecord:
+    """A SYNTHETIC record binding ``key``: every identity, the static validation ones included, is the lineage's."""
+
+    values: dict[str, object] = {
+        "schema": "PAPER_INCUBATION_RECORD_V1",
+        "genesis_id": key.genesis_id,
+        "genesis_digest": key.genesis_digest,
+        "genesis_start_ns": key.genesis_start_ns,
+        "bootstrap_horizon_days": key.bootstrap_horizon_days,
+        "admission_scope": "LIMITED_S1_PAPER_V1",
+        "edge_id": key.edge_id,
+        "strategy_spec_digest": key.strategy_spec_digest,
+        "parameter_assignment_digest": key.parameter_assignment_digest,
+        "paper_admission_digest": key.paper_admission_digest,
+        "walk_forward_evidence_digest": key.walk_forward_evidence_digest,
+        "ef5_preregistration_digest": key.ef5_preregistration_digest,
+        "ef7_decision_digest": key.ef7_decision_digest,
+        "trial_chain_head_digest": key.trial_chain_head_digest,
+        "covered": ("U5",),
+        "attempt_bound": 21,
+        "duration_bound_days": 91,
+        "start_ns": start,
+        "policy_digest": POLICY.policy_digest,
+    }
+    values.update(changes)
+    return GovernedPaperIncubationRecord(**values)  # type: ignore[arg-type]
+
+
 def world_record(start: int) -> GovernedPaperIncubationRecord:
-    key = governed_paper_incubation_lineage(gpe.scenario("G").genesis)
-    return GovernedPaperIncubationRecord(
-        schema="PAPER_INCUBATION_RECORD_V1",
-        genesis_id=key.genesis_id,
-        genesis_digest=key.genesis_digest,
-        genesis_start_ns=key.genesis_start_ns,
-        bootstrap_horizon_days=key.bootstrap_horizon_days,
-        admission_scope="LIMITED_S1_PAPER_V1",
-        edge_id=key.edge_id,
-        strategy_spec_digest=key.strategy_spec_digest,
-        parameter_assignment_digest=key.parameter_assignment_digest,
-        paper_admission_digest=key.paper_admission_digest,
-        walk_forward_evidence_digest=key.walk_forward_evidence_digest,
-        ef5_preregistration_digest="1" * 64,
-        ef7_decision_digest="2" * 64,
-        trial_chain_head_digest="3" * 64,
-        covered=("U5",),
-        attempt_bound=21,
-        duration_bound_days=91,
-        start_ns=start,
-        policy_digest=POLICY.policy_digest,
-    )
+    return record_of(world_key(), start)
 
 
-def world_approval(published: int, start: int) -> GovernedPaperIncubationRow:
-    rec = world_record(start)
+def approval_of(rec: GovernedPaperIncubationRecord, published: int) -> GovernedPaperIncubationRow:
     seed = GovernedPaperIncubationRow(
         schema="governed-paper-incubation-registry-row.v1",
         sequence=0,
@@ -180,18 +214,31 @@ def world_approval(published: int, start: int) -> GovernedPaperIncubationRow:
     return replace(seed, row_digest=governed_paper_incubation_row_digest(seed))
 
 
-def world_basis(kind: GovernedPaperIncubationBasisKind, published: int, start: int) -> GovernedPaperIncubationBasis:
+def world_approval(published: int, start: int) -> GovernedPaperIncubationRow:
+    return approval_of(world_record(start), published)
+
+
+def basis_of(
+    kind: GovernedPaperIncubationBasisKind,
+    rec: GovernedPaperIncubationRecord,
+    published: int,
+    segments: tuple[tuple[int, int], ...],
+) -> GovernedPaperIncubationBasis:
     seed = GovernedPaperIncubationBasis(
         schema="governed-paper-incubation-basis.v1",
         kind=kind,
-        record_digest=governed_paper_incubation_record_digest(world_record(start)),
+        record_digest=governed_paper_incubation_record_digest(rec),
         source_id="synthetic-source",
         channel="TEST_ONLY_SYNTHETIC",
         published_at_ns=published,
-        segments=(GovernedPaperIncubationInterval(start, start + 91 * DAY),),
+        segments=tuple(GovernedPaperIncubationInterval(a, b) for a, b in segments),
         basis_digest="",
     )
     return replace(seed, basis_digest=governed_paper_incubation_basis_digest(seed))
+
+
+def world_basis(kind: GovernedPaperIncubationBasisKind, published: int, start: int) -> GovernedPaperIncubationBasis:
+    return basis_of(kind, world_record(start), published, ((start, start + 91 * DAY),))
 
 
 EMPTY = GovernedPaperIncubationContext(POLICY, (), ())
@@ -401,3 +448,229 @@ def test_the_accepted_v12_seals_v8_schedules_and_lineage_evidence_are_byte_ident
     assert all(set(V13_FIELDS).isdisjoint(governed_paper_day_seal_to_dict(item.seal)) for item in days)
     evidence, verification = rlt.lineage_evidence(days)
     assert (evidence.evidence_digest, verification.intact) == (ACCEPTED_MAIN_KELLY_LINEAGE_EVIDENCE_V12_DIGEST, True)
+
+
+# --- P2-STATIC-VALIDATION-IDENTITY-UNBOUND on the public lineage ------------------------------------------------------------
+
+STATIC = "P2-STATIC-VALIDATION-IDENTITY-UNBOUND"
+
+
+def independent_static(authority: object) -> tuple[str, str, str]:
+    """The three identities re-read independently through the public parsers (not the module's own helper)."""
+
+    ef7 = authority.paper_admission  # type: ignore[attr-defined]
+    pre_paper = edge_pre_paper_validation_evidence_from_payload(
+        edge_authority_binding_snapshot(ef7.pre_paper_evidence_binding)
+    )
+    chain = edge_trial_count_chain_from_payload(edge_authority_binding_snapshot(pre_paper.trial_chain_binding))
+    head = chain.links[-1].link_digest if chain.links else chain.genesis.genesis_digest
+    return ef7.preregistration_digest, edge_paper_admission_decision_digest(ef7), head
+
+
+def test_the_lineage_re_derives_the_genuine_static_identities_from_the_verified_genesis_authority() -> None:
+    world = gpe.scenario("G")
+    authority = governed_paper_genesis_authority(world.genesis, world.genesis_inputs)
+    key = world_key()
+    found = tuple(getattr(key, name) for name in STATIC_FIELDS)
+    assert found == independent_static(authority), STATIC
+    assert key.ef7_decision_digest == world.genesis.paper_admission_digest == key.paper_admission_digest
+    assert key.trial_chain_head_digest != authority.paper_admission.trial_chain_digest  # a head is not the chain digest
+    assert len(set(found)) == 3  # noqa: PLR2004
+    # a tampered reconstruction never yields static proof: every link recomputes through its public serializer
+    ef7 = authority.paper_admission
+    resealed = replace(ef7, pre_paper_evidence_digest="9" * 64)
+    resealed = replace(resealed, paper_admission_decision_digest=edge_paper_admission_decision_digest(resealed))
+    for tampered in (
+        replace(authority, paper_admission=replace(ef7, preregistration_digest="9" * 64)),
+        replace(authority, paper_admission=replace(ef7, trial_chain_digest="9" * 64)),
+        replace(authority, paper_admission=resealed),  # a resealed EF-7 is not the genesis's
+        replace(
+            authority,
+            paper_admission=resealed,
+            genesis=replace(world.genesis, paper_admission_digest=resealed.paper_admission_decision_digest),
+        ),  # even with a forged anchor the pre-paper evidence no longer recomputes
+    ):
+        unproven = governed_paper_incubation_lineage(tampered)
+        assert tuple(getattr(unproven, name) for name in STATIC_FIELDS) == ("", "", ""), STATIC
+    with pytest.raises(GovernedPaperIncubationError, match="genesis_authority_malformed$"):
+        governed_paper_incubation_lineage(world.genesis)  # type: ignore[arg-type]  # a bare genesis is no authority
+
+
+def static_context(key: GovernedPaperIncubationLineage, published: int, start: int, **changes: object):  # noqa: ANN201
+    rec = record_of(key, start, **changes)
+    bases = tuple(
+        basis_of(kind, rec, published, ((start, start + 91 * DAY),)) for kind in GovernedPaperIncubationBasisKind
+    )
+    return GovernedPaperIncubationContext(POLICY, (approval_of(rec, published),), bases)
+
+
+@pytest.mark.parametrize("name", STATIC_FIELDS)
+def test_world_g_a_record_naming_another_static_identity_terminates_on_the_public_gate(name: str) -> None:
+    days = incubation_days(4)
+    published, start = entry_instant() - 1, gpe.instant(4)
+    gate = incubation_gate(days[3], 3, static_context(world_key(), published, start, **{name: "9" * 64}))
+    found = gate.incubation_evidence
+    assert found is not None
+    assert (found.authority.final_state, found.authority.final_ns, found.authority.final_reason) == (
+        St.TERMINATED,
+        published,
+        "incubation_record_validation_identity_mismatch",
+    ), STATIC
+    (reading,) = found.readings
+    assert reading.state is St.TERMINATED
+    genuine = incubation_gate(days[3], 3, static_context(world_key(), published, start)).incubation_evidence
+    assert genuine is not None and genuine.authority.final_state is None  # genuine: only H = 30 days refuses it
+    assert genuine.authority.refusal_reason == "incubation_horizon_exceeds_lineage"
+
+
+# --- the H = 200 public lineage (an authorized 200-day genesis built by the public builders) -------------------------------
+
+
+@functools.cache
+def h200_world() -> tuple:
+    genesis_inputs = gpe.governed_genesis_inputs(bootstrap_horizon_days=200)
+    genesis = build_governed_paper_genesis(genesis_inputs)
+    world = replace(gpe.scenario("G"), genesis_inputs=genesis_inputs, genesis=genesis)
+    protective_inputs = prot.authority_inputs(world)
+    return world, protective_inputs, build_governed_paper_protective_authority(protective_inputs)
+
+
+@functools.cache
+def h200_key() -> GovernedPaperIncubationLineage:
+    world = h200_world()[0]
+    return governed_paper_incubation_lineage(governed_paper_genesis_authority(world.genesis, world.genesis_inputs))
+
+
+def h200_day(days: tuple, context: object):  # noqa: ANN201
+    world, protective_inputs, protective = h200_world()
+    k, prior = len(days), (days[-1].seal if days else None)
+    cycle_inputs = gpe.cycle_inputs_for(k, prior, world=world)
+    cycle = build_governed_paper_cycle_authority(cycle_inputs)
+    protection = replace(
+        lineage_tests.protection_for(
+            k,
+            days,
+            authority=(protective_inputs, protective),
+            portfolio_no_trade=True,
+            market_data_integrity=True,
+            kill_switch_escalation=True,
+        ),
+        regime=rst.regime_context(k),
+        system_safety=True,
+        sizing=sct.NO_SOURCE,
+        protective_ledger=plt.NO_PROOFS,
+        risk=rlt.risk_context(k),
+        kelly=True,
+        incubation=context,
+    )
+    seal_inputs = gpe.seal_inputs_for(
+        k, cycle_inputs, cycle, prior, gpe.pending_of(days), world=world, protection=protection
+    )
+    with rlt.tables(), incubation_table():
+        seal = build_governed_paper_day_seal(seal_inputs)
+    return gpe.Day(cycle_inputs, cycle, seal_inputs, seal)
+
+
+@functools.cache
+def h200_days() -> tuple:
+    days: tuple = ()
+    for _ in range(4):
+        days = (*days, h200_day(days, EMPTY))
+    return days
+
+
+def h200_public(days: tuple) -> tuple:
+    with rlt.tables(), incubation_table():
+        inputs = gpe.evidence_inputs(days, world=h200_world()[0])
+        evidence = build_governed_paper_execution_evidence(inputs)
+        return evidence, verify_governed_paper_execution_evidence(evidence, inputs)
+
+
+def windows(item: object) -> list[tuple[int, int]]:
+    return [(w.window_start_ns, w.window_end_ns) for w in item.seal.schedule.incubation_fill_windows]  # type: ignore[attr-defined]
+
+
+def test_h200_public_lineage_admits_only_the_genuine_static_identities() -> None:
+    days = h200_days()
+    key = h200_key()
+    assert key.bootstrap_horizon_days == 200 and all(getattr(key, name) for name in STATIC_FIELDS)  # noqa: PLR2004
+    (decision,) = days[3].seal.entry_safety_decisions
+    published = decision.decision_time_ns + 1  # P = S one nanosecond after day 3's decision
+    genuine = static_context(key, published, published)
+    sealed = h200_day(days[:3], genuine)
+    assert windows(sealed) == [(published, published + 91 * DAY)]  # the genuine record confers fill permission
+    assert sealed.seal.incubation_prefix_digest_open == days[3].seal.incubation_prefix_digest_open  # X1
+    gate = incubation_gate(sealed, 3, genuine).incubation_evidence
+    assert gate is not None and (gate.authority.refusal_reason, gate.authority.final_state) == ("", St.EXPIRED_HOLD)
+    evidence, verification = h200_public((*days[:3], sealed))
+    assert (evidence.status, verification.intact, verification.reason_codes) == (
+        GovernedPaperExecutionStatus.READY,
+        True,
+        (),
+    )
+    following = h200_day((*days[:3], sealed), genuine)
+    assert following.seal.incubation_prefix_digest_open == sealed.seal.incubation_prefix_digest_close  # X1 across days
+    # world G shares this lineage's EF-7 decision, so its identities are the genuine ones here; a genuine identity in
+    # the wrong role is still wrong
+    assert all(getattr(world_key(), name) == getattr(key, name) for name in STATIC_FIELDS)
+    swapped = {"ef5_preregistration_digest": key.trial_chain_head_digest}
+    for changes in (*({name: "9" * 64} for name in STATIC_FIELDS), swapped):  # each correctly rehashed throughout
+        wrong = static_context(key, published, published, **changes)
+        refused = h200_day(days[:3], wrong)
+        assert windows(refused) == [] and not refused.seal.schedule.incubation_kelly_covered, (STATIC, changes)
+        assert refused.seal.incubation_prefix_digest_open == days[3].seal.incubation_prefix_digest_open
+        found = incubation_gate(refused, 3, wrong).incubation_evidence
+        assert found is not None
+        assert (found.authority.final_state, found.authority.final_reason) == (
+            St.TERMINATED,
+            "incubation_record_validation_identity_mismatch",
+        ), (STATIC, changes)
+        assert found.authority.base_segments == found.authority.fill_segments == ()
+        # the public verifier reconstructs the refusal: an invalid identity never survives as positive authority
+        evidence, verification = h200_public((*days[:3], refused))
+        assert (evidence.status, verification.intact) == (GovernedPaperExecutionStatus.READY, True)
+
+
+def test_h200_combined_staggered_bases_a_gap_and_an_adverse_signal_keep_one_stable_authority() -> None:
+    days = h200_days()
+    key = h200_key()
+    (decision,) = days[3].seal.entry_safety_decisions
+    published = decision.decision_time_ns + 1
+    rec = record_of(key, published)
+    a3, a4, a5, a6 = GovernedPaperIncubationBasisKind
+    bases = (
+        basis_of(a3, rec, published, ((published, published + 91 * DAY),)),
+        basis_of(a4, rec, published + 5, ((published, published + 91 * DAY),)),  # its knowledge starts late
+        basis_of(a5, rec, published + 5, ((published, published + 100), (published + 200, published + 91 * DAY))),
+        basis_of(a6, rec, published + 10, ((published + 50, published + 91 * DAY),)),  # its validity starts late
+    )
+    signal_at = published + 1_000
+    signal = replace(
+        approval_of(rec, signal_at),
+        sequence=1,
+        kind=GovernedPaperIncubationRowKind.RECORD_END,
+        record=None,
+        approver_id="",
+        end_kind=GovernedPaperIncubationEndKind.ADVERSE_SIGNAL,
+        effective_at_ns=gpe.instant(4) + 5 * DAY,
+    )
+    signal = replace(signal, row_digest=governed_paper_incubation_row_digest(signal))
+    context = GovernedPaperIncubationContext(POLICY, (approval_of(rec, published), signal), bases)
+    sealed = h200_day(days[:3], context)
+    # decisions and fills share one interval model: [P+50, P+100) and [P+200, P+1000), never past the signal
+    assert windows(sealed) == [(published + 50, published + 100), (published + 200, signal_at)]
+    assert sealed.seal.incubation_prefix_digest_open == days[3].seal.incubation_prefix_digest_open  # X1
+    found = incubation_gate(sealed, 3, context).incubation_evidence
+    assert found is not None
+    authority = found.authority
+    assert (authority.block_from_ns, authority.final_state) == (signal_at, St.EXPIRED_HOLD)  # no terminal cause
+    assert [inc.governed_paper_incubation_state_at(authority, q)[0] for q in (published + 49, published + 50)] == [
+        St.HOLD,
+        St.ACTIVE,
+    ]
+    assert inc.governed_paper_incubation_state_at(authority, signal_at)[0] is St.HOLD
+    evidence, verification = h200_public((*days[:3], sealed))
+    assert (evidence.status, verification.intact) == (GovernedPaperExecutionStatus.READY, True)
+    following = h200_day((*days[:3], sealed), context)
+    assert following.seal.incubation_prefix_digest_open == sealed.seal.incubation_prefix_digest_close
+    assert windows(following) == windows(sealed)  # nothing later reaches back or extends past the signal

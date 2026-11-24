@@ -130,6 +130,11 @@ def lineage(**changes: object) -> GovernedPaperIncubationLineage:
         "parameter_assignment_digest": "c" * 64,
         "paper_admission_digest": "d" * 64,
         "walk_forward_evidence_digest": "e" * 64,
+        # the synthetic static validation identities (the public lineage re-derives genuine ones from a verified genesis
+        # authority: see test_governed_paper_incubation_authority_lineage)
+        "ef5_preregistration_digest": "1" * 64,
+        "ef7_decision_digest": "d" * 64,
+        "trial_chain_head_digest": "3" * 64,
     }
     values.update(changes)
     return GovernedPaperIncubationLineage(**values)  # type: ignore[arg-type]
@@ -167,9 +172,9 @@ def record(start: int = S, covered: tuple = ("U5",), **changes: object) -> Gover
         "parameter_assignment_digest": key.parameter_assignment_digest,
         "paper_admission_digest": key.paper_admission_digest,
         "walk_forward_evidence_digest": key.walk_forward_evidence_digest,
-        "ef5_preregistration_digest": "1" * 64,
-        "ef7_decision_digest": "2" * 64,
-        "trial_chain_head_digest": "3" * 64,
+        "ef5_preregistration_digest": key.ef5_preregistration_digest,
+        "ef7_decision_digest": key.ef7_decision_digest,
+        "trial_chain_head_digest": key.trial_chain_head_digest,
         "covered": covered,
         "attempt_bound": 21,
         "duration_bound_days": 91,
@@ -509,7 +514,6 @@ def test_a_retroactive_or_duplicate_approval_terminates_and_never_resurrects() -
 @pytest.mark.parametrize(
     ("kind", "final"),
     [
-        (GovernedPaperIncubationEndKind.ADVERSE_SIGNAL, St.TERMINATED),
         (GovernedPaperIncubationEndKind.REVOKED, St.REVOKED),
         (GovernedPaperIncubationEndKind.VALIDATION_NOT_CURRENT, St.TERMINATED),
     ],
@@ -559,9 +563,13 @@ def test_finality_is_never_dated_before_publication_and_an_unqualified_signal_on
     authority = derive(context((approval(0), foreign), all_bases()))
     assert state(authority, S + 9 * DAY) is St.HOLD and authority.final_state is St.EXPIRED_HOLD
     early = derive(
+        context((end_row(0, GovernedPaperIncubationEndKind.REVOKED, S - 3 * DAY, S), approval(1)), all_bases())
+    )
+    assert early.base_segments == () and state(early, S + DAY) is St.REVOKED  # final at max(P, E, P_A) = S
+    adverse_early = derive(
         context((end_row(0, GovernedPaperIncubationEndKind.ADVERSE_SIGNAL, S - 3 * DAY, S), approval(1)), all_bases())
     )
-    assert early.base_segments == () and state(early, S + DAY) is St.TERMINATED  # final at max(P, E) = S
+    assert adverse_early.base_segments == () and state(adverse_early, S + DAY) is St.HOLD  # blocks; no terminal cause
     quiet = end_row(0, GovernedPaperIncubationEndKind.ADVERSE_SIGNAL, S - 3 * DAY, S, channel="HUMAN_GOVERNANCE")
     unqualified_early = derive(context((quiet, approval(1)), all_bases()))
     assert unqualified_early.base_segments == () and state(unqualified_early, S + DAY) is St.HOLD  # it still binds
@@ -671,6 +679,261 @@ def test_the_evidence_binds_only_the_authoritys_own_readings_and_attempts() -> N
             readings=(early,),
             attempts=((0, S - DAY),),
         )
+
+
+# --- P2-RETROACTIVE-RECORD-FINALITY (inherited B1): every final event is record-causal ---------------------------------------
+
+RETRO = "P2-RETROACTIVE-RECORD-FINALITY"
+End = GovernedPaperIncubationEndKind
+
+
+def bare_evidence(ctx: GovernedPaperIncubationContext, horizon: int, trades: tuple = ()):  # noqa: ANN201
+    return build_governed_paper_incubation_evidence(
+        ctx, lineage=lineage(), horizon_ns=horizon, known_trades=trades, readings=(), attempts=()
+    )
+
+
+def prefix(evidence: object, before: int) -> str:
+    return governed_paper_incubation_prefix_digest(evidence, before_ns=before)  # type: ignore[arg-type]
+
+
+def assert_prefix_stable(old: object, new: object, publication: int) -> None:
+    """Every prefix before the publication is identical; the old content before it never moves (B1, X1)."""
+
+    for before in (G, G + 1, G + DAY, G + DAY + 1, G + 2 * DAY, G + 2 * DAY + 1, publication - 1, publication):
+        if before <= publication:
+            assert prefix(new, before) == prefix(old, before), (RETRO, before)
+
+
+@pytest.mark.parametrize(
+    "trades",
+    [
+        ((G + DAY, "WIN"), (G + 2 * DAY, "LOSS")),  # the audit reproducer: completion inside G, before P = S
+        ((G - 2, "WIN"), (G - 1, "LOSS")),  # completion known even before G
+        ((S - 1, "LOSS"), (S - 1, "WIN")),  # completion one nanosecond before P
+    ],
+)
+def test_a_class_completion_known_before_the_record_never_graduates_it_in_the_past(trades: tuple) -> None:  # B1
+    later = context((approval(0, published=S, effective_at_ns=S),), all_bases(published=S))  # P = S > G
+    old, new = bare_evidence(context(), S + DAY, trades), bare_evidence(later, S + DAY, trades)
+    found = new.authority
+    assert (found.graduation_ns, found.final_state, found.final_ns) == (S, St.GRADUATED, S), RETRO
+    assert found.u5_completion_ns is not None and found.u5_completion_ns < S  # the class history predates the record
+    assert found.base_segments == found.fill_segments == ()  # coverage ended before S: no exception ever exists
+    assert_prefix_stable(old, new, S)
+    assert prefix(new, S + 1) != prefix(old, S + 1)  # the approval is new knowledge from P on
+    assert [state(found, q) for q in (S - 1, S, S + 1, X + DAY)] == [St.NOT_ESTABLISHED] + [St.GRADUATED] * 3
+    # an approval known before S: graduation waits for the establishment S, never the earlier knowledge instant
+    early = bare_evidence(ACTIVE_CONTEXT, S + DAY, trades).authority
+    assert (early.graduation_ns, early.final_ns) == (S, S)
+    assert [state(early, q) for q in (S - DAY, S - 1, S)] == [St.NOT_ESTABLISHED, St.NOT_ESTABLISHED, St.GRADUATED]
+    assert_prefix_stable(
+        bare_evidence(context(), S + DAY, trades), bare_evidence(ACTIVE_CONTEXT, S + DAY, trades), S - DAY
+    )
+
+
+def test_a_completion_at_or_after_the_record_knowledge_graduates_at_its_own_instant() -> None:
+    for trades, expected in (
+        (((S, "WIN"), (S, "LOSS")), S),  # at P = S
+        (((S + 2 * DAY, "WIN"), (S + 3 * DAY, "LOSS")), S + 3 * DAY),  # after P
+        (((G + DAY, "WIN"), (S + 3 * DAY, "LOSS")), S + 3 * DAY),  # one class before P, the other after
+    ):
+        approved = context((approval(0, published=S, effective_at_ns=S),), all_bases(published=S))
+        found = derive(approved, known_trades=trades)
+        assert (found.graduation_ns, found.final_state, found.final_ns) == (expected, St.GRADUATED, expected)
+        assert segments(found, "fill_segments") == (((S, expected),) if expected > S else ())
+        assert state(found, expected - 1) is (St.ACTIVE if expected > S else St.NOT_ESTABLISHED)
+    # a completion at or after the end X never graduates (r1: "before the bound")
+    assert derive(ACTIVE_CONTEXT, known_trades=((S, "WIN"), (X, "LOSS"))).final_state is St.EXPIRED_HOLD
+
+
+@pytest.mark.parametrize("kind", list(GovernedPaperIncubationEndKind))
+def test_an_end_row_known_before_the_first_approval_never_creates_a_past_final_event(kind: object) -> None:  # B1
+    terminal = {End.REVOKED: St.REVOKED, End.VALIDATION_NOT_CURRENT: St.TERMINATED}.get(kind)  # type: ignore[call-overload]
+    end = end_row(0, kind, G + DAY, G + DAY)  # type: ignore[arg-type]
+    old = bare_evidence(context((end,), ()), S + DAY)
+    new = bare_evidence(context((end, approval(1, published=S, effective_at_ns=S)), all_bases(published=S)), S + DAY)
+    found = new.authority
+    assert found.block_from_ns == old.authority.block_from_ns == G + DAY  # the negative observation is kept, unmoved
+    if terminal is None:  # ADVERSE_SIGNAL: it blocks, never terminal by itself
+        assert (found.final_state, found.final_ns) == (St.EXPIRED_HOLD, X)
+        assert state(found, S) is St.HOLD
+    else:
+        assert (found.final_state, found.final_ns, found.final_effective_ns) == (terminal, S, G + DAY), RETRO
+        assert state(found, S) is terminal and state(found, S - 1) is St.NOT_ESTABLISHED
+    assert found.base_segments == ()
+    assert_prefix_stable(old, new, S)
+    # pre-start finality is not clamped to S: an approval known at P < S makes the earlier end row final at P
+    pre_start = derive(context((end, approval(1, published=S - 5 * DAY, effective_at_ns=S - 5 * DAY)), all_bases()))
+    if terminal is not None:
+        assert (pre_start.final_state, pre_start.final_ns) == (terminal, S - 5 * DAY)
+        assert state(pre_start, S - 5 * DAY) is terminal and state(pre_start, S - 5 * DAY - 1) is St.NOT_ESTABLISHED
+
+
+def test_record_dependent_finals_order_at_equal_instants_and_a_late_approval_never_expires_in_the_past() -> None:
+    completed = ((G + DAY, "WIN"), (G + 2 * DAY, "LOSS"))  # graduation is dated S
+    for kind, expected in ((End.REVOKED, St.REVOKED), (End.VALIDATION_NOT_CURRENT, St.TERMINATED)):
+        ctx = context((approval(0), end_row(1, kind, S - DAY // 2, S)), all_bases())  # final at max(P, E, P_A) = S
+        found = derive(ctx, known_trades=completed)
+        assert (found.final_state, found.final_ns, found.graduation_ns) == (
+            expected,
+            S,
+            S,
+        )  # failure > revocation > graduation
+    both = context(
+        (
+            approval(0),
+            end_row(1, End.REVOKED, S - DAY // 2, S),
+            end_row(2, End.VALIDATION_NOT_CURRENT, S - DAY // 3, S),
+        ),
+        all_bases(),
+    )
+    assert derive(both, known_trades=completed).final_state is St.TERMINATED
+    # an approval published after its record's end X: TERMINATED at P, and the expiry is never dated before P either
+    late = context((approval(0, published=X + DAY, effective_at_ns=X + DAY),), all_bases())
+    found = derive(late, known_trades=completed)
+    assert (found.final_state, found.final_ns, found.final_reason) == (
+        St.TERMINATED,
+        X + DAY,
+        "incubation_record_approval_retroactive",
+    )
+    assert_prefix_stable(
+        bare_evidence(context(), X + 2 * DAY, completed), bare_evidence(late, X + 2 * DAY, completed), X + DAY
+    )
+    assert [state(found, q) for q in (X, X + DAY - 1, X + DAY)] == [St.NOT_ESTABLISHED] * 2 + [St.TERMINATED]
+
+
+# --- P2-UNPROVEN-ADVERSE-SIGNAL-FINALITY: a generic adverse signal blocks, it never terminates by itself ----------------------
+
+ADVERSE = "P2-UNPROVEN-ADVERSE-SIGNAL-FINALITY"
+
+
+@pytest.mark.parametrize(
+    ("published", "effective"),
+    [(S + 20 * DAY, S + 25 * DAY), (S + 20 * DAY, S + 20 * DAY), (S + 20 * DAY, S + 15 * DAY)],  # P < E, P = E, E < P
+)
+def test_an_adverse_signal_blocks_at_publication_and_holds_without_a_terminal_cause(
+    published: int, effective: int
+) -> None:
+    signal = end_row(1, End.ADVERSE_SIGNAL, published, effective)
+    found = derive(context((approval(0), signal), all_bases()))
+    for q in sorted({published - 1, published, published + 1, effective - 1, effective, effective + 1, X - 1}):
+        expected = St.ACTIVE if q < published else St.HOLD
+        assert state(found, q) is expected, (ADVERSE, q)
+        assert fill(found, q) is (q < published), (ADVERSE, q)  # a pending intent cannot fill from P on
+    assert (found.block_from_ns, found.final_state, found.final_ns) == (published, St.EXPIRED_HOLD, X), ADVERSE
+    assert found.final_reason == "incubation_duration_bound_reached"  # the independent final event, at its own instant
+    assert state(found, X) is St.EXPIRED_HOLD
+    # no historical rewrite: before P the evidence is the one without the signal
+    old = evidence_of(ACTIVE_CONTEXT, (S + DAY, published - 1), S + 30 * DAY)
+    new = evidence_of(context((approval(0), signal), all_bases()), (S + DAY, published - 1), S + 30 * DAY)
+    assert old.readings == new.readings and prefix(old, published) == prefix(new, published)
+    # independently proven terminal causes keep their finality, boundaries and irreversibility
+    for kind, terminal in ((End.VALIDATION_NOT_CURRENT, St.TERMINATED), (End.REVOKED, St.REVOKED)):
+        cause_at = published + DAY
+        proven = derive(context((approval(0), signal, end_row(2, kind, cause_at, cause_at + DAY)), all_bases()))
+        assert (proven.final_state, proven.final_ns) == (terminal, cause_at + DAY)
+        assert [state(proven, q) for q in (cause_at, cause_at + DAY - 1, cause_at + DAY, X + DAY)] == [
+            St.HOLD,
+            St.HOLD,
+            terminal,
+            terminal,
+        ]
+    # an adverse signal never upgrades an unadmitted row or a foreign record into a terminal cause either
+    foreign = derive(
+        context((approval(0), end_row(1, End.ADVERSE_SIGNAL, published, published, "7" * 64)), all_bases())
+    )
+    assert (state(foreign, published), foreign.final_state) == (St.HOLD, St.EXPIRED_HOLD)
+
+
+# --- P2-STATIC-VALIDATION-IDENTITY-UNBOUND (unit level; the genuine identities are proven on the public lineage) -------------
+
+STATIC = "P2-STATIC-VALIDATION-IDENTITY-UNBOUND"
+STATIC_FIELDS = ("ef5_preregistration_digest", "ef7_decision_digest", "trial_chain_head_digest")
+
+
+@pytest.mark.parametrize("name", STATIC_FIELDS)
+def test_a_record_naming_other_static_validation_identities_terminates_and_never_reads_active(name: str) -> None:
+    wrong = record(**{name: "9" * 64})
+    found = derive(context((approval(0, wrong),), all_bases(digest=governed_paper_incubation_record_digest(wrong))))
+    assert (found.final_state, found.final_ns, found.final_reason) == (
+        St.TERMINATED,
+        S - DAY,
+        "incubation_record_validation_identity_mismatch",
+    ), STATIC
+    assert found.base_segments == found.fill_segments == ()
+    assert {state(found, q) for q in (S - DAY, S, S + DAY, X - 1, X)} == {St.TERMINATED}, STATIC
+    # a lineage WITHOUT the static proof refuses the record: missing proof blocks, it proves no failure
+    unproven = derive_governed_paper_incubation_authority(
+        ACTIVE_CONTEXT, lineage=lineage(**{name: ""}), horizon_ns=G + H_DAYS * DAY
+    )
+    assert (unproven.refusal_reason, unproven.final_state) == ("incubation_static_validation_unproven", None)
+    assert unproven.base_segments == () and state(unproven, S + DAY) is St.NOT_ESTABLISHED
+
+
+def test_valid_static_identities_without_the_a6_basis_still_hold() -> None:
+    no_a6 = context((approval(0),), tuple(item for item in all_bases() if item.kind is not K.A6_DECISION_CURRENTNESS))
+    found = derive(no_a6)
+    assert (found.refusal_reason, found.final_state) == ("", St.EXPIRED_HOLD)
+    assert governed_paper_incubation_state_at(found, S + DAY, context=no_a6) == (
+        St.HOLD,
+        "incubation_authority_unproven:a6",
+    )
+    assert fill(found, S + DAY) is False and state(derive(ACTIVE_CONTEXT), S + DAY) is St.ACTIVE
+
+
+# --- P2-REPLAYED-ATTEMPT-LEDGER: an attempt is one distinct admitted decision ------------------------------------------------
+
+REPLAY = "P2-REPLAYED-ATTEMPT-LEDGER"
+
+
+def ledger_evidence(readings: tuple, attempts: tuple, horizon: int):  # noqa: ANN201
+    return build_governed_paper_incubation_evidence(
+        ACTIVE_CONTEXT, lineage=lineage(), horizon_ns=horizon, known_trades=(), readings=readings, attempts=attempts
+    )
+
+
+def test_a_replayed_reordered_or_unmatched_attempt_identity_is_refused_before_any_count() -> None:
+    q = S + DAY
+    static = derive(ACTIVE_CONTEXT, q + DAY)
+    first = build_governed_paper_incubation_reading(static, kelly=kelly_at(q, 0), attempts_before=())
+    second = build_governed_paper_incubation_reading(static, kelly=kelly_at(q + 1, 1), attempts_before=(q,))
+    valid = ledger_evidence((first, second), ((0, q), (1, q + 1)), q + DAY)
+    assert [item.index for item in valid.attempts] == [1, 2] and valid.authority.exhaustion_ns is None
+    assert ledger_evidence((first, second), ((0, q), (1, q + 1)), q + DAY) == valid  # replay: same count and digest
+    for readings, attempts, reason in (
+        ((first,), ((0, q),) * 21, "attempt_ledger_identity_replayed_or_reordered"),  # the audit reproducer
+        ((first,), ((0, q), (0, q)), "attempt_ledger_identity_replayed_or_reordered"),
+        ((first, second), ((0, q), (0, q + 1)), "attempt_ledger_identity_replayed_or_reordered"),  # re-timed duplicate
+        ((first, second), ((1, q + 1), (0, q)), "attempt_ledger_identity_replayed_or_reordered"),
+        ((first,), ((0, q + 1),), "attempt_not_an_active_decision"),  # the reading's own instant differs
+        ((first,), ((1, q),), "attempt_not_an_active_decision"),  # no reading of that decision
+        ((), ((0, q),), "attempt_not_an_active_decision"),
+        ((second, first), ((0, q),), "readings_not_distinct_decisions_in_decision_order"),
+        ((first, first), ((0, q),), "readings_not_distinct_decisions_in_decision_order"),
+    ):
+        with pytest.raises(GovernedPaperIncubationError, match=f"{reason}$"):
+            ledger_evidence(readings, attempts, q + DAY)  # type: ignore[arg-type]
+    # the public schedule/fill consumers therefore only ever see a verified ledger
+    assert governed_paper_incubation_schedule_bounds(valid) == ((0, 1), ((S, X),), True)
+    assert fill(valid.authority, q) is True, REPLAY
+
+
+def test_twenty_one_distinct_decisions_at_one_nanosecond_are_twenty_one_attempts() -> None:
+    q = S + DAY
+    static = derive(ACTIVE_CONTEXT, q + 1)
+    readings = tuple(
+        build_governed_paper_incubation_reading(static, kelly=kelly_at(q, n), attempts_before=(q,) * min(n, 21))
+        for n in range(22)
+    )
+    assert [item.state for item in readings] == [St.ACTIVE] * 21 + [St.EXPIRED_HOLD]
+    twenty = ledger_evidence(readings[:21], tuple((n, q) for n in range(20)), q + 1)  # 20 -> 21: attempt 21 admissible
+    assert (len(twenty.attempts), twenty.authority.exhaustion_ns, fill(twenty.authority, q)) == (20, None, True)
+    full = ledger_evidence(readings, tuple((n, q) for n in range(21)), q + 1)
+    assert (len(full.attempts), full.authority.exhaustion_ns, full.authority.final_state) == (21, q, St.EXPIRED_HOLD)
+    assert fill(full.authority, q - 1) is True and fill(full.authority, q) is False  # O4: attempt 21's own fill
+    with pytest.raises(GovernedPaperIncubationError, match="attempt_not_an_active_decision$"):
+        ledger_evidence(readings, tuple((n, q) for n in range(22)), q + 1)  # a 22nd is never an attempt
 
 
 def test_malformed_inputs_are_refused_before_any_authority() -> None:

@@ -734,10 +734,17 @@ protected independent audit, exact-head CI and human merge authorization:
   termination or graduation. A decision is ACTIVE when its instant lies in a base segment and fewer than 21 attempts
   came before it. An incubation-basis fill is permitted only inside a fill segment: the same base segments, cut at the
   21st attempt (O4);
-- an end signal blocks at its publication. Finality (`REVOKED`, or `TERMINATED` for `ADVERSE_SIGNAL` and
-  `VALIDATION_NOT_CURRENT`) is dated `max(P, E)`. A retroactive or second approval terminates the record. U5 graduates
-  at the first known win and loss. U1-U4 have no producer, so a record selecting them never graduates and never yields
-  an exception;
+- an end signal blocks at its publication. Only an admitted end row with a terminal cause is final: `REVOKED`, or
+  `TERMINATED` for `VALIDATION_NOT_CURRENT`. A generic `ADVERSE_SIGNAL` blocks but keeps the record in HOLD, because it
+  proves no terminal cause. Every final event is dated no earlier than the first approval's publication `P_A`, so an
+  end row is final at `max(P, E, P_A)`. A retroactive or second approval terminates the record. U5 graduates at the
+  first known win and loss, but never before `max(P_A, S)`. U1-U4 have no producer, so a record selecting them never
+  graduates and never yields an exception;
+- the record's static validation identities are the lineage's own: the EF-5 sealed preregistration, the EF-7 v2 PASS
+  decision and the trial-count chain head. They are re-derived from the verified genesis authority's EF-7 decision
+  through the accepted public serializers and verifiers. A record naming other identities is TERMINATED. A lineage
+  without that proof refuses every record. The attempt ledger names each admitted decision once, in strictly
+  increasing sequence at its reading's own instant, and a replayed or reordered identity is refused before counting;
 - the engine's schedule v9 is schedule v8 plus three declared fields: the incubation decisions, the fill segments and U5
   coverage. A fill outside a fill segment is refused, and so is a fill whose post-fill exposure exceeds `W_INC = 0.08` of
   candidate equity. KD-13 admits a Kelly reading BLOCKED only by `KELLY_RATIO_UNDEFINED` for such an intent. Entry gate

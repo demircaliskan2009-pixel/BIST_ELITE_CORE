@@ -11,10 +11,13 @@ Root-cause escape. This module replaces three defects by architecture, not by pa
 
 * ``INCUBATION_FUTURE_APPROVAL_REWRITES_PAST`` (B1): every fact is KNOWLEDGE only from its own publication instant. The
   authority at ``t`` reads only rows and bases published at or before ``t``, attempts admitted before ``t`` and trades
-  known at or before ``t``, so a publication at ``P`` never changes a state, reading or prefix before ``P``;
+  known at or before ``t``, so a publication at ``P`` never changes a state, reading or prefix before ``P``. Every final
+  event depends on the record, so none is ever dated before the first approval's publication ``P_A`` (record-causal
+  finality): an end row known before ``P_A`` blocks from its own publication (negative evidence kept) but is final no
+  earlier than ``P_A``, and a class completion known before ``P_A`` graduates no earlier than ``max(P_A, S)``;
 * ``INCUBATION_KNOWN_SIGNAL_BLOCK_DELAYED_UNTIL_EFFECTIVE_TIME`` (B2): a known end signal removes positive authority
-  from its publication ``P``. Finality (``REVOKED``, ``TERMINATED``) is a separate fact, dated ``max(P, E)``: never before
-  its publication and never before its effective instant ``E``;
+  from its publication ``P``. Finality (``REVOKED``, ``TERMINATED``) is a separate fact, dated ``max(P, E, P_A)``: never
+  before its publication, its effective instant ``E`` or the record's knowledge;
 * ``INCUBATION_ACTIVE_WITH_EMPTY_FILL_WINDOW`` (B3): there is no record-start fill window. Decision eligibility and fill
   permission are both membership in the SAME derived segments, so a basis that starts after ``S`` delays both alike.
 
@@ -22,8 +25,12 @@ The model. Every interval is half-open ``[start, end)`` in UTC nanoseconds. For 
 and its admitted variant) the authority derives:
 
 1. Establishment, from the first ``RECORD_APPROVAL`` row of the key: the record it embeds must recompute to the row's
-   digest and bind this genesis (id, digest, ``G``, bootstrap horizon, scope) and its executed edge (variant, strategy
-   spec, parameters, paper admission, walk-forward evidence); the policy must hold exactly r1's values; the row, the
+   digest and bind this genesis (id, digest, ``G``, bootstrap horizon, scope), its executed edge (variant, strategy
+   spec, parameters, paper admission, walk-forward evidence) and its static validation identities (the EF-5 sealed
+   preregistration, the EF-7 v2 PASS decision and the trial-count chain head), which the lineage re-derives from the
+   verified genesis authority's EF-7 decision through the accepted public serializers and verifiers, never from the
+   record; a lineage without that static proof refuses the record, a record naming other identities is TERMINATED;
+   the policy must hold exactly r1's values; the row, the
    policy and the C2 horizon must be admitted by the active table (A1, A3, r1 "C2 must independently establish both G and
    H"); ``S + T_max <= G + H``. ``X = min(S + T_max, G + H)``. An approval published or effective after ``S`` is a
    retroactive approval: ``TERMINATED`` at its publication. A second approval row of the key terminates the record at
@@ -37,11 +44,14 @@ and its admitted variant) the authority derives:
 3. Attempts: an entry admitted on the incubation basis is one attempt at its decision instant (r1). The ``A_max``-th
    attempt ends the record at its decision instant (``EXPIRED_HOLD`` unless coverage ended first): a decision reads the
    attempts admitted before it, so the decision that consumes attempt 21 is ACTIVE, and no fill at or after that instant
-   is permitted (O4), its own included.
+   is permitted (O4), its own included. The ledger names each admitted decision once, by strictly increasing decision
+   sequence at its own reading's instant: a replayed, duplicated, reordered or unmatched identity is refused before any
+   attempt is counted, never deduplicated into a valid ledger.
 4. Graduation: per selected reading, irreversible. U5 coverage ends at the knowledge instant of the first known closed
-   win and the first known closed loss (r1 F-3 under RECORD A). No producer of the U1-U4 readings exists, so their own
-   history is never proven complete: a record selecting any of them never graduates (it reaches ``EXPIRED_HOLD``), and no
-   check owes ``COLD_START_EXCEPTED`` to them.
+   win and the first known closed loss (r1 F-3 under RECORD A); the record graduates at the later of that instant, its
+   start ``S`` and its knowledge ``P_A``, never before it was established. No producer of the U1-U4 readings exists,
+   so their own history is never proven complete: a record selecting any of them never graduates (it reaches
+   ``EXPIRED_HOLD``), and no check owes ``COLD_START_EXCEPTED`` to them.
 
 ``ACTIVE`` at a decision instant ``t`` holds exactly when ``t`` is in a base segment and fewer than ``A_max`` attempts
 were admitted before the decision. A fill at ``t_f`` of an incubation-basis intent is permitted exactly when ``t_f`` is in
@@ -50,9 +60,11 @@ record known, refused or before ``S``), ``HOLD`` (O1 ``UNKNOWN_CURRENTNESS``: a 
 finality is not yet reached; never final for that reason alone) or a final state, which is never left.
 
 A missing row never proves anything (A5): an end row of the key, admitted or not, blocks from its publication; only an
-admitted end row naming the approved record makes the record final. ``ADVERSE_SIGNAL`` and ``VALIDATION_NOT_CURRENT``
-are authoritative failed verification (``TERMINATED``, O1 ``PROVEN_LOSS_OF_CURRENTNESS``); ``REVOKED`` is a verified
-human revocation (``REVOKED``).
+admitted end row naming the approved record and carrying a terminal cause makes the record final.
+``VALIDATION_NOT_CURRENT`` is authoritative proven loss of validation currentness (``TERMINATED``, O1
+``PROVEN_LOSS_OF_CURRENTNESS``); ``REVOKED`` is a verified human revocation (``REVOKED``). ``ADVERSE_SIGNAL`` is immediate
+negative eligibility authority (A5) and no proof of a terminal cause: it blocks from its publication and the record
+stays ``HOLD`` (O1 ``UNKNOWN_CURRENTNESS``) unless an independent final event ends it.
 
 The evidence binds the context digests, the derived authority, every entry decision's reading and the attempt ledger.
 ``governed_paper_incubation_prefix_digest`` is its knowledge-stable content before an instant, so a later seal proves it
@@ -72,12 +84,38 @@ from fractions import Fraction
 
 from crypto_core.validation.edge_artifact_core import (
     EdgeArtifactError,
+    EdgeEvidenceStatus,
+    EdgeGateVerdict,
+    edge_authority_binding_snapshot,
     edge_canonical_json,
     edge_is_hex64,
     edge_payload_digest,
     edge_sha256_text,
 )
-from crypto_core.validation.governed_paper_execution_authority import GovernedPaperGenesis
+from crypto_core.validation.edge_leakage_bias_evidence import (
+    edge_leakage_bias_evidence_from_payload,
+    verify_edge_leakage_bias_evidence,
+)
+from crypto_core.validation.edge_paper_admission_decision import (
+    EdgePaperAdmissionDecision,
+    edge_paper_admission_decision_digest,
+)
+from crypto_core.validation.edge_pre_paper_validation_evidence import (
+    edge_pre_paper_validation_evidence_digest,
+    edge_pre_paper_validation_evidence_from_payload,
+)
+from crypto_core.validation.edge_trial_count_chain import (
+    edge_trial_count_chain_from_payload,
+    verify_edge_trial_count_chain,
+)
+from crypto_core.validation.edge_walk_forward_oos_evidence import (
+    edge_walk_forward_oos_evidence_digest,
+    edge_walk_forward_oos_evidence_from_payload,
+)
+from crypto_core.validation.governed_paper_execution_authority import (
+    GovernedPaperGenesis,
+    GovernedPaperGenesisAuthority,
+)
 from crypto_core.validation.governed_paper_kelly_reading import (
     GovernedPaperKellyReading,
     GovernedPaperKellyStatus,
@@ -163,11 +201,13 @@ _FINAL_ORDER = {
     GovernedPaperIncubationState.EXPIRED_HOLD: 2,
     GovernedPaperIncubationState.GRADUATED: 3,
 }
+# The end kinds that carry a terminal cause (r1 lifecycle, r2 O1). ADVERSE_SIGNAL is absent on purpose: it is immediate
+# negative eligibility authority (A5), never by itself proof of failed verification or of a revocation.
 _END_FINAL = {
-    GovernedPaperIncubationEndKind.ADVERSE_SIGNAL: GovernedPaperIncubationState.TERMINATED,
     GovernedPaperIncubationEndKind.REVOKED: GovernedPaperIncubationState.REVOKED,
     GovernedPaperIncubationEndKind.VALIDATION_NOT_CURRENT: GovernedPaperIncubationState.TERMINATED,
 }
+_EF7_V2_SCHEMA = "edge-paper-admission-decision.v2"  # r1: "the EF-7 v2 PASS decision digest"
 _BASIS_KINDS = tuple(GovernedPaperIncubationBasisKind)
 
 
@@ -307,7 +347,12 @@ _TABLE = GOVERNED_PAPER_INCUBATION_PRODUCTION_TABLE  # tests alone install a tes
 
 @dataclass(frozen=True)
 class GovernedPaperIncubationLineage:
-    """The lineage-edge facts of one authenticated genesis the record must bind (derived, never supplied)."""
+    """The lineage-edge facts of one authenticated genesis the record must bind (derived, never supplied).
+
+    The three static validation identities are re-derived from the verified genesis authority's EF-7 decision (see
+    ``governed_paper_incubation_lineage``); each is "" when that static proof is missing, and then no record is ever
+    established on the lineage.
+    """
 
     genesis_id: str
     genesis_digest: str
@@ -319,6 +364,9 @@ class GovernedPaperIncubationLineage:
     parameter_assignment_digest: str
     paper_admission_digest: str
     walk_forward_evidence_digest: str
+    ef5_preregistration_digest: str
+    ef7_decision_digest: str
+    trial_chain_head_digest: str
 
 
 # --- derived artifacts -----------------------------------------------------------------------------------------------
@@ -697,11 +745,90 @@ def governed_paper_incubation_active_table() -> GovernedPaperIncubationTable:
     return _canonical_table(_TABLE)
 
 
-def governed_paper_incubation_lineage(genesis: GovernedPaperGenesis) -> GovernedPaperIncubationLineage:
-    """The lineage-edge facts of an authenticated genesis that a record must bind."""
+_UNPROVEN_STATIC = ("", "", "")
 
-    if type(genesis) is not GovernedPaperGenesis:
-        raise _fail("genesis_malformed")
+
+def _static_validation(authority: GovernedPaperGenesisAuthority) -> tuple[str, str, str]:  # noqa: PLR0911 - one chain
+    """The static validation identities of the lineage (r1 "Edge and validation", companion §3.1), re-derived from the
+    verified genesis authority's own EF-7 decision, never from a record: the EF-5 sealed preregistration digest, the EF-7
+    v2 PASS decision digest and the trial-count chain head digest.
+
+    Each link is re-proved through the accepted public serializers and verifiers: the EF-7 decision recomputes to the
+    genesis's paper admission digest and is a READY, advancing EF-7 v2 PASS; its EF-6 predecessor recomputes to its
+    predecessor digest and the genesis's walk-forward digest; that EF-6's EF-5 predecessor verifies intact, READY, PASS,
+    advancing and sealed, recomputing to both the EF-6 predecessor digest and the EF-7 preregistration digest; the EF-7
+    pre-paper evidence recomputes to its digest and binds the same preregistration and trial-count chain; and that chain
+    verifies intact to the bound chain digest. The chain head (the last link, or the chain genesis) is a different
+    identity from the chain digest and is read only from the verified chain. ``("", "", "")`` when any link fails:
+    missing static proof confers nothing.
+    """
+
+    genesis, ef7 = authority.genesis, authority.paper_admission
+    if type(ef7) is not EdgePaperAdmissionDecision:
+        return _UNPROVEN_STATIC
+    try:
+        ef7_digest = edge_paper_admission_decision_digest(ef7)
+        if (
+            ef7_digest != genesis.paper_admission_digest
+            or ef7_digest != ef7.paper_admission_decision_digest
+            or ef7.schema_version != _EF7_V2_SCHEMA
+            or ef7.status is not EdgeEvidenceStatus.READY
+            or ef7.gate_verdict is not EdgeGateVerdict.PASS
+            or ef7.advances is not True
+        ):
+            return _UNPROVEN_STATIC
+        ef6 = edge_walk_forward_oos_evidence_from_payload(edge_authority_binding_snapshot(ef7.predecessor_binding))
+        ef6_digest = edge_walk_forward_oos_evidence_digest(ef6)
+        if ef6_digest != ef7.predecessor_digest or ef6_digest != genesis.walk_forward_evidence_digest:
+            return _UNPROVEN_STATIC
+        ef5 = edge_leakage_bias_evidence_from_payload(edge_authority_binding_snapshot(ef6.predecessor_binding))
+        ef5_verification = verify_edge_leakage_bias_evidence(ef5)
+        if (
+            not ef5_verification.intact
+            or ef5_verification.recomputed_digest != ef6.predecessor_digest
+            or ef5_verification.recomputed_digest != ef7.preregistration_digest
+            or ef5.status is not EdgeEvidenceStatus.READY
+            or ef5.gate_verdict is not EdgeGateVerdict.PASS
+            or ef5.advances is not True
+            or ef5.preregistration_sealed is not True
+        ):
+            return _UNPROVEN_STATIC
+        pre_paper = edge_pre_paper_validation_evidence_from_payload(
+            edge_authority_binding_snapshot(ef7.pre_paper_evidence_binding)
+        )
+        if (
+            edge_pre_paper_validation_evidence_digest(pre_paper) != ef7.pre_paper_evidence_digest
+            or pre_paper.preregistration_digest != ef7.preregistration_digest
+            or pre_paper.trial_chain_digest != ef7.trial_chain_digest
+        ):
+            return _UNPROVEN_STATIC
+        chain = edge_trial_count_chain_from_payload(edge_authority_binding_snapshot(pre_paper.trial_chain_binding))
+        chain_verification = verify_edge_trial_count_chain(chain)
+        if not chain_verification.intact or chain_verification.recomputed_digest != pre_paper.trial_chain_digest:
+            return _UNPROVEN_STATIC
+    except (EdgeArtifactError, ValueError, TypeError, KeyError):
+        return _UNPROVEN_STATIC
+    if not all(_hex(item) for item in (ef5_verification.recomputed_digest, ef7_digest, chain.head_digest)):
+        return _UNPROVEN_STATIC
+    return ef5_verification.recomputed_digest, ef7_digest, chain.head_digest
+
+
+def _static_proven(lineage: GovernedPaperIncubationLineage) -> bool:
+    return all(
+        _hex(item)
+        for item in (lineage.ef5_preregistration_digest, lineage.ef7_decision_digest, lineage.trial_chain_head_digest)
+    )
+
+
+def governed_paper_incubation_lineage(authority: GovernedPaperGenesisAuthority) -> GovernedPaperIncubationLineage:
+    """The lineage-edge facts a record must bind, from the canonical reconstructions of a verified genesis (the genesis
+    authority, never a caller's genesis alone): its identity, executed edge and re-derived static validation identities.
+    """
+
+    if type(authority) is not GovernedPaperGenesisAuthority or type(authority.genesis) is not GovernedPaperGenesis:
+        raise _fail("genesis_authority_malformed")
+    genesis = authority.genesis
+    ef5_digest, ef7_digest, chain_head_digest = _static_validation(authority)
     return GovernedPaperIncubationLineage(
         genesis_id=genesis.genesis_id,
         genesis_digest=genesis.genesis_digest,
@@ -713,6 +840,9 @@ def governed_paper_incubation_lineage(genesis: GovernedPaperGenesis) -> Governed
         parameter_assignment_digest=genesis.parameter_assignment_digest,
         paper_admission_digest=genesis.paper_admission_digest,
         walk_forward_evidence_digest=genesis.walk_forward_evidence_digest,
+        ef5_preregistration_digest=ef5_digest,
+        ef7_decision_digest=ef7_digest,
+        trial_chain_head_digest=chain_head_digest,
     )
 
 
@@ -726,7 +856,9 @@ def _record_failure(  # noqa: PLR0911 - one linear verification, every failure n
     policy: GovernedPaperIncubationPolicy,
 ) -> str:
     """Why the approval row's record fails verification ("" when it verifies): a forged binding, another lineage or
-    edge, a policy mismatch or a retroactive approval. Each is TERMINATED at the row's publication (r1)."""
+    edge, static validation identities other than the lineage's verified ones, a policy mismatch or a retroactive
+    approval. Each is TERMINATED at the row's publication (r1). Without the lineage's static proof the identities are not
+    compared here: the derivation refuses the record instead (missing proof is never a proven failure)."""
 
     if governed_paper_incubation_record_digest(record) != row.record_digest:
         return "incubation_record_digest_mismatch"
@@ -749,6 +881,12 @@ def _record_failure(  # noqa: PLR0911 - one linear verification, every failure n
         or record.walk_forward_evidence_digest != lineage.walk_forward_evidence_digest
     ):
         return "incubation_record_not_the_executed_edge"
+    if _static_proven(lineage) and (
+        record.ef5_preregistration_digest != lineage.ef5_preregistration_digest
+        or record.ef7_decision_digest != lineage.ef7_decision_digest
+        or record.trial_chain_head_digest != lineage.trial_chain_head_digest
+    ):
+        return "incubation_record_validation_identity_mismatch"
     if (
         record.policy_digest != policy.policy_digest
         or record.attempt_bound != policy.attempt_bound
@@ -810,12 +948,16 @@ def derive_governed_paper_incubation_authority(  # noqa: C901, PLR0912, PLR0915 
     finals: list[
         tuple[int, int, GovernedPaperIncubationState, int, str]
     ] = []  # (final_ns, order, state, effective, why)
-
-    def final(state: GovernedPaperIncubationState, at: int, effective: int, why: str) -> None:
-        finals.append((at, _FINAL_ORDER[state], state, effective, why))
-
     record: GovernedPaperIncubationRecord | None = None
     first = approvals[0] if approvals else None
+    knowledge = None if first is None else first.published_at_ns  # P_A: the record's knowledge instant
+
+    def final(state: GovernedPaperIncubationState, at: int, effective: int, why: str) -> None:
+        # B1, record-causal finality: every final event is a fact about the record, so it exists no earlier than the
+        # record's knowledge. A pre-P_A instant would rewrite a prefix sealed before the record was known.
+        dated = at if knowledge is None else max(at, knowledge)
+        finals.append((dated, _FINAL_ORDER[state], state, effective, why))
+
     refusal = "incubation_no_record_known" if first is None else ""
     start = end = None
     covered: tuple[str, ...] = ()
@@ -825,7 +967,9 @@ def derive_governed_paper_incubation_authority(  # noqa: C901, PLR0912, PLR0915 
         failure = _record_failure(record, first, lineage, policy)  # type: ignore[arg-type]
         if failure:
             final(GovernedPaperIncubationState.TERMINATED, first.published_at_ns, first.published_at_ns, failure)
-        if not _admits(table, first.channel, first.row_digest, table.admitted_row_digests):
+        if not _static_proven(lineage):
+            refusal = "incubation_static_validation_unproven"  # missing static proof blocks; it proves no failure
+        elif not _admits(table, first.channel, first.row_digest, table.admitted_row_digests):
             refusal = "incubation_record_approval_not_admitted"
         elif not _admits(table, policy.channel, policy.policy_digest, table.admitted_policy_digests):
             refusal = "incubation_policy_not_admitted"
@@ -851,24 +995,29 @@ def derive_governed_paper_incubation_authority(  # noqa: C901, PLR0912, PLR0915 
     for row in ends:  # A5: a known end signal blocks from its publication, admitted or not
         if block_from is None or row.published_at_ns < block_from:
             block_from, block_reason = row.published_at_ns, f"incubation_known_end_signal:{row.end_kind.value.lower()}"  # type: ignore[union-attr]
+        terminal = _END_FINAL.get(row.end_kind)  # type: ignore[arg-type]
         if (
-            first is not None
+            terminal is not None
+            and first is not None
             and row.record_digest == record_digest
             and _admits(table, row.channel, row.row_digest, table.admitted_row_digests)
         ):
             at = max(row.published_at_ns, row.effective_at_ns)  # never before its publication or its effect
             final(
-                _END_FINAL[row.end_kind],  # type: ignore[index]
+                terminal,
                 at,
                 row.effective_at_ns,
                 f"incubation_end_row:{row.end_kind.value.lower()}",  # type: ignore[union-attr]
             )
     completion = _u5_completion(trades)
-    # only an established record graduates, and only before its end (r1: "before the bound")
+    # only an established record graduates, never before it was known (P_A) or started (S), and only before its end
+    # (r1: "before the bound"); a completion known earlier is the class history the record starts from, not a past event
     established = end is not None and not refusal
-    graduation = completion if established and covered == ("U5",) and completion is not None else None
-    if graduation is not None and graduation >= end:  # type: ignore[operator]
-        graduation = None
+    graduation = None
+    if established and covered == ("U5",) and completion is not None:
+        graduation = max(completion, start, knowledge)  # type: ignore[type-var]
+        if graduation >= end:  # type: ignore[operator]
+            graduation = None
     if graduation is not None:
         final(
             GovernedPaperIncubationState.GRADUATED,
@@ -1102,12 +1251,33 @@ def build_governed_paper_incubation_evidence(
 ) -> GovernedPaperIncubationEvidence:
     """The evidence of one completed evaluation pass: the authority re-derived with the attempt ledger ``attempts``
     (``(decision sequence, decision instant)`` of every admitted incubation-basis entry, in decision order) and the
-    pass's readings. Every reading must be the one the final authority gives its decision. Pure."""
+    pass's readings. Every reading must be the one the final authority gives its decision. Pure.
+
+    Attempt identity is verified BEFORE any attempt is counted: the readings name distinct decisions in decision order
+    (strictly increasing sequence, non-decreasing instant); each ledger entry names one of those decisions exactly once,
+    at that reading's own instant, in the same order. A replayed, duplicated, reordered, unmatched or re-timed identity is
+    refused, never deduplicated, so it can add no attempt and cut no fill authority. Distinct decisions at the same
+    nanosecond stay distinct attempts.
+    """
 
     ledger = tuple(attempts)
     for item in ledger:
         if type(item) is not tuple or len(item) != 2 or not _is_int(item[0]) or not _is_int(item[1]):  # noqa: PLR2004
             raise _fail("attempt_ledger_malformed")
+    found = tuple(readings)
+    for reading in found:
+        if type(reading) is not GovernedPaperIncubationReading:
+            raise _fail("reading_malformed")
+    for left, right in zip(found, found[1:], strict=False):
+        if right.decision_sequence <= left.decision_sequence or right.decision_time_ns < left.decision_time_ns:
+            raise _fail("readings_not_distinct_decisions_in_decision_order")
+    decisions = {item.decision_sequence: item for item in found}
+    for index, (sequence, instant) in enumerate(ledger):
+        if index and sequence <= ledger[index - 1][0]:
+            raise _fail("attempt_ledger_identity_replayed_or_reordered")  # each admitted decision counts once (r1)
+        reading = decisions.get(sequence)
+        if reading is None or reading.decision_time_ns != instant:
+            raise _fail("attempt_not_an_active_decision")
     authority = derive_governed_paper_incubation_authority(
         context,
         lineage=lineage,
@@ -1115,10 +1285,7 @@ def build_governed_paper_incubation_evidence(
         known_trades=known_trades,
         attempt_instants=tuple(item[1] for item in ledger),
     )
-    found = tuple(readings)
     for reading in found:
-        if type(reading) is not GovernedPaperIncubationReading:
-            raise _fail("reading_malformed")
         before = tuple(instant for sequence, instant in ledger if sequence < reading.decision_sequence)
         state, _ = governed_paper_incubation_state_at(authority, reading.decision_time_ns, attempts_before=before)
         if (
@@ -1130,8 +1297,7 @@ def build_governed_paper_incubation_evidence(
         ):
             raise _fail("reading_not_the_authoritys")
     for sequence, _ in ledger:  # an attempt is an ACTIVE decision of this pass
-        matches = [item for item in found if item.decision_sequence == sequence]
-        if len(matches) != 1 or matches[0].state is not GovernedPaperIncubationState.ACTIVE:
+        if decisions[sequence].state is not GovernedPaperIncubationState.ACTIVE:
             raise _fail("attempt_not_an_active_decision")
     seed = GovernedPaperIncubationEvidence(
         schema_version=GOVERNED_PAPER_INCUBATION_EVIDENCE_SCHEMA,

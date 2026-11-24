@@ -4111,7 +4111,9 @@ def _incubation_pass(  # noqa: PLR0913 - the pass and its one derived authority
     before it; then the evidence over the completed attempt ledger."""
 
     try:
-        lineage = governed_paper_incubation_lineage(genesis_authority.genesis)
+        # the verified genesis authority's canonical reconstructions: the static validation identities a record must
+        # bind are re-derived from its EF-7 decision, never read from the record
+        lineage = governed_paper_incubation_lineage(genesis_authority)
         trades = tuple((item.knowledge_ns, item.trade_class) for item in kelly_evidence.trades)
         authority = derive_governed_paper_incubation_authority(
             context, lineage=lineage, horizon_ns=horizon_ns, known_trades=trades
