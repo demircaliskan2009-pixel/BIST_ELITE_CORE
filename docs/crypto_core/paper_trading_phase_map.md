@@ -719,3 +719,38 @@ currentness on its own. Without qualified per-decision currentness, revocation-c
 bases, production `ACTIVE` stays unreachable and every incubation entry refuses. Its adoption conditions govern when it
 takes effect. The registry, the policy artifact, every record approval and product construction
 (`S1_PAPER_INCUBATION_RECORD_V1_CONSTRUCTION`) remain separate. REAL_PAPER_EXECUTION and Stage-4 remain blocked.
+
+## 20. S1 unified temporal incubation authority — construction candidate (2026-11-24)
+
+`S1_TEMPORAL_AUTHORITY_UNIFIED_CONSTRUCTION_V1` constructs the methodology of sections 18 and 19 from accepted main. It is
+a root-cause escape of the rejected incubation candidate. It is not a repair of that candidate, and it inherits three
+blocker identities: `INCUBATION_FUTURE_APPROVAL_REWRITES_PAST`,
+`INCUBATION_KNOWN_SIGNAL_BLOCK_DELAYED_UNTIL_EFFECTIVE_TIME` and `INCUBATION_ACTIVE_WITH_EMPTY_FILL_WINDOW`. Pending
+protected independent audit, exact-head CI and human merge authorization:
+
+- `governed_paper_incubation_authority.py` derives ONE point-in-time authority per lineage-edge key. It uses half-open
+  intervals. Each row and basis is knowledge only from its own publication. The base segments are `[S, X)` intersected
+  with the A3, A4, A5 and A6 basis unions, each clipped to its publication. They are cut at the first known end signal,
+  termination or graduation. A decision is ACTIVE when its instant lies in a base segment and fewer than 21 attempts
+  came before it. An incubation-basis fill is permitted only inside a fill segment: the same base segments, cut at the
+  21st attempt (O4);
+- an end signal blocks at its publication. Only an admitted end row with a terminal cause is final: `REVOKED`, or
+  `TERMINATED` for `VALIDATION_NOT_CURRENT`. A generic `ADVERSE_SIGNAL` blocks but keeps the record in HOLD, because it
+  proves no terminal cause. Every final event is dated no earlier than the first approval's publication `P_A`, so an
+  end row is final at `max(P, E, P_A)`. A retroactive or second approval terminates the record. U5 graduates at the
+  first known win and loss, but never before `max(P_A, S)`. U1-U4 have no producer, so a record selecting them never
+  graduates and never yields an exception;
+- the record's static validation identities are the lineage's own: the EF-5 sealed preregistration, the EF-7 v2 PASS
+  decision and the trial-count chain head. They are re-derived from the verified genesis authority's EF-7 decision
+  through the accepted public serializers and verifiers. A record naming other identities is TERMINATED. A lineage
+  without that proof refuses every record. The attempt ledger names each admitted decision once, in strictly
+  increasing sequence at its reading's own instant, and a replayed or reordered identity is refused before counting;
+- the engine's schedule v9 is schedule v8 plus three declared fields: the incubation decisions, the fill segments and U5
+  coverage. A fill outside a fill segment is refused, and so is a fill whose post-fill exposure exceeds `W_INC = 0.08` of
+  candidate equity. KD-13 admits a Kelly reading BLOCKED only by `KELLY_RATIO_UNDEFINED` for such an intent. Entry gate
+  rule set v12 reads each decision on the authority with the attempts before it. Day seal v13 and lineage evidence v13
+  bind the policy, rows, bases, evidence and attempt count. They also bind the knowledge-stable prefix before `E_k` and
+  `E_k+1` (X1). Every v1-v12 artifact, schedules v2-v8 and rule sets v1-v11 stay byte-identical;
+- admission effect: none. The production table admits no row, basis, policy or C2 horizon. SCALE-1's other terms are
+  never proven. World G's 30-day horizon refuses every 91-day record. REAL_PAPER_EXECUTION and Stage-4 remain blocked.
+  Every record, row and basis in the tests is synthetic.
