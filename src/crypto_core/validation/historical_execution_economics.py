@@ -259,6 +259,20 @@ record exists, so no reading is ever covered and a re-run that starts flat refus
 refusal is whole, never a resize, and never reaches a reduction, a close or a protective close-only fill; a schedule v2-v7
 never evaluates the fit, so its payload, digest and re-run are exactly the accepted ones.
 
+Fill-time incubation authority (``S1_TEMPORAL_AUTHORITY_UNIFIED_CONSTRUCTION_V1``, schedule v9). Schedule v9 is schedule v8
+with three declared fields its contract derives from ONE point-in-time incubation authority
+(``governed_paper_incubation_authority``): ``incubation_decision_sequences``, the decisions admitted on the incubation
+basis; ``incubation_fill_windows``, the half-open FILL segments of that authority (the same segments a decision is ACTIVE
+in, cut at the attempt exhaustion); and ``incubation_kelly_covered``, whether the record selects U5. Its re-run's outcome is
+v4. After every earlier rule admitted it, an exposure-increasing fill of an intent decided on the incubation basis is
+refused unless its fill instant lies in a fill window (``governed_paper_incubation_fill_not_permitted``) and its exact
+post-fill exposure ``|q_post| x fill mark`` is at most ``W_INC = 0.08`` of the publication-visible candidate equity
+(``governed_paper_incubation_envelope_exceeded_at_fill``, equality admitted). Its Kelly fit then takes KD-13's one
+exception: a reading BLOCKED only by ``KELLY_RATIO_UNDEFINED`` (no failure, no other undefined component) is admitted for
+such an intent when U5 is covered, the fill lies in a fill window and no closed win and closed loss are both known at its
+decision instant. Every other fill, and every v2-v8 schedule, is unchanged; a refusal is whole and never reaches a
+reduction, a close or a protective close-only fill.
+
 Governed decision portfolio. ``simulate_historical_execution_governed_paper_decision_portfolio`` (schedule v4 only) is the
 same governed re-run, which also records, at every decision of the frozen trace, the portfolio as known at that instant
 BEFORE the decision is admitted (after the funding settlements and protective rules of the same nanosecond, before its
@@ -1619,6 +1633,8 @@ class _Simulation:
         # such admission and consumed by the transition that opens the trade.
         self.trade_exact_values: list[HistoricalExecutionTradeExactValues] = []
         self.admitted_fill_risk: Fraction | None = None
+        # The instant of the exposure-increasing fill under admission (S1_TEMPORAL_AUTHORITY_UNIFIED_CONSTRUCTION_V1).
+        self.admitting_fill_ns: int | None = None
 
     def _transformed_marks(self, marks: _MarkCursor) -> _MarkCursor:
         """Construction hook: the mark observations as the simulation reads them (identity; a stress run overrides)."""
@@ -1889,6 +1905,15 @@ class _Simulation:
     def _kelly_fill_admission(self, order: object, equity: Fraction) -> str | None:
         """Admission hook of an exposure-increasing fill past every risk rule: the order and its positive
         publication-visible candidate equity. A refusal reason, or None (the historical model admits every one)."""
+
+        return None
+
+    def _incubation_fill_admission(  # noqa: PLR0913 - the order and the fill's own exact facts
+        self, order: object, post_quantity: Fraction, mark_price: Fraction, equity: Fraction, time_ns: int
+    ) -> str | None:
+        """Admission hook of an exposure-increasing fill past the risk rules: the order, its exact post-fill quantity, the
+        fill mark, its positive publication-visible candidate equity and its instant. A refusal reason, or None (the
+        historical model admits every one)."""
 
         return None
 
@@ -2557,6 +2582,7 @@ class _Simulation:
             if candidate_equity <= 0 or notional > self.max_leverage * candidate_equity:
                 return reject("risk_limit_exceeded", **quoted)
             self.admitted_fill_risk = None  # only this fill's own admission measures it
+            self.admitting_fill_ns = book.visibility
             refused = (
                 self._exposure_fill_admission(notional, candidate_equity)
                 or self._sizing_fill_admission(
@@ -2564,6 +2590,9 @@ class _Simulation:
                 )
                 or self._risk_fill_admission(
                     record, transition.post.quantity, price, mark.price, candidate_equity, book.visibility
+                )
+                or self._incubation_fill_admission(
+                    record, transition.post.quantity, mark.price, candidate_equity, book.visibility
                 )
                 or self._kelly_fill_admission(record, candidate_equity)
             )
@@ -3527,34 +3556,48 @@ _RISK_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_
 # (S1_KELLY_DEFINED_READING_CONSTRUCTION_V1, module docstring); it declares no new field and its re-run's outcome is v4.
 HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v8"
 _KELLY_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION
+# Schedule v9: the v8 schedule with the declared incubation decisions, fill windows and U5 coverage
+# (S1_TEMPORAL_AUTHORITY_UNIFIED_CONSTRUCTION_V1, module docstring); its re-run's outcome is v4.
+HISTORICAL_EXECUTION_INCUBATION_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v9"
+_INCUBATION_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_INCUBATION_ADMISSION_SCHEDULE_SCHEMA_VERSION
+_KELLY_FIT_SCHEDULES = (_KELLY_SCHEDULE_SCHEMA_VERSION, _INCUBATION_SCHEDULE_SCHEMA_VERSION)
 _INFORMATION_TIME_SCHEDULES = (
     _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION,
     _SIZING_SCHEDULE_SCHEMA_VERSION,
     _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
     _RISK_SCHEDULE_SCHEMA_VERSION,
     _KELLY_SCHEDULE_SCHEMA_VERSION,
+    _INCUBATION_SCHEDULE_SCHEMA_VERSION,
 )
-# The schedules carrying the declared fill-time sizing bounds: schedule v5 and, on top of it, schedules v6, v7 and v8.
+# The schedules carrying the declared fill-time sizing bounds: schedule v5 and, on top of it, schedules v6 to v9.
 HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS = (
     _SIZING_SCHEDULE_SCHEMA_VERSION,
     _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
     _RISK_SCHEDULE_SCHEMA_VERSION,
     _KELLY_SCHEDULE_SCHEMA_VERSION,
+    _INCUBATION_SCHEDULE_SCHEMA_VERSION,
 )
 _SIZING_BOUND_SCHEDULES = HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS
-# The schedules carrying the declared protective-ledger bounds (exposure halt, flatten windows): schedule v6, v7 and v8.
+# The schedules carrying the declared protective-ledger bounds (exposure halt, flatten windows): schedule v6 to v9.
 HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS = (
     _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
     _RISK_SCHEDULE_SCHEMA_VERSION,
     _KELLY_SCHEDULE_SCHEMA_VERSION,
+    _INCUBATION_SCHEDULE_SCHEMA_VERSION,
 )
 _PROTECTIVE_LEDGER_SCHEDULES = HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS
-# The schedules carrying the declared CVaR bounds and the FCD-01 R-5 stop-risk bound: schedule v7 and, on top of it, v8.
+# The schedules carrying the declared CVaR bounds and the FCD-01 R-5 stop-risk bound: schedule v7 and, on top of it, v8
+# and v9.
 HISTORICAL_EXECUTION_RISK_BOUND_SCHEDULE_SCHEMA_VERSIONS = (
     _RISK_SCHEDULE_SCHEMA_VERSION,
     _KELLY_SCHEDULE_SCHEMA_VERSION,
+    _INCUBATION_SCHEDULE_SCHEMA_VERSION,
 )
 _RISK_BOUND_SCHEDULES = HISTORICAL_EXECUTION_RISK_BOUND_SCHEDULE_SCHEMA_VERSIONS
+# Decision packet r1 item 1.6 (W_INC): an incubation-basis fill's post-fill exposure above 8% of the publication-visible
+# candidate equity is refused (schedule v9; equality admitted).
+HISTORICAL_EXECUTION_INCUBATION_EXPOSURE_CAP = Fraction(8, 100)
+_INCUBATION_RATIO_UNDEFINED = "KELLY_RATIO_UNDEFINED"
 # PRDV4 §1.21 NT-R04 and §8.2: no single position strictly above 25% of NAV; schedule v4 enforces it at every fill.
 HISTORICAL_EXECUTION_POSITION_CONCENTRATION_CAP = Fraction(25, 100)
 # PRDV4 §1.21 NT-R03 and §8.2 (FCD-01 R-5): the total open risk at the stop strictly above 4% of equity refuses the fill.
@@ -3694,6 +3737,15 @@ class HistoricalExecutionCvarBound:
 
 
 @dataclass(frozen=True)
+class HistoricalExecutionIncubationWindow:
+    """One declared incubation fill window ``[window_start_ns, window_end_ns)`` (schema v9 only): a FILL segment of the
+    one incubation authority, inside which an incubation-basis intent may fill (every ordinary rule still applies)."""
+
+    window_start_ns: int
+    window_end_ns: int
+
+
+@dataclass(frozen=True)
 class HistoricalExecutionAdmissionSchedule:
     """One neutral declared admission schedule: ordered, disjoint windows and an optional invalidation instant.
 
@@ -3706,7 +3758,9 @@ class HistoricalExecutionAdmissionSchedule:
     then side), the declared fill-time sizing bounds; schema v6 carries them too. Schema v6 is schema v5 with
     ``exposure_halt_from_ns`` (the instant from which no exposure may increase) and ``flatten_windows`` (ordered, disjoint,
     each at or after the halt), the declared protective-ledger bounds; schema v7 carries them too. Schema v7 is schema v6
-    with ``cvar_bounds`` (ordered, disjoint), the declared fill-time CVaR bounds; no other schema carries them.
+    with ``cvar_bounds`` (ordered, disjoint), the declared fill-time CVaR bounds; schemas v8 and v9 carry them too. Schema
+    v9 is schema v8 with ``incubation_decision_sequences`` (strictly increasing, none refused), ``incubation_fill_windows``
+    (ordered, disjoint, non-adjacent) and ``incubation_kelly_covered``; no other schema carries them.
     """
 
     schema_version: str
@@ -3720,6 +3774,9 @@ class HistoricalExecutionAdmissionSchedule:
     exposure_halt_from_ns: int | None = None
     flatten_windows: tuple[HistoricalExecutionFlattenWindow, ...] = ()
     cvar_bounds: tuple[HistoricalExecutionCvarBound, ...] = ()
+    incubation_decision_sequences: tuple[int, ...] = ()
+    incubation_fill_windows: tuple[HistoricalExecutionIncubationWindow, ...] = ()
+    incubation_kelly_covered: bool = False
 
 
 HISTORICAL_EXECUTION_GOVERNED_PAPER_NON_CLAIM_FLAGS: tuple[tuple[str, bool], ...] = (
@@ -3997,6 +4054,7 @@ _GOVERNED_V4_FIELDS = (
 _SCHEDULE_V5_FIELDS = ("exposure_envelopes", "depth_caps")
 _SCHEDULE_V6_FIELDS = ("exposure_halt_from_ns", "flatten_windows")
 _SCHEDULE_V7_FIELDS = ("cvar_bounds",)
+_SCHEDULE_V9_FIELDS = ("incubation_decision_sequences", "incubation_fill_windows", "incubation_kelly_covered")
 # Per versioned artifact: the legacy schema versions and the extension fields their legacy payloads never carry.
 _VERSIONED_PAYLOADS: dict[type, tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]] = {
     HistoricalExecutionEconomicsResult: (((_SCHEMA_VERSION,), _RESULT_V2_FIELDS),),
@@ -4024,6 +4082,18 @@ _VERSIONED_PAYLOADS: dict[type, tuple[tuple[tuple[str, ...], tuple[str, ...]], .
                 _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
             ),
             _SCHEDULE_V7_FIELDS,
+        ),
+        (
+            (
+                _SCHEDULE_SCHEMA_VERSION,
+                _PROTECTIVE_SCHEDULE_SCHEMA_VERSION,
+                _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION,
+                _SIZING_SCHEDULE_SCHEMA_VERSION,
+                _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
+                _RISK_SCHEDULE_SCHEMA_VERSION,
+                _KELLY_SCHEDULE_SCHEMA_VERSION,
+            ),
+            _SCHEDULE_V9_FIELDS,
         ),
     ),
     HistoricalExecutionGovernedPaperOutcome: (
@@ -4082,7 +4152,13 @@ class _GovernedPaperSimulation(_Simulation):
         # Schedule v7: the declared CVaR bounds (FCD-02 C-10) and the FCD-01 stop-risk bound (R-5) of every entry fill;
         # schedule v8 carries them too and adds RECORD A's Kelly fit (S1_KELLY_DEFINED_READING_CONSTRUCTION_V1).
         self.risk_bounds = schedule.schema_version in _RISK_BOUND_SCHEDULES
-        self.kelly_fit = schedule.schema_version == _KELLY_SCHEDULE_SCHEMA_VERSION
+        self.kelly_fit = schedule.schema_version in _KELLY_FIT_SCHEDULES
+        # Schedule v9: the incubation-basis decisions, the fill segments of the one incubation authority and U5 coverage.
+        self.incubation_decisions = frozenset(schedule.incubation_decision_sequences)
+        self.incubation_windows = tuple(
+            (item.window_start_ns, item.window_end_ns) for item in schedule.incubation_fill_windows
+        )
+        self.incubation_kelly_covered = schedule.incubation_kelly_covered
         self.cvar_bounds = tuple(
             (item.window_start_ns, item.window_end_ns, Fraction(item.long_unit_cvar), Fraction(item.short_unit_cvar))
             for item in schedule.cvar_bounds
@@ -4291,7 +4367,45 @@ class _GovernedPaperSimulation(_Simulation):
         fit = historical_execution_kelly_fit(known, unknown_count=len(self.trade_exact_values) - len(known), rho=rho)
         if fit.status is HistoricalExecutionKellyStatus.PASS:
             return None
+        if self._incubation_kelly_excepted(order, fit, known):
+            return None
         return _KELLY_FILL_REFUSALS.get(fit.reason, _KELLY_FILL_UNPROVEN)
+
+    def _incubation_window(self, time_ns: int | None) -> bool:
+        return time_ns is not None and any(start <= time_ns < end for start, end in self.incubation_windows)
+
+    def _incubation_kelly_excepted(
+        self, order: object, fit: HistoricalExecutionKellyFit, known: list[tuple[Fraction, Fraction | None]]
+    ) -> bool:
+        """Schedule v9, KD-13: the one coverage of an incubation-basis fill's Kelly reading. It holds only when U5 is
+        covered, the fill lies in a fill window, the reading is BLOCKED by ``KELLY_RATIO_UNDEFINED`` alone (every defined
+        component, the solvency domain and the G-window product included, passed) and no closed win and closed loss are
+        both known at the intent's decision instant (class completion ends the coverage for good)."""
+
+        if (
+            not self.incubation_kelly_covered
+            or getattr(order, "decision_sequence", None) not in self.incubation_decisions
+        ):
+            return False
+        if not self._incubation_window(self.admitting_fill_ns):
+            return False
+        if fit.failures or fit.blocks != (_INCUBATION_RATIO_UNDEFINED,):
+            return False
+        return not (any(net > 0 for net, _ in known) and any(net < 0 for net, _ in known))
+
+    def _incubation_fill_admission(  # noqa: PLR0913 - the order and the fill's own exact facts
+        self, order: object, post_quantity: Fraction, mark_price: Fraction, equity: Fraction, time_ns: int
+    ) -> str | None:
+        """Schedule v9: an incubation-basis intent fills only inside a fill window of the one incubation authority and
+        within ``W_INC`` of its candidate equity (module docstring). A refusal reason, or None."""
+
+        if getattr(order, "decision_sequence", None) not in self.incubation_decisions:
+            return None
+        if not self._incubation_window(time_ns):
+            return "governed_paper_incubation_fill_not_permitted"
+        if abs(post_quantity) * mark_price > HISTORICAL_EXECUTION_INCUBATION_EXPOSURE_CAP * equity:
+            return "governed_paper_incubation_envelope_exceeded_at_fill"
+        return None
 
     def _entry_stop(self, order: object, post_quantity: Fraction, price: Fraction) -> Fraction | None:
         """The R-1 stop of an exposure-increasing fill's post-fill position: the one an opening fill arms, or the armed
@@ -4473,12 +4587,14 @@ def canonical_historical_execution_admission_schedule(value: object) -> Historic
         _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
         _RISK_SCHEDULE_SCHEMA_VERSION,
         _KELLY_SCHEDULE_SCHEMA_VERSION,
+        _INCUBATION_SCHEDULE_SCHEMA_VERSION,
     ):
         raise _fail("admission_schedule_malformed:schema_version")
     _canonical_protective_windows(value)
     _canonical_sizing_bounds(value)
     _canonical_protective_ledger_bounds(value)
     _canonical_risk_bounds(value)
+    _canonical_incubation_bounds(value)
     _require_text(value.schedule_id, "schedule_id")
     if type(value.windows) is not tuple:
         raise _fail("admission_schedule_malformed:windows")
@@ -4512,6 +4628,39 @@ def canonical_historical_execution_admission_schedule(value: object) -> Historic
     if any(later <= earlier for earlier, later in zip(refused, refused[1:], strict=False)):
         raise _fail("admission_schedule_invalid:entry_refusals_not_strictly_increasing")
     return value
+
+
+def _canonical_incubation_bounds(value: HistoricalExecutionAdmissionSchedule) -> None:
+    """Schema v9's incubation fields: strictly increasing decision sequences none of which is refused, ordered disjoint
+    non-adjacent nonempty fill windows, and a boolean U5 coverage; empty and False on every other schema."""
+
+    decisions, windows, covered = (
+        value.incubation_decision_sequences,
+        value.incubation_fill_windows,
+        value.incubation_kelly_covered,
+    )
+    if type(decisions) is not tuple or type(windows) is not tuple or type(covered) is not bool:
+        raise _fail("admission_schedule_malformed:incubation_fields")
+    if value.schema_version != _INCUBATION_SCHEDULE_SCHEMA_VERSION and (decisions or windows or covered):
+        raise _fail("admission_schedule_malformed:incubation_fields_need_schema_v9")
+    if any(not historical_execution_wire_int_is_valid(item, minimum=0) for item in decisions):
+        raise _fail("admission_schedule_malformed:incubation_decision_sequences")
+    if any(later <= earlier for earlier, later in zip(decisions, decisions[1:], strict=False)):
+        raise _fail("admission_schedule_invalid:incubation_decisions_not_strictly_increasing")
+    if set(decisions) & set(value.entry_refused_decision_sequences):
+        raise _fail("admission_schedule_invalid:incubation_decision_refused")
+    previous_end: int | None = None
+    for window in windows:
+        if type(window) is not HistoricalExecutionIncubationWindow:
+            raise _fail("admission_schedule_malformed:incubation_fill_window")
+        for name in ("window_start_ns", "window_end_ns"):
+            if not historical_execution_wire_int_is_valid(getattr(window, name), minimum=0):
+                raise _fail(f"admission_schedule_malformed:incubation_{name}")
+        if window.window_end_ns <= window.window_start_ns:
+            raise _fail("admission_schedule_invalid:incubation_fill_window_empty")
+        if previous_end is not None and window.window_start_ns <= previous_end:
+            raise _fail("admission_schedule_invalid:incubation_fill_windows_not_ordered_disjoint")
+        previous_end = window.window_end_ns
 
 
 def _canonical_protective_windows(value: HistoricalExecutionAdmissionSchedule) -> None:
@@ -5997,6 +6146,9 @@ __all__ = [
     "HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS",
     "HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_SCHEDULE_SCHEMA_VERSION",
     "HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION",
+    "HISTORICAL_EXECUTION_INCUBATION_ADMISSION_SCHEDULE_SCHEMA_VERSION",
+    "HISTORICAL_EXECUTION_INCUBATION_EXPOSURE_CAP",
+    "HistoricalExecutionIncubationWindow",
     "HISTORICAL_EXECUTION_KELLY_BLOCKS",
     "HISTORICAL_EXECUTION_KELLY_CAP",
     "HISTORICAL_EXECUTION_KELLY_DECAY",
