@@ -754,3 +754,16 @@ protected independent audit, exact-head CI and human merge authorization:
 - admission effect: none. The production table admits no row, basis, policy or C2 horizon. SCALE-1's other terms are
   never proven. World G's 30-day horizon refuses every 91-day record. REAL_PAPER_EXECUTION and Stage-4 remain blocked.
   Every record, row and basis in the tests is synthetic.
+
+## 21. S1 own-history measurement — doctrine adoption candidate (decision of 2026-11-25)
+
+The [S1 own-history measurement adoption record](s1_own_history_measurement_doctrine_adoption_v1.md) records human
+decision `S1_OWN_HISTORY_MEASUREMENT_METHOD_DECISION_V1` (D1–D7). It selects the measurement methodology of FCD-13
+`EHS_V1` and FCD-14 `PAPER_EXECUTION_QUALITY_V1` with HC-13a..c and HC-14a..b: the edge's own daily NAV returns for
+Sharpe_30d and Sharpe_90d, zero variance BLOCKED, the signal coefficient of variation, the PRDV4 edge health score and
+state machine replayed in event time, and the equal-weighted fill rate of the latest 10 and 20 governed-paper orders.
+Its adoption conditions govern when it takes effect. The section 20 construction merged as `main` `56218b20`. Its
+statement that U1–U4 have no producer is unchanged. The signal population, temporal completeness, state-machine start
+and quarantine, the order submission boundary, the drawdown input and the hit-rate trade population remain pending
+human decisions. Every producer, policy artifact, record approval and product construction remains separate. No entry
+is admitted by this record. REAL_PAPER_EXECUTION and Stage-4 remain blocked.
