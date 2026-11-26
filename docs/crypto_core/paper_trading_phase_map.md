@@ -767,3 +767,17 @@ statement that U1–U4 have no producer is unchanged. The signal population, tem
 and quarantine, the order submission boundary, the drawdown input and the hit-rate trade population remain pending
 human decisions. Every producer, policy artifact, record approval and product construction remains separate. No entry
 is admitted by this record. REAL_PAPER_EXECUTION and Stage-4 remain blocked.
+
+## 22. S1 own-history residual methodology — doctrine adoption candidate (decision of 2026-11-26)
+
+The [S1 own-history residual adoption record](s1_own_history_residual_doctrine_adoption_v1.md) records human decision
+`S1_OWN_HISTORY_RESIDUAL_METHOD_DECISION_V1` (P-1 to P-6). It resolves the six items that section 21 left pending: the
+exact signed mean of `passive_funding_carry.v1` over every scheduled evaluation as the signal population; one
+knowledge-time order over the engine's unchanged equal-instant phases, with proven completeness; the state machine's
+start, recovery and quarantine, beside an independent EF-8; a logical simulated-submission boundary inside the one
+engine for the fill rate; the edge's own NAV high-water mark from genesis for the drawdown; and closed excursions for
+the hit rate. Its adoption conditions govern when it takes effect. D1–D7 and every independent gate are unchanged.
+Every producer (C-1 to C-7), source qualification, provenance basis, policy artifact, record approval and product
+construction remains separate. The representation of an irrational edge health score or Sharpe reading at a rational
+allocation consumer remains a pending human decision. No entry is admitted by this record. REAL_PAPER_EXECUTION and
+Stage-4 remain blocked.
