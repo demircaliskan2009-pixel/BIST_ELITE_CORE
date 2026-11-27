@@ -184,6 +184,20 @@ Unified temporal incubation authority lineage (``S1_TEMPORAL_AUTHORITY_UNIFIED_C
   previous seal's). The production table admits no row, basis, policy or C2 horizon, so no production record is ever
   ACTIVE. Without an incubation context every Kelly seal and evidence is exactly the accepted v12 artifact, and no v2-v12
   payload carries a seal v13 field.
+
+Own-history authority lineage (``S1_OWN_HISTORY_UNIFIED_CONSTRUCTION_V1``, seal v14 and evidence v14).
+* An incubation authority lineage whose protection inputs carry an own-history context does so on every day from day 0,
+  and never switches. The context is the coverage claims known at ``E_{k+1}``: append-only, every one published at or
+  before ``E_{k+1}`` and every new one published inside the day that adds it (at or after ``E_k``), so no sealed instant
+  ever gains a fact.
+* Its entry gate evaluates rule set v13 (``governed_paper_own_history``): rule set v12 with the own-history checks read on
+  the ONE own-history authority each evaluation derives from the same re-run, the incubation authority graduating on its
+  U1-U4 coverage ends and the sizing chain reading its decided allocation. Its schedule is the engine's schedule v10
+  (schedule v9 whose re-run records the own-history instrumentation), settled by the same causal fixed point.
+* The seal binds the coverage claim digests, the own-history evidence digest and its prefix before ``E_k`` and before
+  ``E_{k+1}`` (X1 for the own-history authority: the prefix before ``E_k`` must equal the previous seal's). The production
+  table admits no coverage claim, so no production own-history reading is ever complete. Without an own-history context
+  every incubation seal and evidence is exactly the accepted v13 artifact, and no v2-v13 payload carries a seal v14 field.
 """
 
 from __future__ import annotations
@@ -250,6 +264,12 @@ from crypto_core.validation.governed_paper_incubation_authority import (
 )
 from crypto_core.validation.governed_paper_kelly_reading import governed_paper_kelly_prefix_digest
 from crypto_core.validation.governed_paper_kill_switch import governed_paper_kill_switch_prefix_digest
+from crypto_core.validation.governed_paper_own_history import (
+    GovernedPaperOwnHistoryContext,
+    GovernedPaperOwnHistoryError,
+    canonical_governed_paper_own_history_context,
+    governed_paper_own_history_prefix_digest,
+)
 from crypto_core.validation.governed_paper_protective_authority import (
     GovernedPaperProtectiveAuthority,
     GovernedPaperProtectiveAuthorityError,
@@ -298,6 +318,7 @@ from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_INCUBATION_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_INFORMATION_TIME_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION,
+    HISTORICAL_EXECUTION_OWN_HISTORY_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_PROTECTIVE_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_ADMISSION_SCHEDULE_SCHEMA_VERSION,
     HISTORICAL_EXECUTION_RISK_MEASUREMENT_ADMISSION_SCHEDULE_SCHEMA_VERSION,
@@ -385,6 +406,7 @@ _PROTECTIVE_LEDGER_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v10"
 _RISK_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v11"
 _KELLY_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v12"
 _INCUBATION_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v13"
+_OWN_HISTORY_SEAL_SCHEMA_VERSION = "governed-paper-day-seal.v14"
 _EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v2"
 _PROTECTIVE_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v3"
 _PORTFOLIO_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v4"
@@ -397,7 +419,9 @@ _PROTECTIVE_LEDGER_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.
 _RISK_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v11"
 _KELLY_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v12"
 _INCUBATION_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v13"
-_KELLY_SEALS = (_KELLY_SEAL_SCHEMA_VERSION, _INCUBATION_SEAL_SCHEMA_VERSION)
+_OWN_HISTORY_EVIDENCE_SCHEMA_VERSION = "governed-paper-execution-evidence.v14"
+_INCUBATION_SEALS = (_INCUBATION_SEAL_SCHEMA_VERSION, _OWN_HISTORY_SEAL_SCHEMA_VERSION)
+_KELLY_SEALS = (_KELLY_SEAL_SCHEMA_VERSION, *_INCUBATION_SEALS)
 _RISK_SEALS = (_RISK_SEAL_SCHEMA_VERSION, *_KELLY_SEALS)
 _PROTECTIVE_LEDGER_SEALS = (_PROTECTIVE_LEDGER_SEAL_SCHEMA_VERSION, *_RISK_SEALS)
 _SIZING_CHAIN_SEALS = (_SIZING_CHAIN_SEAL_SCHEMA_VERSION, *_PROTECTIVE_LEDGER_SEALS)
@@ -586,6 +610,20 @@ class GovernedPaperDaySeal:
     incubation_prefix_digest_open: str = ""
     incubation_prefix_digest_close: str = ""
     incubation_attempt_count: int = 0
+    # Seal v14 only (an own-history authority lineage, S1_OWN_HISTORY_UNIFIED_CONSTRUCTION_V1): no v2-v13 payload
+    # carries these.
+    own_history_coverage_digests: tuple[str, ...] = ()
+    own_history_evidence_digest: str = ""
+    own_history_prefix_digest_open: str = ""
+    own_history_prefix_digest_close: str = ""
+
+
+_SEAL_V14_FIELDS = (
+    "own_history_coverage_digests",
+    "own_history_evidence_digest",
+    "own_history_prefix_digest_open",
+    "own_history_prefix_digest_close",
+)
 
 
 _SEAL_V13_FIELDS = (
@@ -678,7 +716,8 @@ class GovernedPaperDayProtectionInputs:
     its approval and the policy's MARK bar archive known at ``E_{k+1}``. ``kelly`` (only with ``risk``) selects the RECORD A
     Kelly reading lineage (seal v12, entry rule set v11, schedule v8); it needs no further input. ``incubation`` (only with
     ``kelly``) is the incubation authority lineage's context (seal v13, entry rule set v12, schedule v9): the policy, the
-    registry rows and the A3-A6 bases known at ``E_{k+1}``.
+    registry rows and the A3-A6 bases known at ``E_{k+1}``. ``own_history`` (only with ``incubation``) is the own-history
+    authority lineage's context (seal v14, entry rule set v13, schedule v10): the coverage claims known at ``E_{k+1}``.
     """
 
     authority_inputs: GovernedPaperProtectiveAuthorityInputs
@@ -697,6 +736,7 @@ class GovernedPaperDayProtectionInputs:
     risk: GovernedPaperRiskContext | None = None
     kelly: bool = False
     incubation: GovernedPaperIncubationContext | None = None
+    own_history: GovernedPaperOwnHistoryContext | None = None
 
 
 @dataclass(frozen=True)
@@ -968,6 +1008,23 @@ _LEGACY_PAYLOADS: dict[type, tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]
                 _KELLY_SEAL_SCHEMA_VERSION,
             ),
             _SEAL_V13_FIELDS,
+        ),
+        (
+            (
+                _SEAL_SCHEMA_VERSION,
+                _PROTECTIVE_SEAL_SCHEMA_VERSION,
+                _PORTFOLIO_SEAL_SCHEMA_VERSION,
+                _MARKET_DATA_SEAL_SCHEMA_VERSION,
+                _KILL_SWITCH_SEAL_SCHEMA_VERSION,
+                _REGIME_SEAL_SCHEMA_VERSION,
+                _SYSTEM_SAFETY_SEAL_SCHEMA_VERSION,
+                _SIZING_CHAIN_SEAL_SCHEMA_VERSION,
+                _PROTECTIVE_LEDGER_SEAL_SCHEMA_VERSION,
+                _RISK_SEAL_SCHEMA_VERSION,
+                _KELLY_SEAL_SCHEMA_VERSION,
+                _INCUBATION_SEAL_SCHEMA_VERSION,
+            ),
+            _SEAL_V14_FIELDS,
         ),
     ),
     GovernedPaperExecutionEvidence: (((_EVIDENCE_SCHEMA_VERSION,), _EVIDENCE_V3_FIELDS),),
@@ -1276,6 +1333,7 @@ class _SealProof:
     risk: bool = False
     kelly: bool = False
     incubation: bool = False
+    own_history: bool = False
 
 
 def _closing(inputs: GovernedPaperDaySealInputs, cycle: GovernedPaperCycleAuthority, sleeve_id: str, end: int):  # noqa: ANN202
@@ -1346,6 +1404,7 @@ class _DayProtection:
     incubation: GovernedPaperIncubationContext | None = (
         None  # re-proven: append-only, each new artifact inside this day
     )
+    own_history: GovernedPaperOwnHistoryContext | None = None  # re-proven: append-only, each new claim inside this day
 
 
 def _risk_context(
@@ -1449,6 +1508,33 @@ def _incubation_context(
     )
     if any(item.published_at_ns < start for item in added):
         raise _fail("incubation_artifact_backdated_before_the_day")
+
+
+def _own_history_context(
+    context: GovernedPaperOwnHistoryContext,
+    prior: GovernedPaperDaySeal | None,
+    *,
+    start: int,
+    end: int,
+) -> tuple[str, ...]:
+    """Re-prove one day's own-history context: canonical, every coverage claim published at or before ``E_{k+1}``, the
+    claims the previous seal bound kept in order, and every new one published inside this day, never before it."""
+
+    try:
+        canonical_governed_paper_own_history_context(context)
+    except GovernedPaperOwnHistoryError as exc:
+        raise _fail("own_history_context_not_canonical") from exc
+    if any(item.published_at_ns > end for item in context.coverages):
+        raise _fail("own_history_coverage_published_after_the_seal")
+    digests = tuple(item.coverage_digest for item in context.coverages)
+    if prior is None:
+        return digests
+    previous = prior.own_history_coverage_digests
+    if digests[: len(previous)] != previous:
+        raise _fail("own_history_coverage_rewritten")
+    if any(item.published_at_ns < start for item in context.coverages[len(previous) :]):
+        raise _fail("own_history_coverage_backdated_before_the_day")
+    return digests
 
 
 def _ctr_source(
@@ -1606,10 +1692,21 @@ def _day_protection(  # noqa: C901 - one linear proof of the protective inputs
         raise _fail("protection_inputs_malformed:incubation")
     if incubation is not None and not kelly:
         raise _fail("incubation_authority_needs_the_kelly_lineage")
-    if prior is not None and (prior.schema_version == _INCUBATION_SEAL_SCHEMA_VERSION) is not (incubation is not None):
+    if prior is not None and (prior.schema_version in _INCUBATION_SEALS) is not (incubation is not None):
         raise _fail("incubation_authority_lineage_switched")
     if incubation is not None:
         _incubation_context(incubation, prior, start=start, end=end)
+    own_history = protection.own_history
+    if own_history is not None and type(own_history) is not GovernedPaperOwnHistoryContext:
+        raise _fail("protection_inputs_malformed:own_history")
+    if own_history is not None and incubation is None:
+        raise _fail("own_history_authority_needs_the_incubation_lineage")
+    if prior is not None and (prior.schema_version == _OWN_HISTORY_SEAL_SCHEMA_VERSION) is not (
+        own_history is not None
+    ):
+        raise _fail("own_history_authority_lineage_switched")
+    if own_history is not None:
+        _own_history_context(own_history, prior, start=start, end=end)
     risk_digests = ("", "", "") if risk is None else _risk_context(risk, prior, genesis=genesis, end=end)
     proof_digests = () if ledger is None else _integrity_proofs(ledger, prior, genesis=genesis, start=start, end=end)
     ctr_binding = (
@@ -1706,6 +1803,7 @@ def _day_protection(  # noqa: C901 - one linear proof of the protective inputs
         risk_digests=risk_digests,
         kelly=kelly,
         incubation=incubation,
+        own_history=own_history,
     )
 
 
@@ -1803,6 +1901,8 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
     schedule = HistoricalExecutionAdmissionSchedule(
         schema_version=HISTORICAL_EXECUTION_ADMISSION_SCHEDULE_SCHEMA_VERSION
         if protection is None
+        else HISTORICAL_EXECUTION_OWN_HISTORY_ADMISSION_SCHEDULE_SCHEMA_VERSION
+        if protection.own_history is not None
         else HISTORICAL_EXECUTION_INCUBATION_ADMISSION_SCHEDULE_SCHEMA_VERSION
         if protection.incubation is not None
         else HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION
@@ -1904,6 +2004,10 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
                 incubation_row_digests=tuple(item.row_digest for item in protection.incubation.rows),
                 incubation_basis_digests=tuple(item.basis_digest for item in protection.incubation.bases),
             )
+        if protection.own_history is not None:
+            facts.update(
+                own_history_coverage_digests=tuple(item.coverage_digest for item in protection.own_history.coverages)
+            )
         empty.update(
             open_excursion_deciding_day_index=None,
             open_excursion_deciding_cycle_digest=None,
@@ -1922,6 +2026,7 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
     risk = protection is not None and protection.risk is not None
     kelly = protection is not None and protection.kelly
     incubation = protection is not None and protection.incubation is not None
+    own_history = protection is not None and protection.own_history is not None
     lineage = (
         protective,
         portfolio,
@@ -1934,6 +2039,7 @@ def _seal_proof(inputs: GovernedPaperDaySealInputs) -> _SealProof:  # noqa: C901
         risk,
         kelly,
         incubation,
+        own_history,
     )
     try:
         if not attested:
@@ -1975,7 +2081,7 @@ def _incubation_fixed_point(
     entries: tuple[int, ...],
     evaluated: Callable[[tuple[int, ...], _IncubationBounds | None], GovernedPaperEntrySafetyEvidence],
 ) -> tuple[tuple[int, ...], _IncubationBounds]:
-    """The unique schedule v9 whose refusals AND incubation bounds are its own evaluation's (rule set v12).
+    """The unique schedule v9 (v10) whose refusals AND incubation bounds are its own evaluation's (rule set v12, v13).
 
     Starting from every entry refused and no incubation bound, each round replaces both by the evaluation under them. A
     decision's admission, attempt and authority read only the admissions and fills before it, and the fill segments at an
@@ -2136,6 +2242,7 @@ def _replay(
                 risk=protection.risk,  # type: ignore[union-attr]
                 kelly=protection.kelly,  # type: ignore[union-attr]
                 incubation=protection.incubation,  # type: ignore[union-attr]
+                own_history=protection.own_history,  # type: ignore[union-attr]
             )
         return evaluations[key]
 
@@ -2547,6 +2654,25 @@ def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the 
                 ),
                 incubation_attempt_count=len(incubation_evidence.attempts),
             )
+        if protection.own_history is not None:
+            # X1 for the own-history authority: every fact is dated at its own knowledge coordinate, so the submissions,
+            # day boundaries, trades, evaluations, transitions, coverage ends and readings before E_k never change, and
+            # its prefix before E_k must be the previous seal's at E_k.
+            own_history_evidence = replay.entry_safety.own_history_evidence
+            if own_history_evidence is None:  # pragma: no cover - rule set v13 always binds its own-history evidence
+                raise _fail("own_history_evidence_missing")
+            if own_history_evidence.outcome_digest != outcome.outcome_digest:  # pragma: no cover - the fixed point
+                raise _fail("own_history_not_of_the_sealed_re_run")
+            own_history_open = governed_paper_own_history_prefix_digest(own_history_evidence, before_ns=start)
+            if prior is not None and own_history_open != prior.own_history_prefix_digest_close:
+                raise _fail("own_history_prefix_rewritten")
+            derived.update(
+                own_history_evidence_digest=own_history_evidence.evidence_digest,
+                own_history_prefix_digest_open=own_history_open,
+                own_history_prefix_digest_close=governed_paper_own_history_prefix_digest(
+                    own_history_evidence, before_ns=end
+                ),
+            )
     return {
         **derived,
         "decision_run_digest": replay.run_digest,
@@ -2580,7 +2706,9 @@ def _derive_day(  # noqa: C901, PLR0912, PLR0915 - one linear derivation of the 
 def _assemble_seal(proof: _SealProof) -> GovernedPaperDaySeal:
     status = GovernedPaperDaySealStatus.BLOCKED if proof.blocked else GovernedPaperDaySealStatus.SEALED
     seed = GovernedPaperDaySeal(
-        schema_version=_INCUBATION_SEAL_SCHEMA_VERSION
+        schema_version=_OWN_HISTORY_SEAL_SCHEMA_VERSION
+        if proof.own_history
+        else _INCUBATION_SEAL_SCHEMA_VERSION
         if proof.incubation
         else _KELLY_SEAL_SCHEMA_VERSION
         if proof.kelly
@@ -2761,7 +2889,8 @@ def build_governed_paper_execution_evidence(inputs: GovernedPaperExecutionInputs
                         raise _fail(f"ctr_capture_backfilled_before_the_day:{day}")
                 # The IR-2 integrity proofs need no lineage check here: each seal binds the digests of its own proofs,
                 # and the seal re-proof above already refuses a proof the previous seal bound being dropped, reordered
-                # or rewritten, and a new proof triggered before the day (``_integrity_proofs``).
+                # or rewritten, and a new proof triggered before the day (``_integrity_proofs``). The own-history
+                # coverage claims likewise (``_own_history_context``).
         pending = item.seal_inputs.pending_cycle
         if pending is not None:
             index = pending.day_index
@@ -2810,7 +2939,9 @@ def build_governed_paper_execution_evidence(inputs: GovernedPaperExecutionInputs
             "terminal_outstanding_protective_obligation_count": terminal.outstanding_protective_obligation_count,
         }
     seed = GovernedPaperExecutionEvidence(
-        schema_version=_INCUBATION_EVIDENCE_SCHEMA_VERSION
+        schema_version=_OWN_HISTORY_EVIDENCE_SCHEMA_VERSION
+        if terminal.schema_version == _OWN_HISTORY_SEAL_SCHEMA_VERSION
+        else _INCUBATION_EVIDENCE_SCHEMA_VERSION
         if terminal.schema_version == _INCUBATION_SEAL_SCHEMA_VERSION
         else _KELLY_EVIDENCE_SCHEMA_VERSION
         if terminal.schema_version == _KELLY_SEAL_SCHEMA_VERSION

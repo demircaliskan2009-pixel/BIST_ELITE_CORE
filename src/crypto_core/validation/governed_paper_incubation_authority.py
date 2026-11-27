@@ -49,9 +49,14 @@ and its admitted variant) the authority derives:
    attempt is counted, never deduplicated into a valid ledger.
 4. Graduation: per selected reading, irreversible. U5 coverage ends at the knowledge instant of the first known closed
    win and the first known closed loss (r1 F-3 under RECORD A); the record graduates at the later of that instant, its
-   start ``S`` and its knowledge ``P_A``, never before it was established. No producer of the U1-U4 readings exists,
-   so their own history is never proven complete: a record selecting any of them never graduates (it reaches
-   ``EXPIRED_HOLD``), and no check owes ``COLD_START_EXCEPTED`` to them.
+   start ``S`` and its knowledge ``P_A``, never before it was established. Without the own-history authority (rule set
+   v12) no producer of the U1-U4 readings exists, so their own history is never proven complete: a record selecting any
+   of them never graduates (it reaches ``EXPIRED_HOLD``), and no check owes ``COLD_START_EXCEPTED`` to them.
+   With it (``S1_OWN_HISTORY_UNIFIED_CONSTRUCTION_V1``, rule set v13, evidence v2) the authority also takes the cut
+   instant at which each of U1-U4 first held enough own observations (``governed_paper_own_history``: 30 and 90 completed
+   known days, 10 and 20 conclusively resolved submissions); the record graduates at the later of the coverage end of
+   every selected reading, ``S`` and ``P_A``, and a selected reading whose coverage never ends keeps it from graduating.
+   Which check a covered reading excepts is decided by the entry gate, never here.
 
 ``ACTIVE`` at a decision instant ``t`` holds exactly when ``t`` is in a base segment and fewer than ``A_max`` attempts
 were admitted before the decision. A fill at ``t_f`` of an incubation-basis intent is permitted exactly when ``t_f`` is in
@@ -77,7 +82,7 @@ Exact integers only; no IO, clock, randomness, network or environment.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass, replace
 from enum import Enum
 from fractions import Fraction
@@ -132,6 +137,9 @@ GOVERNED_PAPER_INCUBATION_POLICY_SCHEMA = "governed-paper-incubation-policy.v1"
 GOVERNED_PAPER_INCUBATION_ROW_SCHEMA = "governed-paper-incubation-registry-row.v1"
 GOVERNED_PAPER_INCUBATION_BASIS_SCHEMA = "governed-paper-incubation-basis.v1"
 GOVERNED_PAPER_INCUBATION_EVIDENCE_SCHEMA = "governed-paper-incubation-evidence.v1"
+# Rule set v13 (S1_OWN_HISTORY_UNIFIED_CONSTRUCTION_V1): the same artifacts, graduating on the U1-U4 coverage ends too.
+GOVERNED_PAPER_INCUBATION_OWN_HISTORY_EVIDENCE_SCHEMA = "governed-paper-incubation-evidence.v2"
+_OWN_HISTORY_READINGS = ("U1", "U2", "U3", "U4")
 GOVERNED_PAPER_INCUBATION_ADMISSION_SCOPE = "LIMITED_S1_PAPER_V1"
 # Decision packet r1, items 1.4-1.6: approved values, each still needing its digest-bound policy artifact and approval.
 GOVERNED_PAPER_INCUBATION_ATTEMPT_BOUND = 21
@@ -915,18 +923,26 @@ def derive_governed_paper_incubation_authority(  # noqa: C901, PLR0912, PLR0915 
     horizon_ns: int,
     known_trades: Sequence[tuple[int, str]] = (),
     attempt_instants: Sequence[int] = (),
+    coverage_ends: Mapping[str, int | None] | None = None,
 ) -> GovernedPaperIncubationAuthority:
     """The one incubation authority of the lineage-edge key over ``[G, horizon_ns)`` (see the module docstring).
 
     ``known_trades`` are the lineage's closed trades as ``(knowledge instant, class)`` with class WIN, LOSS or ZERO;
     ``attempt_instants`` are the decision instants of the admitted incubation-basis entries in decision order (empty for
-    the static authority a decision pass reads). Only artifacts published before ``horizon_ns`` may appear. Pure.
+    the static authority a decision pass reads). ``coverage_ends`` (rule set v13 only) maps each of U1-U4 to the cut
+    instant at which its coverage ended, or None, from the one own-history authority; without it the authority is the
+    accepted v1 one. Only artifacts published before ``horizon_ns`` may appear. Pure.
     """
 
     context = canonical_governed_paper_incubation_context(context)
     table = governed_paper_incubation_active_table()
     if type(lineage) is not GovernedPaperIncubationLineage:
         raise _fail("lineage_malformed")
+    if coverage_ends is not None and (
+        set(coverage_ends) != set(_OWN_HISTORY_READINGS)
+        or any(value is not None and not _is_int(value) for value in coverage_ends.values())
+    ):
+        raise _fail("coverage_ends_malformed")
     if not _is_int(horizon_ns) or horizon_ns < lineage.genesis_start_ns:
         raise _fail("horizon_invalid")
     for item in (*context.rows, *context.bases):
@@ -1014,10 +1030,17 @@ def derive_governed_paper_incubation_authority(  # noqa: C901, PLR0912, PLR0915 
     # (r1: "before the bound"); a completion known earlier is the class history the record starts from, not a past event
     established = end is not None and not refusal
     graduation = None
-    if established and covered == ("U5",) and completion is not None:
-        graduation = max(completion, start, knowledge)  # type: ignore[type-var]
-        if graduation >= end:  # type: ignore[operator]
-            graduation = None
+    if coverage_ends is None:  # rule set v12: no producer of U1-U4 exists, so only a U5-only record graduates
+        if established and covered == ("U5",) and completion is not None:
+            graduation = max(completion, start, knowledge)  # type: ignore[type-var]
+            if graduation >= end:  # type: ignore[operator]
+                graduation = None
+    elif established:  # rule set v13: every selected reading's coverage must have ended, irreversibly
+        reading_ends = [completion if reading == "U5" else coverage_ends[reading] for reading in covered]
+        if reading_ends and all(item is not None for item in reading_ends):
+            graduation = max(*reading_ends, start, knowledge)  # type: ignore[type-var]
+            if graduation >= end:  # type: ignore[operator]
+                graduation = None
     if graduation is not None:
         final(
             GovernedPaperIncubationState.GRADUATED,
@@ -1049,7 +1072,9 @@ def derive_governed_paper_incubation_authority(  # noqa: C901, PLR0912, PLR0915 
         base = _before(base, min(cut) if cut else None)
     fill = _before(base, exhaustion)
     seed = GovernedPaperIncubationAuthority(
-        schema=GOVERNED_PAPER_INCUBATION_EVIDENCE_SCHEMA,
+        schema=GOVERNED_PAPER_INCUBATION_EVIDENCE_SCHEMA
+        if coverage_ends is None
+        else GOVERNED_PAPER_INCUBATION_OWN_HISTORY_EVIDENCE_SCHEMA,
         genesis_digest=lineage.genesis_digest,
         edge_id=lineage.edge_id,
         horizon_ns=horizon_ns,
@@ -1248,10 +1273,12 @@ def build_governed_paper_incubation_evidence(
     known_trades: Sequence[tuple[int, str]],
     readings: Sequence[GovernedPaperIncubationReading],
     attempts: Sequence[tuple[int, int]],
+    coverage_ends: Mapping[str, int | None] | None = None,
 ) -> GovernedPaperIncubationEvidence:
     """The evidence of one completed evaluation pass: the authority re-derived with the attempt ledger ``attempts``
     (``(decision sequence, decision instant)`` of every admitted incubation-basis entry, in decision order) and the
-    pass's readings. Every reading must be the one the final authority gives its decision. Pure.
+    pass's readings. Every reading must be the one the final authority gives its decision. ``coverage_ends`` (rule set
+    v13 only) are the U1-U4 coverage ends of the one own-history authority; the evidence is then v2. Pure.
 
     Attempt identity is verified BEFORE any attempt is counted: the readings name distinct decisions in decision order
     (strictly increasing sequence, non-decreasing instant); each ledger entry names one of those decisions exactly once,
@@ -1284,6 +1311,7 @@ def build_governed_paper_incubation_evidence(
         horizon_ns=horizon_ns,
         known_trades=known_trades,
         attempt_instants=tuple(item[1] for item in ledger),
+        coverage_ends=coverage_ends,
     )
     for reading in found:
         before = tuple(instant for sequence, instant in ledger if sequence < reading.decision_sequence)
@@ -1300,7 +1328,7 @@ def build_governed_paper_incubation_evidence(
         if decisions[sequence].state is not GovernedPaperIncubationState.ACTIVE:
             raise _fail("attempt_not_an_active_decision")
     seed = GovernedPaperIncubationEvidence(
-        schema_version=GOVERNED_PAPER_INCUBATION_EVIDENCE_SCHEMA,
+        schema_version=authority.schema,
         contract_id=GOVERNED_PAPER_INCUBATION_CONTRACT_ID,
         decision_ids=GOVERNED_PAPER_INCUBATION_DECISION_IDS,
         authority=authority,
@@ -1336,7 +1364,7 @@ def governed_paper_incubation_prefix_digest(evidence: GovernedPaperIncubationEvi
 
     known = authority.approval_published_ns is not None and authority.approval_published_ns < before_ns
     payload = {
-        "schema": GOVERNED_PAPER_INCUBATION_EVIDENCE_SCHEMA,
+        "schema": evidence.schema_version,  # v1 for rule set v12 (its accepted bytes), v2 for rule set v13
         "genesis_digest": authority.genesis_digest,
         "edge_id": authority.edge_id,
         "record_digest": authority.record_digest if known else "",
@@ -1392,6 +1420,7 @@ __all__ = [
     "GOVERNED_PAPER_INCUBATION_EVIDENCE_SCHEMA",
     "GOVERNED_PAPER_INCUBATION_EXPOSURE_FRACTION",
     "GOVERNED_PAPER_INCUBATION_HUMAN_CHANNEL",
+    "GOVERNED_PAPER_INCUBATION_OWN_HISTORY_EVIDENCE_SCHEMA",
     "GOVERNED_PAPER_INCUBATION_POLICY_SCHEMA",
     "GOVERNED_PAPER_INCUBATION_PRODUCTION_TABLE",
     "GOVERNED_PAPER_INCUBATION_READINGS",

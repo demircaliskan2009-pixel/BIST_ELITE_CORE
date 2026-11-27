@@ -781,3 +781,33 @@ Every producer (C-1 to C-7), source qualification, provenance basis, policy arti
 construction remains separate. The representation of an irrational edge health score or Sharpe reading at a rational
 allocation consumer remains a pending human decision. No entry is admitted by this record. REAL_PAPER_EXECUTION and
 Stage-4 remain blocked.
+
+## 23. S1 own-history unified authority — construction candidate (2026-11-26)
+
+`S1_OWN_HISTORY_UNIFIED_CONSTRUCTION_V1` constructs C-1 to C-6 of sections 21 and 22, and the C-7 consumers they support,
+inside the one engine. Its [construction record](s1_own_history_unified_construction_v1.md) maps every producer, consumer,
+verifier, test and residual. Pending protected independent audit, exact-head CI and human merge authorization:
+
+- the engine's schedule v10 is schedule v9 with no new wire field. Its re-run records, in memory only, every logical
+  simulated submission at the coordinate of the event that issued it (RD-11, RD-12). It also records the own-edge
+  valuation path with each point's knowledge instant, and the closed trades' close order. Outcomes stay v4;
+- `governed_paper_own_history.py` derives ONE own-history authority from the replay authority of the same engine re-run
+  and never accepts a count, score, state, coverage or digest. Its readings are Sharpe_30d and Sharpe_90d, FR_10 and
+  FR_20, S_hitrate, S_drawdown with RD-9's lower bound, the exact signal mean, and the edge health score, compared exactly
+  as surds. Each is DEFINED, INSUFFICIENT, UNDEFINED or UNPROVEN. The state machine runs in knowledge time: QUARANTINE is
+  never released (R-2, R-3), and the U1-U4 coverage ends are irreversible. Completeness needs coverage claims admitted
+  by the active table. The production table admits none, and a HUMAN_GOVERNANCE claim would still need an M1-qualified
+  source;
+- entry gate rule set v13 reads NT-E01, NT-E02 (after EF-8), NT-E04, NT-X02, the FB-ACTIVATION execution column and
+  SCALE-1's alpha_edge and DE-WEIGHT terms from that authority. A covered insufficient reading is `COLD_START_EXCEPTED`
+  only under an ACTIVE incubation record that selects it before its coverage ends, and a proven FAIL dominates. The
+  incubation authority graduates on the U1-U4 coverage ends (evidence v2). The sizing chain reads the decided allocation
+  (chain v2): one proven member weighs exactly 2/5, and two or more are BLOCKED on R-1. Day seal v14 and lineage
+  evidence v14 bind the coverage claims (append-only, each new one inside its day), the evidence and its knowledge-stable
+  prefix before `E_k` and `E_k+1` (X1). Every v2-v13 artifact, schedules v2-v9 and rule sets v1-v12 stay byte-identical;
+- admission effect: none. Production completeness is never proven, activation is never PASS (X-H1), and no member or
+  incubation member is reachable. World G still refuses every entry at NT-D01, and its 30-day horizon refuses every
+  91-day record. REAL_PAPER_EXECUTION and Stage-4 remain blocked. Every claim, record and history in the tests is
+  synthetic;
+- pending: E-1 (M1 and the human coverage approvals); E-2; E-3; R-1; R-2; R-3; G-1; X-H1; HD-07; NT-D01; C1-C9; D1; the
+  policy artifacts and record approvals.

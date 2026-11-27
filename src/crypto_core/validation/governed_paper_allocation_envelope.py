@@ -40,6 +40,15 @@ ENVELOPE_FIT (§4.6), for an exposure-increasing entry only: with ``usage`` its 
 publication-visible NAV at the same instant, PASS needs a MEMBER with ``usage <= w x B``; FAIL is a MEMBER with
 ``usage > w x B``, a NON_MEMBER with ``usage > 0``, or ``usage > 2/5 x B`` for any eligibility; anything else is BLOCKED,
 an unproven ``B`` or ``usage`` included. Nothing here creates a capital quantity or a capital commitment.
+
+Decided readings (``S1_OWN_HISTORY_UNIFIED_CONSTRUCTION_V1``). ``derive_governed_paper_allocation_decided`` is the same
+allocation over candidates whose readings are exact decided comparisons of the one own-history authority, never a
+rendered decimal (``GovernedPaperAllocationDecidedCandidate``: activation, whether EHS >= 0.30, whether Sharpe_30d is
+defined). Eligibility is §4.1's. With exactly one proven member the share vector is ``t = (1)`` whatever its numerator
+and BOOST, so its weight is exactly ``min(2/5, max(1/20, 1)) = 2/5`` and the residual 3/5 stays unallocated. With two
+or more members the shares need ``EHS_i x Sharpe_30d_i``, irrational in general: that representation is the pending
+human decision R-1 (S1_OWN_HISTORY_RESIDUAL_METHOD_DECISION_V1), so the allocation is BLOCKED and no weight is forced.
+The decimal path above is unchanged.
 """
 
 from __future__ import annotations
@@ -136,6 +145,21 @@ class GovernedPaperAllocationCandidate:
     ehs: str | None
     sharpe_30d: str | None
     decay_alert: GovernedPaperAllocationDecayAlert
+    reading_reason: str
+
+
+@dataclass(frozen=True)
+class GovernedPaperAllocationDecidedCandidate:
+    """One candidate edge's decided readings at one rebalance (S1_OWN_HISTORY_UNIFIED_CONSTRUCTION_V1).
+
+    ``ehs_at_least_member`` is the exact comparison EHS >= 0.30 (True, False proving DISABLE, or None when EHS is not
+    defined and proven), ``sharpe_30d_defined`` whether Sharpe_30d is defined and proven. Never a rendered decimal.
+    """
+
+    edge_id: str
+    activation: GovernedPaperAllocationActivation
+    ehs_at_least_member: bool | None
+    sharpe_30d_defined: bool
     reading_reason: str
 
 
@@ -480,6 +504,118 @@ def derive_governed_paper_allocation(
     )
 
 
+def derive_governed_paper_allocation_decided(
+    candidates: tuple[GovernedPaperAllocationDecidedCandidate, ...],
+) -> GovernedPaperAllocationResult:
+    """The ALLOCATION_ENVELOPE_V1 allocation of one rebalance over decided readings (see the module docstring). Pure.
+
+    Eligibility is §4.1's on the decided comparisons. One proven member has the exact weight 2/5; two or more members need
+    the irrational shares of R-1, so the allocation is BLOCKED; no proven member allocates nothing; one UNKNOWN candidate
+    leaves every weight unproven.
+    """
+
+    if type(candidates) is not tuple or any(
+        type(item) is not GovernedPaperAllocationDecidedCandidate for item in candidates
+    ):
+        raise _fail("decided_candidates_malformed")
+    seen: set[str] = set()
+    for item in candidates:
+        _require_text(item.edge_id, "edge_id")
+        _require_text(item.reading_reason, "reading_reason")
+        if item.edge_id in seen:
+            raise _fail("candidate_edge_id_duplicated")
+        seen.add(item.edge_id)
+        if (
+            type(item.activation) is not GovernedPaperAllocationActivation
+            or item.ehs_at_least_member not in (True, False, None)
+            or type(item.sharpe_30d_defined) is not bool
+        ):
+            raise _fail("decided_candidate_malformed")
+    eligibility: dict[str, tuple[GovernedPaperAllocationEligibility, str]] = {}
+    members: list[str] = []
+    unknown: list[str] = []
+    for item in candidates:
+        if item.activation is GovernedPaperAllocationActivation.FAIL:
+            eligibility[item.edge_id] = (GovernedPaperAllocationEligibility.NON_MEMBER, "activation_proven_fail")
+        elif item.ehs_at_least_member is False:
+            reason = "edge_health_score_below_0_30_disabled"
+            eligibility[item.edge_id] = (GovernedPaperAllocationEligibility.NON_MEMBER, reason)
+        elif item.activation is not GovernedPaperAllocationActivation.PASS:
+            eligibility[item.edge_id] = (GovernedPaperAllocationEligibility.UNKNOWN, "activation_unproven")
+            unknown.append(item.edge_id)
+        elif item.ehs_at_least_member is None:
+            eligibility[item.edge_id] = (GovernedPaperAllocationEligibility.UNKNOWN, "edge_health_score_undefined")
+            unknown.append(item.edge_id)
+        elif not item.sharpe_30d_defined:
+            eligibility[item.edge_id] = (GovernedPaperAllocationEligibility.UNKNOWN, "sharpe_30d_undefined")
+            unknown.append(item.edge_id)
+        else:
+            members.append(item.edge_id)
+
+    def entries(weights: dict[str, Fraction]) -> tuple[GovernedPaperAllocationWeight, ...]:
+        rows: list[GovernedPaperAllocationWeight] = []
+        for item in candidates:
+            state, why = eligibility[item.edge_id]
+            weight = weights.get(item.edge_id)
+            rows.append(
+                GovernedPaperAllocationWeight(
+                    edge_id=item.edge_id,
+                    eligibility=state,
+                    reason=why,
+                    weight=None if weight is None else governed_paper_allocation_rational(weight),
+                    rendered=None if weight is None else _render_truncated(weight),
+                )
+            )
+        return tuple(rows)
+
+    if unknown:
+        for edge_id in members:  # n is unproven, so no provisional member's weight is proven
+            eligibility[edge_id] = (
+                GovernedPaperAllocationEligibility.UNKNOWN,
+                "allocation_unproven_another_candidate_is_unknown",
+            )
+        return GovernedPaperAllocationResult(
+            status=GovernedPaperAllocationStatus.BLOCKED,
+            reason=f"eligibility_unknown:{','.join(unknown)}",
+            member_count=None,
+            boost="NOT_EVALUATED",
+            weights=entries({}),
+            residual=None,
+        )
+    for edge_id in members:
+        eligibility[edge_id] = (GovernedPaperAllocationEligibility.MEMBER, "proven_member")
+    if not members:
+        return GovernedPaperAllocationResult(
+            status=GovernedPaperAllocationStatus.NO_ALLOCATION,
+            reason="no_proven_member",
+            member_count=0,
+            boost="NOT_EVALUATED",
+            weights=entries({}),
+            residual=None,
+        )
+    if len(members) > 1:
+        for edge_id in members:
+            eligibility[edge_id] = (GovernedPaperAllocationEligibility.MEMBER, "proven_member_weight_unproven")
+        return GovernedPaperAllocationResult(
+            status=GovernedPaperAllocationStatus.BLOCKED,
+            reason="r1_representation_of_irrational_shares_pending_human_decision",
+            member_count=len(members),
+            boost="NOT_EVALUATED",
+            weights=entries({}),
+            residual=None,
+        )
+    (only,) = members
+    weight = _clip(Fraction(1))  # t = (1): the share of one member, whatever its numerator and BOOST
+    return GovernedPaperAllocationResult(
+        status=GovernedPaperAllocationStatus.ALLOCATED,
+        reason="allocated_single_member",
+        member_count=1,
+        boost="IDENTICAL_UNDER_EVERY_VALUE",
+        weights=entries({only: weight}),
+        residual=governed_paper_allocation_rational(1 - weight),
+    )
+
+
 # --- the governed timeline ---------------------------------------------------------------------------------------------
 
 
@@ -654,6 +790,7 @@ __all__ = [
     "GovernedPaperAllocationActivation",
     "GovernedPaperAllocationCandidate",
     "GovernedPaperAllocationDecayAlert",
+    "GovernedPaperAllocationDecidedCandidate",
     "GovernedPaperAllocationEligibility",
     "GovernedPaperAllocationError",
     "GovernedPaperAllocationReading",
@@ -665,6 +802,7 @@ __all__ = [
     "GovernedPaperEnvelopeFit",
     "GovernedPaperEnvelopeFitStatus",
     "derive_governed_paper_allocation",
+    "derive_governed_paper_allocation_decided",
     "derive_governed_paper_allocation_timeline",
     "evaluate_governed_paper_envelope_fit",
     "governed_paper_allocation_rational",

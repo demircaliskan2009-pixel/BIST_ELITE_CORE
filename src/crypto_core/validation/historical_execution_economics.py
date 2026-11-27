@@ -273,6 +273,29 @@ such an intent when U5 is covered, the fill lies in a fill window and no closed 
 decision instant. Every other fill, and every v2-v8 schedule, is unchanged; a refusal is whole and never reaches a
 reduction, a close or a protective close-only fill.
 
+Own-history instrumentation (``S1_OWN_HISTORY_UNIFIED_CONSTRUCTION_V1``, schedule v10). Schedule v10 is schedule v9: it
+carries exactly the v9 fields and nothing more, every admission rule of its re-run is v9's and its outcome is v4, so its
+ledgers are those of the v9 re-run under the same fields. The re-run additionally records, in memory only and read
+through ``simulate_historical_execution_governed_paper_derivation`` (no ledger, payload or digest carries them):
+
+* every logical simulated submission (P-4 of ``S1_OWN_HISTORY_RESIDUAL_METHOD_DECISION_V1``, RD-12): a decision intent
+  that passed the position-management and schedule admissions of its decision instant, and a protective attempt or
+  flatten child that passed its attempt-time protective admission, at the coordinate of the event that issued it (the
+  phase that RUNS the issuing step, RD-11) and in the engine's own processing order, with its exact requested quantity
+  and its run-independent identity. Its resolution is recorded where the engine reaches it: the book it executes or is
+  rejected against (filled quantity, coordinate and order; a fill and its ledgers precede every protective step its
+  processing runs), or, for a decision intent without a book, its own window close ``min(decision +
+  max_execution_delay_ns, window end)`` and whether that close precedes the evaluation end. A refusal before that
+  boundary records no submission; an attempt or child without a book stays in flight to the end;
+* the exact economic state after every change the engine values, and from it the own-edge valuation path: the NAV at
+  the initial anchor, every fill, every funding settlement, every UTC day boundary and the evaluation end, at every mark
+  visibility while a position is open and where the latest visible mark goes stale while it is open (no valuation exists
+  there), each with the instant from which every input of it is visible (the final-rate visibility of every settlement
+  liable at or before it);
+* the processing order of every trade close.
+
+A schedule v2-v9 records none of them, so its payload, digest and re-run are exactly the accepted ones.
+
 Governed decision portfolio. ``simulate_historical_execution_governed_paper_decision_portfolio`` (schedule v4 only) is the
 same governed re-run, which also records, at every decision of the frozen trace, the portfolio as known at that instant
 BEFORE the decision is admitted (after the funding settlements and protective rules of the same nanosecond, before its
@@ -1452,6 +1475,46 @@ class _Intent:
     requested: Fraction
 
 
+@dataclass
+class _Submission:
+    """One logical simulated submission being recorded (schedule v10 only; ``HistoricalExecutionSubmissionExactValues``)."""
+
+    native_sequence: int
+    order_kind: str
+    order_identity: tuple[str | int, ...]
+    submitted_ns: int
+    submitted_phase: int
+    side: str
+    exposure_increasing: bool
+    requested: Fraction
+    reached_book: bool = False
+    filled: Fraction | None = None
+    resolved_ns: int | None = None
+    resolved_phase: int | None = None
+    resolved_sequence: int | None = None
+    window_open_ns: int | None = None
+    window_close_ns: int | None = None
+    window_close_in_horizon: bool = False
+    reason: str = ""
+
+
+@dataclass(frozen=True)
+class _EconomicState:
+    """The exact economic state right after one valuation of a schedule v10 re-run (the valuation path's anchors)."""
+
+    time_ns: int
+    phase: int
+    native_sequence: int
+    kind: str
+    quantity: Fraction
+    cost_basis: Fraction
+    realized: Fraction
+    fees: Fraction
+    funding: Fraction
+    nav: Fraction
+    known_ns: int
+
+
 @dataclass(frozen=True)
 class _Book:
     visibility: int
@@ -1496,6 +1559,18 @@ class _MarkCursor:
 
 def _value(record: HistoricalPitRecord, name: str) -> Fraction:
     return Fraction(next(item.value for item in record.values if item.name == name))
+
+
+def _order_digest(
+    order: HistoricalExecutionIntent | HistoricalExecutionProtectiveAttempt | HistoricalExecutionProtectiveChild,
+) -> str:
+    """The sealed digest of one order record of the fill model (unique within one re-run)."""
+
+    if type(order) is HistoricalExecutionProtectiveAttempt:
+        return order.attempt_digest
+    if type(order) is HistoricalExecutionProtectiveChild:
+        return order.child_digest
+    return order.intent_digest  # type: ignore[union-attr]
 
 
 # Every order the one fill model executes: a decision intent, a v1 protective attempt or a schedule v6 flatten child.
@@ -1635,6 +1710,15 @@ class _Simulation:
         self.admitted_fill_risk: Fraction | None = None
         # The instant of the exposure-increasing fill under admission (S1_TEMPORAL_AUTHORITY_UNIFIED_CONSTRUCTION_V1).
         self.admitting_fill_ns: int | None = None
+        # Own-history instrumentation (S1_OWN_HISTORY_UNIFIED_CONSTRUCTION_V1): a governed re-run under schedule v10 only
+        # records it, in memory, and never in a ledger; inert otherwise.
+        self.own_history_recording = False
+        self.native_sequence = 0
+        self.submissions: list[_Submission] = []
+        self.submission_index: dict[str, int] = {}  # the order record's digest -> its submission
+        self.economic_states: list[_EconomicState] = []
+        self.funding_known_ns = 0  # the latest final-rate visibility of every settlement booked so far
+        self.trade_close_sequences: list[int] = []
 
     def _transformed_marks(self, marks: _MarkCursor) -> _MarkCursor:
         """Construction hook: the mark observations as the simulation reads them (identity; a stress run overrides)."""
@@ -1682,6 +1766,77 @@ class _Simulation:
         self.ledgers.valuations.append(_sealed(record, "valuation_digest"))  # type: ignore[arg-type]
         if kind in (HistoricalExecutionValuationKind.INITIAL, HistoricalExecutionValuationKind.UTC_DAY_BOUNDARY):
             self.day_start = (time_ns, equity)
+        if self.own_history_recording:  # schedule v10: the valuation path's anchor, in memory only
+            self.economic_states.append(
+                _EconomicState(
+                    time_ns,
+                    self.event_priority,
+                    self._next_native(),
+                    kind.value,
+                    self.position.quantity,
+                    self.position.cost_basis,
+                    self.realized,
+                    self.fees,
+                    self.funding_total,
+                    equity,
+                    max(time_ns, self.funding_known_ns),
+                )
+            )
+
+    def _next_native(self) -> int:
+        """The next place in the engine's own processing order (schedule v10 instrumentation only)."""
+
+        sequence = self.native_sequence
+        self.native_sequence += 1
+        return sequence
+
+    def _record_submission(  # noqa: PLR0913 - the facts of one logical simulated submission
+        self,
+        order: HistoricalExecutionIntent | HistoricalExecutionProtectiveAttempt | HistoricalExecutionProtectiveChild,
+        digest: str,
+        kind: str,
+        identity: tuple[str | int, ...],
+        time_ns: int,
+        requested: Fraction,
+    ) -> _Submission | None:
+        """Record one logical simulated submission at the coordinate of the event issuing it (schedule v10 only): the
+        order passed every admission before the boundary and enters the pending execution path now."""
+
+        if not self.own_history_recording:
+            return None
+        signed = requested if order.side is HistoricalExecutionSide.BUY else -requested
+        submission = _Submission(
+            native_sequence=self._next_native(),
+            order_kind=kind,
+            order_identity=identity,
+            submitted_ns=time_ns,
+            submitted_phase=self.event_priority,
+            side=order.side.value,
+            exposure_increasing=abs(self.position.quantity + signed) > abs(self.position.quantity),
+            requested=requested,
+        )
+        if digest in self.submission_index:  # pragma: no cover - every order record digest is unique within a re-run
+            raise _EconomicFailure("own_history_submission_identity_duplicated")
+        self.submission_index[digest] = len(self.submissions)
+        self.submissions.append(submission)
+        return submission
+
+    def _record_resolution(self, digest: str, filled: Fraction, time_ns: int, reason: str) -> None:
+        """Record where a submitted order reached its book (schedule v10 only): before every ledger or protective step
+        its processing runs, so a fill precedes the continuation it triggers in the processing order."""
+
+        if not self.own_history_recording:
+            return
+        index = self.submission_index.get(digest)
+        if index is None:  # pragma: no cover - only submitted orders ever reach a book
+            raise _EconomicFailure("own_history_resolution_without_submission")
+        submission = self.submissions[index]
+        submission.reached_book = True
+        submission.filled = filled
+        submission.resolved_ns = time_ns
+        submission.resolved_phase = self.event_priority
+        submission.resolved_sequence = self._next_native()
+        submission.reason = reason
 
     def _settle(self, record: HistoricalPitRecord, liability_ns: int) -> None:
         key = (record.series_id, record.instrument, record.sequence_id)
@@ -1714,6 +1869,8 @@ class _Simulation:
         sealed: HistoricalExecutionFundingCashflow = _sealed(cashflow, "cashflow_digest")  # type: ignore[assignment]
         self.ledgers.funding.append(sealed)
         self.funding_total += amount
+        # its amount is known only from its final rate's visibility (schedule v10 instrumentation; inert otherwise)
+        self.funding_known_ns = max(self.funding_known_ns, _visibility(record))  # type: ignore[type-var]
         if self.information_time:  # booked at the liability, its amount known only from its final rate's visibility
             self.settlements.append((liability_ns, _visibility(record), amount))  # type: ignore[arg-type]
         _amount(self.funding_total, "cumulative_funding")
@@ -2267,11 +2424,17 @@ class _Simulation:
             self._fill_record(sealed, outcome=HistoricalExecutionFillOutcome.REJECTED, reason=refused)
             self._resume_child_after_refusal(time_ns)
             return
+        # past its attempt-time admission the child crosses the submission boundary (schedule v10 records it)
+        submission = self._record_submission(
+            sealed, sealed.child_digest, "FLATTEN_CHILD", (authority, sequence, time_ns), time_ns, abs(quantity)
+        )
         book, reason = self._select_protective_book(sealed)
         self.attempt_in_flight = True  # until its fill resolves, or, without a book before the end, to the end
         if book is None:
             self._unfilled(sealed, reason)
             self.ledgers.pending_child = sealed
+            if submission is not None:  # in flight to the end: unresolved
+                submission.reason = reason
             return
         index = self.fill_index
         self.fill_index += 1
@@ -2356,11 +2519,22 @@ class _Simulation:
             self._fill_record(sealed, outcome=HistoricalExecutionFillOutcome.REJECTED, reason=refused)
             self._resume_after_refusal(protection, obligation, time_ns)
             return
+        # past its attempt-time admission the attempt crosses the submission boundary (schedule v10 records it)
+        submission = self._record_submission(
+            sealed,
+            sealed.attempt_digest,
+            "PROTECTIVE_ATTEMPT",
+            (protection.opened_at, obligation.created_at, sequence, time_ns),
+            time_ns,
+            abs(quantity),
+        )
         book, reason = self._select_protective_book(sealed)
         self.attempt_in_flight = True  # until its fill resolves, or, without a book before the end, to the end
         if book is None:
             self._unfilled(sealed, reason)
             self.ledgers.pending_attempt = sealed
+            if submission is not None:  # in flight to the end: unresolved
+                submission.reason = reason
             return
         index = self.fill_index
         self.fill_index += 1
@@ -2515,6 +2689,7 @@ class _Simulation:
             self._fill_record(
                 record, outcome=HistoricalExecutionFillOutcome.REJECTED, reason=reason, **observed, **extra
             )
+            self._record_resolution(_order_digest(record), Fraction(0), book.visibility, reason)
             return reason
 
         if book.bid <= 0 or book.ask <= 0 or book.bid_quantity < 0 or book.ask_quantity < 0:
@@ -2615,6 +2790,8 @@ class _Simulation:
             **observed,
             **quoted,
         )
+        # the resolution precedes every ledger and protective step this fill's processing runs (schedule v10 only)
+        self._record_resolution(_order_digest(record), filled, book.visibility, fill.reason)
         fee: HistoricalExecutionFeeCashflow = _sealed(  # type: ignore[assignment]
             HistoricalExecutionFeeCashflow(
                 fee_id=_derived_id("fee", fill.fill_digest),
@@ -2733,6 +2910,8 @@ class _Simulation:
             self._trade_record(trade, HistoricalExecutionTradeStatus.CLOSED, time_ns, None, None)
         )
         self.trade_close_priorities.append(self.event_priority)
+        if self.own_history_recording:  # schedule v10: the close's place in the processing order
+            self.trade_close_sequences.append(self._next_native())
         self.trade_exact_values.append(
             HistoricalExecutionTradeExactValues(
                 trade_id=trade.trade_id,
@@ -2834,10 +3013,25 @@ class _Simulation:
                 if refused is not None:
                     self._fill_record(intent.record, outcome=HistoricalExecutionFillOutcome.REJECTED, reason=refused)
                     continue
+                # past both decision-time admissions the intent crosses the submission boundary (schedule v10 records it)
+                submission = self._record_submission(
+                    intent.record,
+                    intent.record.intent_digest,
+                    "DECISION_INTENT",
+                    (decisions[index].decision_sequence, decisions[index].decision_digest),
+                    time_ns,
+                    intent.requested,
+                )
                 boundary_ns = decisions[index + 1].decision_time_ns if index + 1 < len(decisions) else end_ns
                 book, reason = self._select_book(intent.record, boundary_ns)
                 if book is None:
                     self._unfilled(intent.record, reason)
+                    if submission is not None:  # its own window close resolves it, when the horizon reaches it
+                        close = min(intent.record.decision_time_ns + self.max_delay, boundary_ns)
+                        submission.window_open_ns = intent.record.decision_time_ns
+                        submission.window_close_ns = close
+                        submission.window_close_in_horizon = close < end_ns
+                        submission.reason = reason
                     if self.pm is not None:  # the intent waits until its window ends: it defers protective attempts
                         resolution = min(intent.record.decision_time_ns + self.max_delay, boundary_ns)
                         self.decision_busy_until = resolution
@@ -2894,6 +3088,111 @@ class _Simulation:
             equity=end.equity,
         )
         return self.ledgers
+
+    # -- own-history instrumentation (schedule v10 only; in memory, never a ledger) --
+
+    def own_history_facts(
+        self,
+    ) -> tuple[
+        tuple[HistoricalExecutionSubmissionExactValues, ...],
+        tuple[HistoricalExecutionValuationPoint, ...],
+        tuple[int, ...],
+    ]:
+        """The recorded submissions, the own-edge valuation path and the trade close order (all empty unless recorded)."""
+
+        if not self.own_history_recording:
+            return (), (), ()
+        phases = HISTORICAL_EXECUTION_EQUAL_INSTANT_PHASES
+        submissions = []
+        for item in self.submissions:
+            if item.submitted_phase < 0 or (item.resolved_phase is not None and item.resolved_phase < 0):
+                raise _EconomicFailure("own_history_submission_outside_every_event")  # pragma: no cover - none occurs
+            submissions.append(
+                HistoricalExecutionSubmissionExactValues(
+                    native_sequence=item.native_sequence,
+                    order_kind=item.order_kind,
+                    order_identity=item.order_identity,
+                    submitted_ns=item.submitted_ns,
+                    submitted_phase=phases[item.submitted_phase],
+                    side=item.side,
+                    exposure_increasing=item.exposure_increasing,
+                    requested_quantity=item.requested,
+                    reached_book=item.reached_book,
+                    filled_quantity=item.filled,
+                    resolved_ns=item.resolved_ns,
+                    resolved_phase=None if item.resolved_phase is None else phases[item.resolved_phase],
+                    resolved_sequence=item.resolved_sequence,
+                    window_open_ns=item.window_open_ns,
+                    window_close_ns=item.window_close_ns,
+                    window_close_in_horizon=item.window_close_in_horizon,
+                    reason=item.reason,
+                )
+            )
+        return tuple(submissions), self._valuation_path(), tuple(self.trade_close_sequences)
+
+    def _valuation_path(self) -> tuple[HistoricalExecutionValuationPoint, ...]:
+        """The own-edge valuation path (RD-10): every anchor the engine valued, then, while a position is open, the NAV at
+        every mark visibility up to the next anchor and the instant the latest visible mark goes stale."""
+
+        staleness = self.policy.max_mark_staleness_ns
+        visibilities = self.mark_visibilities
+        states = self.economic_states
+        points: list[HistoricalExecutionValuationPoint] = []
+        for index, state in enumerate(states):
+            points.append(
+                HistoricalExecutionValuationPoint(
+                    state.time_ns,
+                    state.phase,
+                    state.native_sequence,
+                    state.kind,
+                    state.quantity,
+                    state.nav,
+                    state.known_ns,
+                )
+            )
+            if state.quantity == 0 or index + 1 == len(states):
+                continue  # flat: the NAV needs no mark; the last anchor is the evaluation end
+            end = states[index + 1].time_ns  # the next anchor values its own instant
+            base = self.initial_equity + state.realized - state.fees + state.funding - state.cost_basis
+            seen = bisect.bisect_right(visibilities, state.time_ns)
+            best: _Mark | None = self.mark_best[seen - 1] if seen else None  # the mark the anchor itself valued
+            cursor, stop = state.time_ns, bisect.bisect_right(visibilities, end)
+            while True:
+                upcoming = visibilities[seen] if seen < stop else None
+                horizon = end if upcoming is None else upcoming
+                if best is not None:
+                    expiry = best.record.event_time_ns + staleness + 1
+                    if cursor < expiry < horizon:  # the latest visible mark goes stale before anything newer
+                        points.append(
+                            HistoricalExecutionValuationPoint(
+                                expiry,
+                                -1,
+                                -1,
+                                HISTORICAL_EXECUTION_VALUATION_POINT_MARK_STALE,
+                                state.quantity,
+                                None,
+                                max(expiry, state.known_ns),
+                            )
+                        )
+                if upcoming is None:
+                    break
+                while seen < stop and visibilities[seen] == upcoming:
+                    seen += 1
+                best = self.mark_best[seen - 1]
+                fresh = upcoming - best.record.event_time_ns <= staleness and best.price > 0
+                points.append(
+                    HistoricalExecutionValuationPoint(
+                        upcoming,
+                        -1,
+                        -1,
+                        HISTORICAL_EXECUTION_VALUATION_POINT_MARK,
+                        state.quantity,
+                        base + state.quantity * best.price if fresh else None,
+                        max(upcoming, state.known_ns),
+                    )
+                )
+                cursor = upcoming
+        return tuple(points)
 
 
 # --- Stage-3 synthetic stress (STRESS_PIT_TRANSFORM_V1) -------------------------------------------------------------
@@ -3560,38 +3859,48 @@ _KELLY_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_S
 # (S1_TEMPORAL_AUTHORITY_UNIFIED_CONSTRUCTION_V1, module docstring); its re-run's outcome is v4.
 HISTORICAL_EXECUTION_INCUBATION_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v9"
 _INCUBATION_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_INCUBATION_ADMISSION_SCHEDULE_SCHEMA_VERSION
-_KELLY_FIT_SCHEDULES = (_KELLY_SCHEDULE_SCHEMA_VERSION, _INCUBATION_SCHEDULE_SCHEMA_VERSION)
+# Schedule v10: schedule v9 with the own-history instrumentation recorded in memory
+# (S1_OWN_HISTORY_UNIFIED_CONSTRUCTION_V1, module docstring); its re-run's outcome is v4.
+HISTORICAL_EXECUTION_OWN_HISTORY_ADMISSION_SCHEDULE_SCHEMA_VERSION = "historical-execution-admission-schedule.v10"
+_OWN_HISTORY_SCHEDULE_SCHEMA_VERSION = HISTORICAL_EXECUTION_OWN_HISTORY_ADMISSION_SCHEDULE_SCHEMA_VERSION
+# The schedules carrying the v9 incubation fields: schedule v9 and v10.
+HISTORICAL_EXECUTION_INCUBATION_SCHEDULE_SCHEMA_VERSIONS = (
+    _INCUBATION_SCHEDULE_SCHEMA_VERSION,
+    _OWN_HISTORY_SCHEDULE_SCHEMA_VERSION,
+)
+_INCUBATION_SCHEDULES = HISTORICAL_EXECUTION_INCUBATION_SCHEDULE_SCHEMA_VERSIONS
+_KELLY_FIT_SCHEDULES = (_KELLY_SCHEDULE_SCHEMA_VERSION, *_INCUBATION_SCHEDULES)
 _INFORMATION_TIME_SCHEDULES = (
     _INFORMATION_TIME_SCHEDULE_SCHEMA_VERSION,
     _SIZING_SCHEDULE_SCHEMA_VERSION,
     _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
     _RISK_SCHEDULE_SCHEMA_VERSION,
     _KELLY_SCHEDULE_SCHEMA_VERSION,
-    _INCUBATION_SCHEDULE_SCHEMA_VERSION,
+    *_INCUBATION_SCHEDULES,
 )
-# The schedules carrying the declared fill-time sizing bounds: schedule v5 and, on top of it, schedules v6 to v9.
+# The schedules carrying the declared fill-time sizing bounds: schedule v5 and, on top of it, schedules v6 to v10.
 HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS = (
     _SIZING_SCHEDULE_SCHEMA_VERSION,
     _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
     _RISK_SCHEDULE_SCHEMA_VERSION,
     _KELLY_SCHEDULE_SCHEMA_VERSION,
-    _INCUBATION_SCHEDULE_SCHEMA_VERSION,
+    *_INCUBATION_SCHEDULES,
 )
 _SIZING_BOUND_SCHEDULES = HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS
-# The schedules carrying the declared protective-ledger bounds (exposure halt, flatten windows): schedule v6 to v9.
+# The schedules carrying the declared protective-ledger bounds (exposure halt, flatten windows): schedule v6 to v10.
 HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS = (
     _PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSION,
     _RISK_SCHEDULE_SCHEMA_VERSION,
     _KELLY_SCHEDULE_SCHEMA_VERSION,
-    _INCUBATION_SCHEDULE_SCHEMA_VERSION,
+    *_INCUBATION_SCHEDULES,
 )
 _PROTECTIVE_LEDGER_SCHEDULES = HISTORICAL_EXECUTION_PROTECTIVE_LEDGER_SCHEDULE_SCHEMA_VERSIONS
 # The schedules carrying the declared CVaR bounds and the FCD-01 R-5 stop-risk bound: schedule v7 and, on top of it, v8
-# and v9.
+# to v10.
 HISTORICAL_EXECUTION_RISK_BOUND_SCHEDULE_SCHEMA_VERSIONS = (
     _RISK_SCHEDULE_SCHEMA_VERSION,
     _KELLY_SCHEDULE_SCHEMA_VERSION,
-    _INCUBATION_SCHEDULE_SCHEMA_VERSION,
+    *_INCUBATION_SCHEDULES,
 )
 _RISK_BOUND_SCHEDULES = HISTORICAL_EXECUTION_RISK_BOUND_SCHEDULE_SCHEMA_VERSIONS
 # Decision packet r1 item 1.6 (W_INC): an incubation-basis fill's post-fill exposure above 8% of the publication-visible
@@ -3760,7 +4069,8 @@ class HistoricalExecutionAdmissionSchedule:
     each at or after the halt), the declared protective-ledger bounds; schema v7 carries them too. Schema v7 is schema v6
     with ``cvar_bounds`` (ordered, disjoint), the declared fill-time CVaR bounds; schemas v8 and v9 carry them too. Schema
     v9 is schema v8 with ``incubation_decision_sequences`` (strictly increasing, none refused), ``incubation_fill_windows``
-    (ordered, disjoint, non-adjacent) and ``incubation_kelly_covered``; no other schema carries them.
+    (ordered, disjoint, non-adjacent) and ``incubation_kelly_covered``; schema v10 carries exactly the v9 fields (its
+    re-run also records the own-history instrumentation in memory), and no other schema carries them.
     """
 
     schema_version: str
@@ -3972,6 +4282,77 @@ class HistoricalExecutionTradeExactValues:
     knowledge_ns: int
 
 
+HISTORICAL_EXECUTION_SUBMISSION_KINDS: tuple[str, ...] = ("DECISION_INTENT", "PROTECTIVE_ATTEMPT", "FLATTEN_CHILD")
+
+
+@dataclass(frozen=True)
+class HistoricalExecutionSubmissionExactValues:
+    """One logical simulated submission of a schedule v10 re-run (P-4 of S1_OWN_HISTORY_RESIDUAL_METHOD_DECISION_V1), in
+    memory only: never serialized, digested or an artifact, and never a venue order (module docstring).
+
+    ``order_kind`` is one of ``HISTORICAL_EXECUTION_SUBMISSION_KINDS``. ``order_identity`` is run-independent: the decision
+    sequence and digest of a decision intent; the opening instant of its protection, the obligation's creation instant,
+    the attempt sequence and instant of a protective attempt; the flatten authority digest, child sequence and instant of
+    a flatten child. ``submitted_ns`` and ``submitted_phase`` are the coordinate of the event that issued it (the phase
+    that RUNS the issuing step, RD-11) and ``native_sequence`` its place in the engine's processing order.
+    ``requested_quantity`` is the exact requested quantity after any close-only clamp; ``exposure_increasing`` says
+    whether a full fill would increase the magnitude of the position at submission.
+
+    The resolution as the engine reaches it: ``reached_book`` with ``filled_quantity`` (zero for a rejection at the book)
+    and ``resolved_ns``/``resolved_phase``/``resolved_sequence``; otherwise, for a decision intent without a book,
+    ``window_open_ns`` (its decision instant) and ``window_close_ns``, its own resolution instant ``min(decision +
+    max_execution_delay_ns, window end)``, with ``window_close_in_horizon`` True exactly when that instant precedes the
+    re-run's evaluation end; an attempt or child without a book stays in flight to the end (both None). ``reason`` is the
+    engine's own code, never a classification on its own.
+    """
+
+    native_sequence: int
+    order_kind: str
+    order_identity: tuple[str | int, ...]
+    submitted_ns: int
+    submitted_phase: str
+    side: str
+    exposure_increasing: bool
+    requested_quantity: Fraction
+    reached_book: bool
+    filled_quantity: Fraction | None
+    resolved_ns: int | None
+    resolved_phase: str | None
+    resolved_sequence: int | None
+    window_open_ns: int | None
+    window_close_ns: int | None
+    window_close_in_horizon: bool
+    reason: str
+
+
+HISTORICAL_EXECUTION_VALUATION_POINT_MARK = "MARK"
+HISTORICAL_EXECUTION_VALUATION_POINT_MARK_STALE = "MARK_STALE"
+
+
+@dataclass(frozen=True)
+class HistoricalExecutionValuationPoint:
+    """One point of a schedule v10 re-run's own-edge valuation path (C-1, RD-10), in memory only (module docstring).
+
+    ``kind`` is the engine's valuation kind (INITIAL, FILL, FUNDING_SETTLEMENT, UTC_DAY_BOUNDARY, EVALUATION_END) after an
+    economic change, ``MARK`` at a mark visibility while a position is open, or ``MARK_STALE`` where the latest visible
+    mark goes stale while a position is open. ``phase`` is the equal-instant priority of the event that made the point
+    (``-1`` for the initial anchor, a mark visibility or a mark expiry: before every phase of its instant) and
+    ``native_sequence`` its processing order (``-1`` for a mark point). ``nav`` is the exact own-edge equity there (the
+    initial equity plus realized gross minus fees plus booked funding plus the unrealized PnL at the latest fresh visible
+    mark), None where a position is open without a fresh mark: no valuation exists from that point until the next one.
+    ``known_ns`` is the instant from which every input of the NAV is visible: the point's own instant and the final-rate
+    visibility of every settlement liable at or before it.
+    """
+
+    time_ns: int
+    phase: int
+    native_sequence: int
+    kind: str
+    position_quantity: Fraction
+    nav: Fraction | None
+    known_ns: int
+
+
 class HistoricalExecutionKellyStatus(str, Enum):
     PASS = "PASS"  # noqa: S105 - reading status label, not a credential.
     FAIL = "FAIL"
@@ -4026,6 +4407,11 @@ class HistoricalExecutionGovernedPaperDerivation:
     order (the order the engine closed them): the equal-instant phase (``HISTORICAL_EXECUTION_EQUAL_INSTANT_PHASES``) of
     the event that closed it. ``trade_exact_values`` holds one entry per CLOSED trade in the same order: its exact Kelly
     inputs (``HistoricalExecutionTradeExactValues``). All are empty when the re-run could not be computed.
+
+    Under schedule v10 only, ``submissions`` holds every logical simulated submission in processing order
+    (``HistoricalExecutionSubmissionExactValues``), ``valuation_path`` the own-edge valuation path ordered by instant,
+    phase and processing order (``HistoricalExecutionValuationPoint``) and ``trade_close_sequences`` the processing order of
+    every CLOSED trade, aligned with ``trade_close_phases``. Every other schedule leaves them empty.
     """
 
     portfolio: HistoricalExecutionGovernedPaperDecisionPortfolio
@@ -4033,6 +4419,9 @@ class HistoricalExecutionGovernedPaperDerivation:
     exact_values: tuple[HistoricalExecutionDecisionExactValues, ...]
     trade_close_phases: tuple[str, ...]
     trade_exact_values: tuple[HistoricalExecutionTradeExactValues, ...] = ()
+    submissions: tuple[HistoricalExecutionSubmissionExactValues, ...] = ()
+    valuation_path: tuple[HistoricalExecutionValuationPoint, ...] = ()
+    trade_close_sequences: tuple[int, ...] = ()
 
 
 _GOVERNED_V3_FIELDS = (
@@ -4166,6 +4555,8 @@ class _GovernedPaperSimulation(_Simulation):
         self.cvar_starts = [item[0] for item in self.cvar_bounds]
         super().__init__(**arguments)  # type: ignore[arg-type]
         self.information_time = schedule.schema_version in _INFORMATION_TIME_SCHEDULES
+        # Schedule v10: the own-history instrumentation, recorded in memory only (module docstring).
+        self.own_history_recording = schedule.schema_version == _OWN_HISTORY_SCHEDULE_SCHEMA_VERSION
         if record_decision_portfolio:
             self.decision_snapshots = []
         # Schedule v6: each flatten window opens with one protective evaluation (inert while the position is FLAT).
@@ -4588,6 +4979,7 @@ def canonical_historical_execution_admission_schedule(value: object) -> Historic
         _RISK_SCHEDULE_SCHEMA_VERSION,
         _KELLY_SCHEDULE_SCHEMA_VERSION,
         _INCUBATION_SCHEDULE_SCHEMA_VERSION,
+        _OWN_HISTORY_SCHEDULE_SCHEMA_VERSION,
     ):
         raise _fail("admission_schedule_malformed:schema_version")
     _canonical_protective_windows(value)
@@ -4631,8 +5023,9 @@ def canonical_historical_execution_admission_schedule(value: object) -> Historic
 
 
 def _canonical_incubation_bounds(value: HistoricalExecutionAdmissionSchedule) -> None:
-    """Schema v9's incubation fields: strictly increasing decision sequences none of which is refused, ordered disjoint
-    non-adjacent nonempty fill windows, and a boolean U5 coverage; empty and False on every other schema."""
+    """Schema v9's incubation fields (schema v10 carries them too): strictly increasing decision sequences none of which is
+    refused, ordered disjoint non-adjacent nonempty fill windows, and a boolean U5 coverage; empty and False on every
+    other schema."""
 
     decisions, windows, covered = (
         value.incubation_decision_sequences,
@@ -4641,7 +5034,7 @@ def _canonical_incubation_bounds(value: HistoricalExecutionAdmissionSchedule) ->
     )
     if type(decisions) is not tuple or type(windows) is not tuple or type(covered) is not bool:
         raise _fail("admission_schedule_malformed:incubation_fields")
-    if value.schema_version != _INCUBATION_SCHEDULE_SCHEMA_VERSION and (decisions or windows or covered):
+    if value.schema_version not in _INCUBATION_SCHEDULES and (decisions or windows or covered):
         raise _fail("admission_schedule_malformed:incubation_fields_need_schema_v9")
     if any(not historical_execution_wire_int_is_valid(item, minimum=0) for item in decisions):
         raise _fail("admission_schedule_malformed:incubation_decision_sequences")
@@ -4882,10 +5275,15 @@ def _governed_run(
     tuple[HistoricalExecutionDecisionExactValues, ...],
     tuple[str, ...],
     tuple[HistoricalExecutionTradeExactValues, ...],
+    tuple[
+        tuple[HistoricalExecutionSubmissionExactValues, ...],
+        tuple[HistoricalExecutionValuationPoint, ...],
+        tuple[int, ...],
+    ],
 ]:
     """The one governed re-run: its outcome and, when asked to record them, its decision snapshots and the exact values
-    behind them; with the equal-instant phase of every trade close and the exact Kelly inputs of every closed trade (all
-    empty when the re-run cannot be computed)."""
+    behind them; with the equal-instant phase of every trade close, the exact Kelly inputs of every closed trade and,
+    under schedule v10, the own-history instrumentation (all empty when the re-run cannot be computed)."""
 
     schedule = canonical_historical_execution_admission_schedule(schedule)
     if record_decision_portfolio and schedule.schema_version not in _INFORMATION_TIME_SCHEDULES:
@@ -4931,7 +5329,7 @@ def _governed_run(
             protective=protective,
             ledger=ledger,
         )
-        return failed, (), (), (), ()
+        return failed, (), (), (), (), ((), (), ())
     outcome = _governed_outcome(
         result,
         schedule,
@@ -4951,6 +5349,7 @@ def _governed_run(
             HISTORICAL_EXECUTION_EQUAL_INSTANT_PHASES[item] for item in simulation.trade_close_priorities if item >= 0
         ),
         tuple(simulation.trade_exact_values),
+        simulation.own_history_facts(),
     )
 
 
@@ -4968,7 +5367,7 @@ def simulate_historical_execution_governed_paper_decision_portfolio(
     the same inputs is the one ``outcome_digest`` binds. Pure.
     """
 
-    outcome, snapshots, _, _, _ = _governed_run(
+    outcome, snapshots, _, _, _, _ = _governed_run(
         result, expected_result_digest, schedule, record_decision_portfolio=True
     )
     return _decision_portfolio(outcome, snapshots)
@@ -4986,14 +5385,15 @@ def simulate_historical_execution_governed_paper_derivation(
     The authorities, refusals and failure modes are exactly those of
     ``simulate_historical_execution_governed_paper_decision_portfolio``, and both artifacts are byte-identical to their
     own functions under the same inputs. A consumer comparing a strict threshold or ordering one nanosecond's events reads
-    the exact values and phases, never the rendered text or the timestamp alone. Pure.
+    the exact values and phases, never the rendered text or the timestamp alone. Under schedule v10 it also returns the
+    own-history instrumentation of the same re-run (submissions, valuation path, trade close order). Pure.
     """
 
-    outcome, snapshots, exact, phases, trades = _governed_run(
+    outcome, snapshots, exact, phases, trades, (submissions, path, closes) = _governed_run(
         result, expected_result_digest, schedule, record_decision_portfolio=True
     )
     return HistoricalExecutionGovernedPaperDerivation(
-        _decision_portfolio(outcome, snapshots), outcome, exact, phases, trades
+        _decision_portfolio(outcome, snapshots), outcome, exact, phases, trades, submissions, path, closes
     )
 
 
@@ -6148,6 +6548,13 @@ __all__ = [
     "HISTORICAL_EXECUTION_KELLY_ADMISSION_SCHEDULE_SCHEMA_VERSION",
     "HISTORICAL_EXECUTION_INCUBATION_ADMISSION_SCHEDULE_SCHEMA_VERSION",
     "HISTORICAL_EXECUTION_INCUBATION_EXPOSURE_CAP",
+    "HISTORICAL_EXECUTION_INCUBATION_SCHEDULE_SCHEMA_VERSIONS",
+    "HISTORICAL_EXECUTION_OWN_HISTORY_ADMISSION_SCHEDULE_SCHEMA_VERSION",
+    "HISTORICAL_EXECUTION_SUBMISSION_KINDS",
+    "HISTORICAL_EXECUTION_VALUATION_POINT_MARK",
+    "HISTORICAL_EXECUTION_VALUATION_POINT_MARK_STALE",
+    "HistoricalExecutionSubmissionExactValues",
+    "HistoricalExecutionValuationPoint",
     "HistoricalExecutionIncubationWindow",
     "HISTORICAL_EXECUTION_KELLY_BLOCKS",
     "HISTORICAL_EXECUTION_KELLY_CAP",

@@ -34,6 +34,15 @@ keeps its unique fixed point:
 
 The evidence binds the allocation timeline, the CTR source digests and admission, the fill-time bounds and every
 entry's reading. Nothing here approves a value, qualifies a source, creates a capital quantity or admits an entry.
+
+Own-history allocation (``S1_OWN_HISTORY_UNIFIED_CONSTRUCTION_V1``, rule set v13, evidence v2). With the one own-history
+evidence of the same evaluation, each entry reads the genesis sleeve's eligibility and weight from that authority's
+latest rebalance at or before its decision (every UTC midnight and every proven state transition), decided on exact
+readings through ``derive_governed_paper_allocation_decided``; activation is never proven PASS (the latency and API legs
+are X-H1), so a proven NON_MEMBER is the only new outcome and ENVELOPE_FIT fails on its positive usage. The fill-time
+envelopes stay the input-only derivation above: an envelope a later admission could change would enter the fixed point,
+and with no reachable member every exposure-increasing fill is refused either way (fail-closed). Without own-history
+evidence every reading, payload and digest is exactly the accepted v1 one.
 """
 
 from __future__ import annotations
@@ -55,6 +64,7 @@ from crypto_core.validation.governed_paper_allocation_envelope import (
     GOVERNED_PAPER_ALLOCATION_FLOOR,
     GOVERNED_PAPER_ALLOCATION_TIMELINE_SCHEMA,
     GovernedPaperAllocationEligibility,
+    GovernedPaperAllocationReading,
     GovernedPaperAllocationStatus,
     GovernedPaperAllocationTimeline,
     GovernedPaperEnvelopeFitStatus,
@@ -83,6 +93,10 @@ from crypto_core.validation.governed_paper_ctr_qualification import (
     governed_paper_ctr_reading,
 )
 from crypto_core.validation.governed_paper_execution_authority import GovernedPaperGenesisAuthority
+from crypto_core.validation.governed_paper_own_history import (
+    GovernedPaperOwnHistoryEvidence,
+    governed_paper_own_history_reading,
+)
 from crypto_core.validation.historical_decision_run import HistoricalDecisionRun
 from crypto_core.validation.historical_execution_economics import (
     HISTORICAL_EXECUTION_SIZING_BOUND_SCHEDULE_SCHEMA_VERSIONS,
@@ -102,6 +116,9 @@ _ENTRY_DIRECTIONS = {"LONG": HistoricalExecutionSide.BUY, "SHORT": HistoricalExe
 GOVERNED_PAPER_SIZING_CHAIN_CONTRACT_ID = "S1_APPROVED_SIZING_CHAIN_CONSTRUCTION_V1"
 GOVERNED_PAPER_SIZING_EVIDENCE_SCHEMA = "governed-paper-sizing-evidence.v1"
 GOVERNED_PAPER_SIZING_RULE_ID = "governed-paper-sizing-chain.v1"
+# Rule set v13 (S1_OWN_HISTORY_UNIFIED_CONSTRUCTION_V1): the decision-time allocation read from the own-history authority.
+GOVERNED_PAPER_SIZING_OWN_HISTORY_EVIDENCE_SCHEMA = "governed-paper-sizing-evidence.v2"
+GOVERNED_PAPER_SIZING_OWN_HISTORY_RULE_ID = "governed-paper-sizing-chain.v2"
 GOVERNED_PAPER_SIZING_APPROVED_ITEMS = ("D9", "D15", "2.1", "2.2", "2.3", "3.1", "3.2", "FCD-07")
 GOVERNED_PAPER_SIZING_PENDING_ITEMS = (
     "1.4",
@@ -177,6 +194,17 @@ def governed_paper_sizing_rule() -> dict[str, object]:
 
 GOVERNED_PAPER_SIZING_RULE = governed_paper_sizing_rule()
 GOVERNED_PAPER_SIZING_RULE_DIGEST = edge_sha256_text(edge_canonical_json(GOVERNED_PAPER_SIZING_RULE))
+GOVERNED_PAPER_SIZING_OWN_HISTORY_RULE: dict[str, object] = {
+    **GOVERNED_PAPER_SIZING_RULE,
+    "rule_id": GOVERNED_PAPER_SIZING_OWN_HISTORY_RULE_ID,
+    "allocation_reading": "the_genesis_sleeve_at_t_from_the_own_history_authoritys_latest_rebalance_at_or_before_t_"
+    "every_utc_midnight_and_every_proven_state_transition_decided_on_exact_readings_otherwise_unknown",
+    "allocation_decided": "one_proven_member_weighs_exactly_0_40_two_or_more_members_are_blocked_on_r1",
+    "fill_envelopes": "the_input_only_derivation_no_admission_dependent_envelope_activation_is_never_proven_pass",
+}
+GOVERNED_PAPER_SIZING_OWN_HISTORY_RULE_DIGEST = edge_sha256_text(
+    edge_canonical_json(GOVERNED_PAPER_SIZING_OWN_HISTORY_RULE)
+)
 
 
 class GovernedPaperSizingError(EdgeArtifactError):
@@ -432,6 +460,7 @@ def _reading(  # noqa: PLR0913 - the facts of one decision
     depth: GovernedPaperDepthIndex,
     context: GovernedPaperSizingContext,
     instrument: str,
+    own_history: GovernedPaperOwnHistoryEvidence | None = None,
 ) -> GovernedPaperSizingReading:
     side = _ENTRY_DIRECTIONS[direction]
     position = mark = quantity = nav = None
@@ -450,7 +479,18 @@ def _reading(  # noqa: PLR0913 - the facts of one decision
             usage_exact = True
         elif mark is not None:
             usage, usage_exact = usage + abs(position) * mark, True  # type: ignore[operator]
-    allocation = governed_paper_allocation_reading_at(timeline, edge_id=sleeve, time_ns=instant)
+    if own_history is None:
+        allocation = governed_paper_allocation_reading_at(timeline, edge_id=sleeve, time_ns=instant)
+    else:  # rule set v13: the decided eligibility at the own-history authority's latest rebalance
+        own = governed_paper_own_history_reading(own_history, sequence)
+        allocation = GovernedPaperAllocationReading(
+            sleeve,
+            instant,
+            own.allocation_rebalance_ns,
+            own.allocation_eligibility,
+            own.allocation_weight,
+            f"own_history:{own.allocation_reason}",
+        )
     weight = None if allocation.weight is None else Fraction(allocation.weight)
     envelope = evaluate_governed_paper_envelope_fit(
         eligibility=allocation.eligibility, weight=weight, nav=nav, usage_lower=usage, usage_exact=usage_exact
@@ -496,8 +536,12 @@ def derive_governed_paper_sizing_evidence(  # noqa: PLR0913 - one evaluation's a
     snapshots: Mapping[int, HistoricalExecutionDecisionPortfolioSnapshot],
     exact_values: Mapping[int, HistoricalExecutionDecisionExactValues],
     context: GovernedPaperSizingContext,
+    own_history: GovernedPaperOwnHistoryEvidence | None = None,
 ) -> GovernedPaperSizingEvidence:
     """The sizing evidence of one evaluation (see the module docstring). Pure.
+
+    ``own_history`` (rule set v13) is the one own-history evidence of the same evaluation, of this genesis and run; each
+    entry then reads its allocation from it and the evidence is v2.
 
     ``snapshots`` and ``exact_values`` are the entry gate's own decision snapshots and the exact values of the same
     engine re-run, keyed by decision sequence. ``schedule`` must be the schedule v5 under evaluation (or the schedule v6
@@ -514,6 +558,12 @@ def derive_governed_paper_sizing_evidence(  # noqa: PLR0913 - one evaluation's a
     genesis, policy = authority.genesis, authority.economics_policy
     origin, reference = _capital_quantities(authority)
     context = _canonical_context(context, instrument=genesis.instrument)
+    if own_history is not None and (
+        type(own_history) is not GovernedPaperOwnHistoryEvidence
+        or own_history.genesis_digest != genesis.genesis_digest
+        or own_history.run_digest != run.run_digest
+    ):
+        raise _fail("own_history_evidence_not_of_this_evaluation")
     timeline = derive_governed_paper_allocation_timeline(
         genesis_digest=genesis.genesis_digest,
         candidate_edge_ids=_candidate_sleeves(authority),
@@ -545,6 +595,7 @@ def derive_governed_paper_sizing_evidence(  # noqa: PLR0913 - one evaluation's a
             depth=depth,
             context=context,
             instrument=genesis.instrument,
+            own_history=own_history,
         )
         for sequence, instant, direction in _entries(run)
     )
@@ -554,10 +605,14 @@ def derive_governed_paper_sizing_evidence(  # noqa: PLR0913 - one evaluation's a
         "no_ctr_source_supplied" if source is None else governed_paper_ctr_admission(table, source.qualification)
     )
     seed = GovernedPaperSizingEvidence(
-        schema_version=GOVERNED_PAPER_SIZING_EVIDENCE_SCHEMA,
+        schema_version=GOVERNED_PAPER_SIZING_EVIDENCE_SCHEMA
+        if own_history is None
+        else GOVERNED_PAPER_SIZING_OWN_HISTORY_EVIDENCE_SCHEMA,
         contract_id=GOVERNED_PAPER_SIZING_CHAIN_CONTRACT_ID,
-        rule_id=GOVERNED_PAPER_SIZING_RULE_ID,
-        rule_digest=GOVERNED_PAPER_SIZING_RULE_DIGEST,
+        rule_id=GOVERNED_PAPER_SIZING_RULE_ID if own_history is None else GOVERNED_PAPER_SIZING_OWN_HISTORY_RULE_ID,
+        rule_digest=GOVERNED_PAPER_SIZING_RULE_DIGEST
+        if own_history is None
+        else GOVERNED_PAPER_SIZING_OWN_HISTORY_RULE_DIGEST,
         instrument=genesis.instrument,
         genesis_digest=genesis.genesis_digest,
         equity_origin_e0=str(origin),
@@ -600,6 +655,10 @@ __all__ = [
     "GOVERNED_PAPER_SIZING_CHAIN_CONTRACT_ID",
     "GOVERNED_PAPER_SIZING_EVIDENCE_SCHEMA",
     "GOVERNED_PAPER_SIZING_NON_CLAIM_FLAGS",
+    "GOVERNED_PAPER_SIZING_OWN_HISTORY_EVIDENCE_SCHEMA",
+    "GOVERNED_PAPER_SIZING_OWN_HISTORY_RULE",
+    "GOVERNED_PAPER_SIZING_OWN_HISTORY_RULE_DIGEST",
+    "GOVERNED_PAPER_SIZING_OWN_HISTORY_RULE_ID",
     "GOVERNED_PAPER_SIZING_PENDING_ITEMS",
     "GOVERNED_PAPER_SIZING_RULE",
     "GOVERNED_PAPER_SIZING_RULE_DIGEST",
