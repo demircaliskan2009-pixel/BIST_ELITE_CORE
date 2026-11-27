@@ -20,22 +20,24 @@ controller, a governance authority, or an independent or protected auditor.
 
 ## 1. Runtime proof and effort
 
-- **Runtime proof before mutation.** Report `MODEL_REQUESTED`, `MODEL_ID_REQUIRED`, `MODEL_ACTUAL`,
-  `MODEL_EFFORT_REQUESTED`, `MODEL_EFFORT_ACTUAL`, `MODEL_FALLBACK`, `THINKING_ACTUAL`,
-  `MODEL_IDENTITY_EVIDENCE` and `MODEL_EFFORT_EVIDENCE` from session evidence (runtime metadata, `/model`,
-  `/status`, or an equivalent diagnostic). A selector, settings file, default, cache, request text or the bare
+- **Runtime proof before mutation.** Report the compact §24.12 runtime block from session evidence (runtime
+  metadata, `/model`, `/status`, or an equivalent diagnostic); Claude is admitted on `PATH_A` only, never on the
+  human-attested `PATH_B` reserved for Sol audits. A selector, settings file, default, cache, request text or the bare
   alias `opus` is not execution proof. `MODEL_ACTUAL` must positively be `claude-opus-5-5` and
   `THINKING_ACTUAL` positively `ENABLED`; either one `UNKNOWN` stops. Only `MODEL_EFFORT_ACTUAL` may be
   `UNKNOWN` when the host exposes no effort telemetry, and it is never restated from the request.
 - **Host selection.** In Claude Code, inspect the Opus 5.5 model picker or `/effort`. Organization limits can
-  cap the choices. Record the selected literal and execution evidence separately. Request `xhigh` where offered
-  for complex work, or a suitable offered level under §24.12. Name the technical trigger for `max`.
+  cap the choices. Record the selected literal and execution evidence separately. The controller fixes `xhigh` where
+  offered and appropriate for complex work, or an adequate offered native literal under §24.12
+  `HOST_SENSITIVE_EFFORT_POLICY`, without claiming that two spellings are equivalent. Name the technical trigger for
+  `max`.
   [Claude Code model configuration](https://code.claude.com/docs/en/model-config#adjust-effort-level)
 - **Thinking.** Thinking is always enabled on Opus 5.5, and `THINKING_ACTUAL` is still reported from runtime
   evidence rather than assumed. Control cost through scope and context, never by suppressing reasoning.
 - **Stops.** A wrong or `UNKNOWN` model, `UNKNOWN` or disabled required thinking, or a known prohibited fallback
-  is `STOP_WITH_PROOF` before mutation. A human may waive an effort mismatch for one task; the waiver and the
-  true actual effort are both recorded.
+  is `STOP_WITH_PROOF` before mutation. A proven execution-effort conflict also stops unless a human waives it for
+  one task; the waiver and the true actual effort are both recorded, and no waiver covers identity, thinking or a
+  prohibited mode.
 - **De-escalation.** Effort follows the work: when the remaining work is narrower than expected, the controller
   can choose an appropriate offered setting for the next stage.
 
@@ -86,8 +88,11 @@ follows the section 24.6 serious prompt shape:
 - **Subagents:** default 0; at most 2 read-only subagents for genuinely independent, substantial,
   parallelizable investigation; only one agent mutates a branch, and the primary agent validates every
   subagent conclusion.
+- **Handoff ownership:** the stage ends at its authorized publication and exact-head handoff; the writer does not
+  poll CI to terminal (§24.5 `HANDOFF_OWNERSHIP`). On an interruption or platform restriction, stop and report the
+  safely available state as `INCOMPLETE` (§§24.6, 24.8).
 - **Independence:** a same-model self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`; the independent audit is
-  GPT-6.1 Sol as PRIMARY, which for protected work is also the protected audit (section 24.4); the ChatGPT
+  the `ACTIVE_SOL_AUDITOR` (§24.3) as PRIMARY, which for protected work is also the protected audit (section 24.4); the ChatGPT
   controller is the recorded last-resort fallback for non-protected work only. GPT-6 Astra and Codex GPT-5.6 Sol
   are superseded and are no fallback. The repo-native work that needs no independence stays inside the Claude
   task and is never handed to the Sol audit lane.
@@ -108,9 +113,9 @@ SEMANTIC_BOUNDARY: <one coherent contract, closed as the largest safe semantic c
   negative cases, tests, docs/provenance genuinely required, validation>
 STATE_PIN: main @ <sha>; clean worktree; <n> open PRs; branch <name> absent; §24.5 approval source if applicable
 MODEL_RUNTIME_PROOF: MODEL_REQUESTED Claude Opus 5.5 | MODEL_ID_REQUIRED claude-opus-5-5 |
-  MODEL_EFFORT_REQUESTED <literal host label> | MODEL_FALLBACK PROHIBITED | THINKING ENABLED |
-  report MODEL_ACTUAL, MODEL_EFFORT_ACTUAL, THINKING_ACTUAL, MODEL_IDENTITY_EVIDENCE, MODEL_EFFORT_EVIDENCE
-  before mutation; MODEL_ACTUAL or THINKING_ACTUAL UNKNOWN -> STOP_WITH_PROOF; MODEL_EFFORT_ACTUAL may be UNKNOWN
+  MODEL_EFFORT_REQUESTED <literal host label> | MODEL_FALLBACK PROHIBITED | THINKING ENABLED | PATH_A only |
+  report the compact §24.12 runtime block before mutation; MODEL_ACTUAL or THINKING_ACTUAL UNKNOWN ->
+  STOP_WITH_PROOF; MODEL_EFFORT_ACTUAL may be UNKNOWN
 ALLOWED_FILES: <exact files>
 INVARIANTS: <fail-closed / digest / paper-only / determinism properties>
 BLOCKER_INVENTORY: <inherited blocker identities, or NONE>
@@ -140,9 +145,11 @@ STATE_PIN: PR <n> OPEN; head <sha> == local == origin; base <sha>; current §24.
 MODEL_RUNTIME_PROOF: <as 3.1>
 ALLOWED_FILES: <exact files>; no new files unless named
 INVARIANTS: <as 3.1; the original contract's invariants are unchanged by the repair>
-BLOCKER_INVENTORY: <the COMPLETE audited P1/P2 set, verbatim, with blocker identities and evidence>
-VALIDATION_MATRIX: a regression proof for every blocker that fails before and passes after; then the full
-  ladder of 3.1
+BLOCKER_INVENTORY: <the COMPLETE audited P1/P2 set and any confirmed CI_GATE_BLOCKERS (§24.4), verbatim, with
+  blocker identities and evidence>
+VALIDATION_MATRIX: a regression proof for every P1/P2 that fails before and passes after, and for every
+  CI_GATE_BLOCKER the confirmed correction with no suppression, dismissal or test weakening; then the full ladder of
+  3.1; the controller requires terminal green CI on the repaired head before the re-audit
 GITHUB_AUTHORIZATION: one normal same-branch commit and push AUTHORIZED; new PR FORBIDDEN; amend/force
   FORBIDDEN; merge NOT AUTHORIZED; resolving review threads FORBIDDEN
 FORBIDDEN: <as 3.1>; any change beyond the blocker set
@@ -187,7 +194,8 @@ or self-review satisfies; post-merge verification precedes the next action; cryp
 or private API, credentials, orders, scheduler/auto-loop, shadow/live execution, or capital mutation.
 
 **Temporary availability is never durable routing.** Model quota, rate limits or short-term unavailability are
-transient operational facts: record them in the controller handoff for that one task, where a GPT-6.1 Sol
-outage may justify the section 24.4 non-protected audit fallback for that task only. Never write a temporary
-availability state into this playbook or into `agent_workflow.md`, and never infer from a quota event that a
-lane has been retired. When GPT-6.1 Sol is unavailable, the protected gate waits.
+transient operational facts: record them in the controller handoff for that one task, where a Sol auditor
+outage may justify the section 24.4 non-protected audit fallback for that task only, and a current attributable
+human statement that Claude is quota-blocked satisfies §24.3 gate A for the applicable unstarted stages. Never write
+a temporary availability state into this playbook or into `agent_workflow.md`, and never infer from a quota event
+that a lane has been retired. When the active Sol auditor is unavailable, the protected gate waits.

@@ -16,7 +16,8 @@
 This file is the entrypoint and holds the durable rails. The single canonical active workflow authority is
 `docs/crypto_core/agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`), whose active content is
 `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`,
-`GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1`, `CODEX_EXECUTOR_QUOTA_FALLBACK_V1` and the prospective host/workflow closure in section 24.3. The host
+`GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1`, `CODEX_EXECUTOR_QUOTA_FALLBACK_V1`, the prospective host/workflow closure in section 24.3
+and the prospective `CRYPTO_CORE_FINAL_CONTROL_PLANE_STABILIZATION_V1` (section 24.14 transition). The host
 adapters (`CLAUDE.md`,
 `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`, `.codex/skills/crypto-core-max-safe/SKILL.md`,
 `.codex/skills/crypto-core-executor-fallback/SKILL.md`)
@@ -47,13 +48,17 @@ genuinely cannot reconstruct material operational state.
   controller, governance or merge authority.
 - **Codex executor fallback** (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`, section 24.3; the only adopted id is
   `gpt-6.2-astra`, GPT-6.2 Astra) — a CONDITIONAL executor for one whole implementation stage or the one
-  consolidated repair stage. It is routed only by an explicit controller selection after fresh evidence that Claude
-  Opus 5.5 is quota-blocked or unavailable for that stage, and only when every section 24.3 activation gate holds:
+  consolidated repair stage. It is routed only by an explicit controller selection after current evidence that Claude
+  Opus 5.5 is quota-blocked or unavailable for that stage (Claude's own message, or a current attributable firsthand
+  human statement, section 24.3 gate A), and only when every section 24.3 activation gate holds:
   an adopted non-Sol id, fresh host-capability evidence, positive runtime identity and thinking proof, a whole-stage
   executor and a preserved independent GPT-6.1 Sol audit. It changes executor only at a stage boundary, takes the
   replaced Claude stage's budget slot, never audits, never runs on a Sol-family model and never switches
   automatically. GPT-6.2 Astra is a different model id from the superseded GPT-6 Astra.
-- **GPT-6.1 Sol** (`gpt-6.1-sol`, ChatGPT Work/Codex host) — the PRIMARY independent auditor
+- **GPT-6.1 Sol** (`gpt-6.1-sol`, ChatGPT Work/Codex host) — the incumbent `ACTIVE_SOL_AUDITOR` (section 24.3)
+  until the named successor activation; the named prospective successor GPT-6.2 Sol (`gpt-6.2-sol`) takes this role
+  only after the complete section 24.14 `GPT62_SOL_SUCCESSOR_ACTIVATION`, is never an executor, and GPT-6.1 Sol is then
+  historical, not a fallback. The active Sol auditor is the PRIMARY independent auditor
   (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`; requested effort `Ultra`, mandatory for protected audits; speed
   `STANDARD`): fresh-context, exact-head, READ_ONLY, runtime-proven, exhaustive and materiality-aware, run under
   `SOL_AUDIT_USAGE_EFFICIENCY_V1`; for protected work the same audit is the sole protected T4
@@ -73,19 +78,22 @@ Claude Opus 5 (`SUPERSEDED_BY_OPUS_5_5`), Claude Opus 4.8 (`SUPERSEDED_BY_OPUS_5
 GPT-5.6 Terra and Codex GPT-5.6 Luna (`NOT_IN_ACTIVE_COUNCIL`). A superseded lane is never an automatic
 fallback. Section 24.12 governs literal host selection, raw execution evidence and effort by lane.
 For the conditional executor, section 24.3 requires an attributable controller decision before dispatch and
-the writer's current runtime and clean checkout proof before mutation. Only a separate GPT-6.1 Sol execution
-at the literal protected selector `Ultra` can perform the protected audit.
+the writer's current runtime and clean checkout proof before mutation. Only a separate execution of the
+`ACTIVE_SOL_AUDITOR` at the literal protected selector `Ultra` can perform the protected audit.
 
-Every serious routed task reports `MODEL_REQUESTED`, `MODEL_ID_REQUIRED`, `MODEL_ACTUAL`,
-`MODEL_EFFORT_REQUESTED`, `MODEL_EFFORT_ACTUAL`, `MODEL_FALLBACK`, `THINKING_ACTUAL`,
-`MODEL_IDENTITY_EVIDENCE` and `MODEL_EFFORT_EVIDENCE` (section 24.12), plus `SETUP_REQUESTED` /
-`SETUP_ACTUAL` / `SETUP_FILES_READ` / `SETUP_GAPS`. Runtime proof fails closed (`FAIL_CLOSED_RUNTIME_PROOF`):
-`MODEL_ACTUAL` must positively equal `MODEL_ID_REQUIRED` on execution evidence and required thinking must be
-positively `ENABLED`; `UNKNOWN`, a mismatch, disabled required thinking, a known prohibited fallback, or a
-selector, configuration, default, cache or request text offered as the only proof stops with proof. Only
-`MODEL_EFFORT_ACTUAL` may stay `UNKNOWN` when the host exposes no effort telemetry. Model strength is never
-proof; no model bypasses tests, terminal CI, valid P1/P2 blockers, explicit human merge authorization, or
-post-merge verification.
+Every serious routed task reports the compact section 24.12 runtime block (`RUNTIME_ADMISSION_POLICY`: requested,
+required, selected and actual model with their selection and execution evidence, selection conformity, runtime
+eligibility, thinking, effort, fallback and speed), plus `SETUP_REQUESTED` / `SETUP_ACTUAL` / `SETUP_FILES_READ` /
+`SETUP_GAPS`. Runtime admission fails closed (`FAIL_CLOSED_RUNTIME_PROOF`). Every implementation and repair writer is
+admitted only on `PATH_A`: `MODEL_ACTUAL` positively equals `MODEL_ID_REQUIRED` on execution evidence and required
+thinking is positively `ENABLED`. An expressly authorized Sol audit, re-audit or qualification stage may instead be
+admitted on `PATH_B` (an attributable human selection attestation plus every other section 24.12 condition, with
+`MODEL_ACTUAL=UNKNOWN` and the residual assurance limitation recorded); a selected identity is never reported as the
+actual one. A known mismatch, unknown or disabled required thinking, a known prohibited fallback, failed independence,
+an unsupported selection or a material contradiction stops. Effort is a literal operational selection, never
+correctness proof (`HOST_SENSITIVE_EFFORT_POLICY`); optional effort, speed and usage telemetry may stay `UNKNOWN`.
+Model strength is never proof; no model bypasses tests, terminal CI, valid P1/P2 blockers, explicit human merge
+authorization, or post-merge verification.
 
 ### Audit, sizing and the PR lifecycle (sections 24.4 and 24.8)
 
@@ -123,10 +131,17 @@ post-merge verification.
   material relevance on a supported path inside the declared contract; theoretical hardening reachable only
   through bypassed construction, private-helper misuse or impossible states is P3; materiality never downgrades a
   supported-path defect; P3 never blocks merge.
-- At most ONE consolidated repair per candidate lifecycle — the complete blocker set, by root cause — then
-  exactly ONE whole-contract re-audit (GPT-6.1 Sol). `FIXED_POINT_STOP`: any genuine material
+- At most ONE consolidated repair per candidate lifecycle — the complete valid blocker inventory (material P1/P2
+  and any independently confirmed `CI_GATE_BLOCKER`), by root cause — then, once required CI on the repaired head
+  is terminal green, exactly ONE whole-contract re-audit (the active Sol auditor). A terminal candidate-caused
+  required-check failure may admit only the FIRST audit, in whole-contract `REPAIR_ONLY` mode, which never accepts
+  (`PRE_AUDIT_CI_FAILURE_RESOLUTION_V1`, section 24.4). `FIXED_POINT_STOP`: any genuine material
   P1/P2 that remains after it rejects and freezes the candidate, after controller severity adjudication; no
   further mutation on it. P3 never triggers it.
+- A substantive execution consumes its slot whatever its result; a pre-substance stop consumes none; the fifth slot
+  is only for one procedurally invalid audit's replacement; interruptions, fresh restarts and continuations follow
+  section 24.8 (`OPERATIONAL_INTERRUPTION`, `CONTINUATION_BUDGET_CHECK`). A candidate that cannot legally proceed
+  leaves only through human-authorized, exact-head, evidence-preserving `ADMINISTRATIVE_CLOSURE` (section 24.8).
 - `ROOT_CAUSE_ESCAPE`: a later attempt needs a new explicit ChatGPT controller `TASK_INTENT=ARCHITECTURE`
   decision that inherits blocker identity, changes the architecture or boundary, and starts from accepted
   main. There is no automatic replacement chain. A blocker keeps its identity across rewording, renames,
@@ -145,7 +160,12 @@ post-merge verification.
   (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`) is accepted under the plane before it — Claude Opus 5.5 implements it and
   the GPT-6.1 Sol protected audit accepts it — and becomes routable only after that acceptance, exact-head human
   authorization, standard merge, post-merge verification, the external ChatGPT Project instruction update and
-  fresh-chat acceptance, never retroactively (`CODEX_EXECUTOR_FALLBACK_TRANSITION`). The setup then reopens only for
+  fresh-chat acceptance, never retroactively (`CODEX_EXECUTOR_FALLBACK_TRANSITION`).
+  `CRYPTO_CORE_FINAL_CONTROL_PLANE_STABILIZATION_V1` is introduced under a bounded external human transition
+  decision, accepted by the incumbent GPT-6.1 Sol at `Ultra`, and binds only later stages after merge, post-merge
+  verification, Project Instructions synchronization and fresh-context acceptance; GPT-6.2 Sol becomes active only
+  through its named qualification and activation (`FINAL_CONTROL_PLANE_STABILIZATION_TRANSITION`,
+  `GPT62_SOL_SUCCESSOR_ACTIVATION`). The setup then reopens only for
   a real safety defect, broken continuity, a material capability change, or measured repeated-work reduction, and
   the default next action is product work.
 
@@ -158,7 +178,9 @@ executor of section 24.3) → handoff → controller verification →
 exhaustive independent audit (GPT-6.1 Sol; for protected work also the protected audit) → at most one
 consolidated repair and one whole-contract re-audit → exact-head CI terminal green → controller live-state proof → explicit human
 exact-head merge authorization → standard merge → post-merge verify → next action. All reports move as
-`AGENT_OS_HANDOFF_V1` packets (section 24.6); reports are claims until controller-verified
+`AGENT_OS_HANDOFF_V1` packets (section 24.6). The writer's mutation ends at its publication handoff; the controller
+owns terminal CI/CodeQL polling, failure classification and the audit preflight (`HANDOFF_OWNERSHIP`, section
+24.5). Reports are claims until controller-verified
 (`CONTROLLER_ACCEPTED_STATE`, section 24.5). Current-state evidence precedence (`LIVE_STATE_PRECEDENCE`,
 section 24.7): fresh local/terminal → live GitHub/CI → accepted bounded state/handoff → exact repository
 source → canonical doctrine → continuity → archives → memory; it ranks evidence about state and never relaxes
