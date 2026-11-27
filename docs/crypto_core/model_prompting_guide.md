@@ -131,7 +131,8 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   a recorded time-critical authorization and never as a correctness upgrade; `SOL_SUBAGENTS_DEFAULT=0`; runtime
   proof before substantive audit; never mutates; independence by lane and executing model id; complete material
   P1/P2 collection under `AUDIT_MATERIALITY_BOUNDARY_V1` and `FINITE_AUDIT_RULE`. A first-audit P1/P2 opens the one
-  consolidated repair; a genuine P1/P2 remaining after the one re-audit rejects the candidate. Unavailability makes
+  consolidated repair, as does a `CI_GATE_BLOCKER` that a `REPAIR_ONLY` first audit independently confirms under
+  `PRE_AUDIT_CI_FAILURE_RESOLUTION_V1` (§24.4; that mode never returns `ACCEPT`); a genuine P1/P2 remaining after the one re-audit rejects the candidate. Unavailability makes
   a protected gate wait on the frozen exact head; it never reassigns T4.
 - **Efficiency (`SOL_AUDIT_USAGE_EFFICIENCY_V1`):** the prompt carries the controller's preflight packet inside its
   canonical fields; the

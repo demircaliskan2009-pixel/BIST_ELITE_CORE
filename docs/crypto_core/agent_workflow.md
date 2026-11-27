@@ -58,11 +58,11 @@ explicit guarded closeout; human threads are never self-resolved.
 - **One open PR at a time.** The controller verifies live (`gh pr list --state open`) at the start of every task.
 - **No direct push to `main`.** No force-push. No branch deletion unless the authorized command says so.
 - **Standard merge only** (no squash/rebase). **No merge without explicit human authorization naming the PR and the exact command.**
-- **CI `pending` / `queued` / `in_progress` / `no checks reported` is NOT_READY** — keep polling to terminal, or report a bounded-timeout snapshot. Never treat a startup window as green.
+- **CI `pending` / `queued` / `in_progress` / `no checks reported` is NOT_READY** — the ChatGPT controller polls the exact head to terminal, or records a bounded-timeout snapshot (section 24.5). Never treat a startup window as green.
 - **CI not registered (no run created for a fresh head): diagnose before re-triggering.** Prove it from `gh run list` / commit `check-runs` and classify (`ACTIONS_DELAY_OR_GITHUB_INFRA` vs trigger/path/ref issue). At most **one** empty re-trigger commit (`chore(crypto-core): retrigger …`), and **only** with explicit user/controller authorization. Never loop no-op commits.
 - **Branch naming:** feature slices → `feature/<crypto-core-scope>-prN`; setup/docs → `chore/<crypto-core-scope>-prN`; repair stays on the **same branch** for the same PR. (Older `product/*` naming is superseded.)
 - **Setup/doctrine changes are never mixed into a feature PR.** Feature PRs touch `src/`/`tests/` product code; setup PRs touch docs/config only (`AGENTS.md`, `docs/crypto_core/**`, `.codex`, `.vscode`, `.cursor`, `.github` docs, `scripts/crypto_core` audit tooling). See §17.
-- **The independent audit (section 24.4) is a separate gate**, and automated PR review comments arrive asynchronously — an implementation/repair turn ends at terminal CI + report; it does not block waiting for review.
+- **The independent audit (section 24.4) is a separate gate**, and automated PR review comments arrive asynchronously — an implementation/repair turn ends at its scoped publication and exact-head handoff (section 24.5 `HANDOFF_OWNERSHIP`); it does not poll CI to terminal, does not block waiting for review, and holds no mutation authority after the handoff. The controller owns remote CI/CodeQL polling, failure-diagnosis routing and the independent-audit preflight.
 - Every repo-state claim must be **git/gh/test-verifiable** (never from memory). Unproven → mark `UNKNOWN`.
 - **Same-branch repair only** for valid in-scope P1/P2, as the single consolidated repair of the candidate
   lifecycle (section 24.8); stop on unsafe scope expansion.
@@ -98,8 +98,9 @@ The lifecycle, prompt budget and fixed-point stop are section 24.8. The sequence
 3. One exhaustive fresh-context independent audit — GPT-6.1 Sol (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`), which
    for protected or control-plane work is also the protected audit; for non-protected work only, the recorded
    section 24.4 fallback — returns the complete material P1/P2 set (§8).
-4. If it found material P1/P2: at most ONE consolidated repair (§6) on the same branch, then exactly ONE
-   whole-contract re-audit to the same standard. Any genuine material P1/P2 left → `FIXED_POINT_STOP`: the
+4. If it found material P1/P2 — or, under `PRE_AUDIT_CI_FAILURE_RESOLUTION_V1` (section 24.4), independently
+   confirmed a `CI_GATE_BLOCKER` — at most ONE consolidated repair (§6) on the same branch, then, once every
+   required check on the repaired head is terminal green, exactly ONE whole-contract re-audit to the same standard. Any genuine material P1/P2 left → `FIXED_POINT_STOP`: the
    candidate is rejected and frozen. P3 never blocks merge.
 5. Controller governance closeout, outside the specialist prompt budget (section 24.8): the controller verifies
    live state; the human gives exact-head merge authorization; the **Closeout/Merge Loop** (§7) runs only from
@@ -144,7 +145,7 @@ report the local evidence (§10). The controller polls CI to terminal (§3) and 
   rejected or frozen candidate.
 - Precheck first (branch + `HEAD == expected SHA` + clean tree + exactly one open PR + changed files ⊆ scope).
 - Pin PR number and expected head; repair **only the named blockers**, **same branch only**, bounded to named files.
-- **Test-only by default**; touch production only if a **new failing test proves a real defect**, and only inside the named module. If test-only, prove `git diff <prev> HEAD -- src/` is **empty**.
+- **Test-only by default**; touch production only if a **new failing test proves a real defect**, and only inside the named module. If test-only, prove `git diff <prev> HEAD -- src/` is **empty**. A `CI_GATE_BLOCKER` the auditor confirmed (section 24.4) is corrected only by the behaviour-preserving change that audit confirmed, inside the named module, proven by unchanged existing tests plus any targeted test the contract needs; it never needs a failing test, and never a suppression, a check weakening or a CI waiver.
 - Re-validate fully (targeted → relevant suite → full helper `PYTEST_EXIT=0` → `git diff --check`) → scoped add → commit → push same branch → hand off the repaired head for controller CI verification. **No merge.**
 
 ## 7. Closeout / Merge Loop
@@ -191,8 +192,10 @@ threads; validation commands+results; open-PR state; exact `gh`/`git` verificati
 
 **Independent auditor (review):**
 ```
-VERDICT / P1_BLOCKERS / P2_BLOCKERS / NON_BLOCKING_NOTES / MERGE_READINESS / REQUIRED_REPAIRS_IF_ANY
+VERDICT / AUDIT_MODE / P1_BLOCKERS / P2_BLOCKERS / CI_GATE_BLOCKERS / NON_BLOCKING_NOTES / MERGE_READINESS /
+REQUIRED_REPAIRS_IF_ANY
 ```
+(`AUDIT_MODE` and `CI_GATE_BLOCKERS` follow section 24.6 `COMPACT_AUDIT_HANDOFF`.)
 
 **ChatGPT (controller verdict):**
 ```
@@ -686,7 +689,10 @@ adapter of 24.7, the budget wording of 24.8, `CODEX_EXECUTOR_EFFORT_POLICY` of 2
 24.14), and by `CRYPTO_CORE_AGENT_OS_HOST_AND_WORKFLOW_CLOSURE_V1` (stage authorization and host evidence in
 24.3 and 24.12, controller and writer responsibilities in 24.5, prospective adoption in 24.14). The prospective
 `CRYPTO_CORE_AGENT_OS_FINAL_EFFICIENCY_AND_MODEL_ROUTING_V1` amendment covers stage selection (24.3), approval
-provenance and remote closeout (24.4–24.6), subject to its own 24.14 transition. This section governs how crypto_core
+provenance and remote closeout (24.4–24.6), subject to its own 24.14 transition. The prospective
+`PRE_AUDIT_CI_FAILURE_RESOLUTION_V1` amendment covers the pre-audit CI failure path and `REPAIR_ONLY` audit mode
+(24.4), handoff ownership (section 3 and 24.5), the audit handoff fields (24.6), and the repair-opening, re-audit
+gate, budget and `ADMINISTRATIVE_CLOSURE` rules (24.8), subject to its own 24.14 transition. This section governs how crypto_core
 development work is routed, sized, audited, repaired, stopped and resumed. Sections 1-19 bind where they agree
 with it; on any conflict this section wins, and between safety rules the stricter rule wins. Sections 20-23 are
 HISTORICAL/SUPERSEDED. The kernel governs only the operational workflow needed to develop crypto_core safely
@@ -974,7 +980,9 @@ exception to the Sol-family prohibition. This amendment proposes no such excepti
     reordered block. The auditor re-proves its exact head, changed scope and required checks once; it does not poll
     CI, rediscover the PR, enumerate unrelated history, replay chat history or reread every repository document.
     A stale base/head or missing, pending or failed required exact-head CI/CodeQL returns to the controller
-    before substantive audit. A verdict missing the complete material P1/P2 inventory cannot support
+    before substantive audit. The only exception is a failed required security/static-analysis gate on a first
+    audit admitted by `PRE_AUDIT_CI_FAILURE_RESOLUTION_V1` below; nothing admits a stale head or a pending,
+    missing or unclassified check, and nothing admits any failed check to a re-audit. A verdict missing the complete material P1/P2 inventory cannot support
     acceptance or dispatch of the one consolidated repair.
   - Read scope — the whole declared semantic contract, approached from the exact changed files, their direct
     authority, their immediate load-bearing dependencies and the exact-head tests and CI, with targeted
@@ -996,6 +1004,57 @@ exception to the Sol-family prohibition. This amendment proposes no such excepti
   - Effort, speed, subagents and usage telemetry follow 24.12, and the compact audit handoff 24.6. The objective is
     several substantive Sol audits per allowance window through removed duplication alone; no prompt count, quota
     size, credit amount or price is doctrine (24.11).
+- `PRE_AUDIT_CI_FAILURE_RESOLUTION_V1` — a narrowly bounded eligibility path for the FIRST independent audit of a
+  candidate whose only obstacle to an ordinary audit is a failed required security/static-analysis gate that the
+  controller diagnoses as a reproducible false positive. It closes a procedural deadlock — a failed required check
+  blocks the first substantive audit, while only that audit can open the one consolidated repair (24.8) — and it
+  waives no check, weakens no gate and adds no stage, audit, repair or slot. It is available only under its 24.14
+  transition.
+  - `ELIGIBILITY` — every condition holds on fresh evidence, or the first audit is not dispatched; unknown,
+    contradictory or stale evidence stops:
+    1. the candidate lifecycle started after this amendment's complete 24.14 transition and is governed by it;
+    2. the implementation handoff (24.6) is complete and the candidate head is frozen — no pre-audit patch;
+    3. the controller has proven the exact base, head and tree, the required-check configuration, each required
+       check run's identity and run attempt, the code-scanning analysis revision, and the provenance of the
+       reviews and alerts;
+    4. every required check is terminal — none pending, queued, missing or unclassified;
+    5. every required check other than the one eligible security/static-analysis gate has passed;
+    6. the controller holds source-grounded evidence that each failing alert of that gate is a reproducible
+       static-analysis false positive with a feasible behaviour-preserving correction inside the candidate's
+       allowed files and semantic boundary;
+    7. the writer's required local validation for that exact tree is complete: Ruff and format, the applicable
+       targeted tests and the full-suite wrapper proof required by sections 5–6 and 24.5;
+    8. no actual or unresolved security vulnerability, and no unclassified alert, is treated as an eligible false
+       positive;
+    9. the auditor's identity, effort, thinking, independence and protected-lane requirements are exactly those of
+       an ordinary audit (24.3, 24.12; protected work: `gpt-6.1-sol` at literal `Ultra` alone);
+    10. the controller records the eligibility decision and the complete evidence for conditions 1–9 in the
+        `SOL_AUDIT_PREFLIGHT_PACKET` before dispatch.
+  - `REPAIR_ONLY` audit mode — the audit meets every requirement of `GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`:
+    READ_ONLY, fresh context, exact head, runtime-proven, and exhaustive over the ENTIRE declared semantic contract
+    under `COMPLETE_BLOCKER_COLLECTION` and `AUDIT_MATERIALITY_BOUNDARY_V1`; it is never a CodeQL-only review. The
+    auditor first verifies eligibility independently and may reject the controller's classification: the
+    controller's false-positive diagnosis is evidence, never independent acceptance. It returns the complete
+    material P1/P2 inventory and, separately, `CI_GATE_BLOCKERS`: each confirmed failing alert by identity, with its
+    rule, location, false-positive evidence and the behaviour-preserving correction it admits. A `CI_GATE_BLOCKER` is
+    never assigned semantic P1/P2 severity; an alert that is a genuine defect is reported as the P1/P2 it is, never
+    as a `CI_GATE_BLOCKER`. In this mode `ACCEPT`, merge readiness, alert dismissal and CI waiver are prohibited: the
+    verdict is `REPAIR_REQUIRED` or a stop with proof.
+  - `UNCONFIRMED_CI_GATE` — when the auditor cannot confirm eligibility, or no authorized and meaningful correction
+    exists for a failing alert, that failure opens nothing and is never bypassed, dummy-repaired or relabelled as a
+    manufactured P2. Ineligibility found before substantive audit work returns to the controller with no verdict
+    and no slot consumed (`RUNTIME_PROOF_BEFORE_AUDIT` applies alike). After substantive work, the complete
+    P1/P2 inventory still opens the one consolidated repair when it is non-empty, and the repaired head must then
+    pass every required check before the re-audit; otherwise the candidate stops with proof for controller
+    adjudication and leaves only through `ADMINISTRATIVE_CLOSURE` (24.8).
+  - `STALE_OR_CHANGED_CHECK_STATE` — eligibility binds the exact head, the required check-run identities and run
+    attempts and the analysis revision recorded at preflight. A change to any of them before substantive audit
+    work voids the dispatch, and the controller re-preflights: if the failed check has turned terminal green, the
+    candidate takes the ordinary audit path; otherwise eligibility is decided again from the start. A change after
+    substantive audit work never converts a completed `REPAIR_ONLY` audit into `ACCEPT`, never creates an
+    additional audit slot and never authorizes a dummy repair: the confirmed blocker set either still admits the
+    one consolidated repair, or the candidate stops under `UNCONFIRMED_CI_GATE`. Head movement remains governed by
+    `VERDICTS_BIND_EXACT_HEAD` (24.8).
 - Severity and threads: P3 is advisory, never blocks merge and never triggers `FIXED_POINT_STOP`. Current valid
   material P1/P2 review threads block; the ChatGPT controller adjudicates a disputed severity against the declared
   contract and this boundary with evidence (24.8). A same-model self-review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`
@@ -1017,6 +1076,11 @@ proof; and the human's explicit authorization naming the PR, the exact head and 
 steps are controller governance and consume no specialist prompt (24.8).
 
 The writer proves its local checkout, changed scope, validation, commit/tree and clean status at handoff.
+`HANDOFF_OWNERSHIP` — an implementation or repair stage stops mutating after its scoped publication (the commit,
+the normal push and, for an implementation, the PR) and its exact-head handoff; the handoff grants no further
+mutation authority, and a later candidate mutation needs a new controller-routed stage. The controller owns
+remote CI and CodeQL polling to terminal, the classification of a failed check and the routing of its diagnosis,
+and the independent-audit preflight (24.4).
 The controller supplies the live GitHub state, polls CI and CodeQL to terminal, collects reviews and threads,
 and refreshes the exact-head merge preflight (section 7). After the authorized mechanical standard merge,
 it verifies the merged PR, the merge commit's ordered parents against the authorized base/head and its
@@ -1086,9 +1150,10 @@ evidence, the attributable A–G controller record, the pre-mutation host/runtim
 the PR lifecycle (24.8); and exactly one next safe action. Missing facts are `UNKNOWN`, never invented; failure tails
 only; a handoff never authorizes mutation.
 
-`COMPACT_AUDIT_HANDOFF` — an audit's handoff is compact by default: `VERDICT`, `RUNTIME_PROOF`, `HEAD_SHA`,
-`HEAD_TREE`, `CI`, `P1_BLOCKERS`, `P2_BLOCKERS`, `P3_NOTES`, `COMPLETE_BLOCKER_COLLECTION_STATUS`,
-`MERGE_READINESS` and `NEXT_SAFE_ACTION`, together with the auditing lane, the protected-trigger classification,
+`COMPACT_AUDIT_HANDOFF` — an audit's handoff is compact by default: `VERDICT`, `AUDIT_MODE` (`ORDINARY`, or
+`REPAIR_ONLY` with the auditor's own eligibility finding, 24.4), `RUNTIME_PROOF`, `HEAD_SHA`, `HEAD_TREE`, `CI`,
+`P1_BLOCKERS`, `P2_BLOCKERS`, `CI_GATE_BLOCKERS` (`REPAIR_ONLY` only; otherwise `N/A`), `P3_NOTES`,
+`COMPLETE_BLOCKER_COLLECTION_STATUS`, `MERGE_READINESS` and `NEXT_SAFE_ACTION`, together with the auditing lane, the protected-trigger classification,
 the specialist prompt count and, for a Sol audit, the speed and usage telemetry of 24.12. Detailed narrative is
 added only for a material P1/P2, an authority conflict, a runtime or procedural stop, or a novel trust-boundary
 adjudication; successful-test narratives are omitted.
@@ -1150,7 +1215,9 @@ created to reach a count, and no audit is fragmented across executions.
   symmetric: one execution each for a clean candidate, two each for a repaired one; for non-protected work only,
   a recorded 24.4 fallback audit takes the Sol slot; and a recorded 24.3 Codex executor stage
   (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`) takes the Claude slot of the implementation or repair stage it replaces, never
-  an extra slot.
+  an extra slot. A first audit in `REPAIR_ONLY` mode (`PRE_AUDIT_CI_FAILURE_RESOLUTION_V1`, 24.4) occupies the
+  ordinary slot 2 `INDEPENDENT_AUDIT`; the controller's eligibility preflight is governance and never contains
+  specialist diagnosis, patching or audit work.
 - The fifth slot exists only for one replacement audit or re-audit execution when the ChatGPT controller rejects
   an executed one as procedurally invalid (wrong head, not fresh context, repository or GitHub mutation, or
   incomplete blocker collection), with the reason recorded — never because of its findings or verdict. It never
@@ -1164,15 +1231,21 @@ created to reach a count, and no audit is fragmented across executions.
   other head movement voids the verdicts bound to the old head and stops the candidate (`REJECT/FREEZE`).
 
 `ONE_CONSOLIDATED_REPAIR` — at most one repair per candidate lifecycle. It repairs the COMPLETE audit blocker
-set by root cause in one change. No micro-patching, no finding-by-finding repair, no repair → audit → repair
-chains.
+set — every material P1/P2 and every independently confirmed `CI_GATE_BLOCKER` (24.4) — by root cause in one
+change. No pre-audit patch, no micro-patching, no finding-by-finding repair, no repair → audit → repair chains.
 
 `ONE_WHOLE_CONTRACT_REAUDIT` — after that repair, exactly one fresh re-audit of the repaired exact head to the
 same 24.4 standard (GPT-6.1 Sol; for protected work no other lane): READ_ONLY and covering the whole semantic
-contract, never only the repaired lines. Its delta-aware method is `SOL_AUDIT_USAGE_EFFICIENCY_V1` (24.4).
+contract, never only the repaired lines. Its delta-aware method is `SOL_AUDIT_USAGE_EFFICIENCY_V1` (24.4). Every
+required CI and CodeQL check on the repaired exact head is terminal green before substantive re-audit;
+`PRE_AUDIT_CI_FAILURE_RESOLUTION_V1` never applies to a re-audit. A pending check waits; a required check that
+cannot turn terminal green on that exact head without a further candidate mutation leaves the candidate
+`REJECT/FREEZE` — there is no second repair.
 
-`FIXED_POINT_STOP` — the first independent audit's complete material P1/P2 set opens the one consolidated repair.
-After that repair and its one whole-contract re-audit: material P1/P2 = NONE → the candidate proceeds to controller
+`FIXED_POINT_STOP` — the first independent audit's complete material P1/P2 set opens the one consolidated repair;
+under `PRE_AUDIT_CI_FAILURE_RESOLUTION_V1` (24.4) at least one independently confirmed `CI_GATE_BLOCKER` opens it
+too, even when that P1/P2 set is empty. A first audit in `REPAIR_ONLY` mode never yields `ACCEPT`, and an
+unconfirmed CI failure opens nothing. After that repair and its one whole-contract re-audit: material P1/P2 = NONE → the candidate proceeds to controller
 governance closeout (24.5); any genuine material P1/P2 remaining → the candidate is `REJECT/FREEZE`, receives no
 further mutation, and closes without merge. P3 / `OUT_OF_SCOPE` / theoretical-hardening observations NEVER trigger
 `FIXED_POINT_STOP` and never block merge. Before freezing a candidate on a disputed finding, the ChatGPT controller
@@ -1192,6 +1265,26 @@ bounded clean replacement exists only under such a decision.
 `BLOCKER_IDENTITY_SURVIVES_RENAME` — a blocker is its semantic defect. The same defect stays the same blocker
 across new wording, new function names, new branches, new PRs, new phase labels and a "clean replacement"
 label. Renaming never restores a repair allowance and never resets the prompt budget.
+
+`ADMINISTRATIVE_CLOSURE` — the evidence-bound, fail-closed exit for a candidate that cannot legally proceed (a
+governance deadlock, an `UNCONFIRMED_CI_GATE` stop, or a `REJECT/FREEZE`):
+- it requires the human's explicit action authorization naming the PR, its exact head and closure without merge;
+  neither a controller decision, an audit verdict nor a tool's Always Allow setting is that authorization;
+- the controller re-proves the head first, and the PR is closed unmerged on that exact head; a moved head stops
+  the closure;
+- the source branch, commits, history, alerts, review threads, blocker identities and consumed specialist
+  executions are preserved: no branch deletion, alert dismissal, thread resolution, rebase or count reset;
+- the controller handoff records the closure reason, exact head and tree, the audit status (`NOT_EXECUTED` when no
+  audit ran), the semantic verdict (`NONE` when no audit ran), the preserved blocker identities and the consumed
+  count;
+- it grants no semantic verdict, acceptance, merge readiness or canonical adoption: the closed candidate is
+  negative evidence only, and no acceptance is ever inferred from it.
+A later attempt at the same product or setup problem requires a separate explicit controller
+`TASK_INTENT=ARCHITECTURE` decision under `ROOT_CAUSE_ESCAPE` that inherits every blocker identity
+(`BLOCKER_IDENTITY_SURVIVES_RENAME`), materially changes the architecture or semantic boundary, starts from accepted
+main, and demonstrates that the new lifecycle and its budget are legal. A rename, a branch change, a rebase, a
+cherry-pick or a different CI policy alone never authorizes a replacement lifecycle, and reopening or relabelling a
+closed candidate never restores its consumed executions.
 
 ### 24.9 Deep Research
 
@@ -1429,6 +1522,29 @@ executor fallback becomes routable only once that change is accepted by that aud
 on its exact head, merged by standard merge, post-merge verified, matched by the externally maintained ChatGPT Project
 instruction, and fresh-chat accepted; its rules bind only stages that start after all of that and never apply
 retroactively to an earlier lifecycle. From then on `SETUP_STATUS=CLOSED_FROZEN` holds again under the reopen rules
+above — proven from live evidence, never written into a durable file.
+
+`PRE_AUDIT_CI_FAILURE_RESOLUTION_TRANSITION` — `PRE_AUDIT_CI_FAILURE_RESOLUTION_V1` (the pre-audit CI failure path,
+`REPAIR_ONLY` mode, `UNCONFIRMED_CI_GATE` and `STALE_OR_CHANGED_CHECK_STATE` of 24.4; `HANDOFF_OWNERSHIP` in section
+3 and 24.5; the audit handoff fields of 24.6; the repair-opening, re-audit gate, budget and `ADMINISTRATIVE_CLOSURE`
+rules of 24.8; the aligned sections 4, 6 and 10; and the adapters and guides that apply them) is a reopening under
+`BROKEN_CONTINUITY`: a failed required static-analysis gate blocked a candidate's first substantive audit while only
+that audit could open its one repair, leaving the lifecycle with no legal next stage, and no rule governed the
+closure of such an unaudited candidate. It weakens no gate, check, budget, lifecycle or authority boundary, and adopts
+no model, role, effort, product permission or admission effect. The change that introduces it grants itself no
+exemption: its implementation, its independent protected audit, any consolidated repair and the re-audit all follow
+the control plane accepted before it, so its own first audit requires ordinary terminal all-green exact-head CI and
+CodeQL, and while it is under acceptance audit every auditor and the ChatGPT controller apply this section and the
+host adapters as they stand on its base (accepted main), never the candidate's own text. Its rules become available
+only after independent protected `gpt-6.1-sol` acceptance at literal `Ultra`, terminal required CI and CodeQL on the
+accepted exact head, the human's explicit authorization naming that PR, its exact head and a standard merge, the
+standard merge, controller verification of the remote post-merge result (24.5), synchronization of the external
+ChatGPT Project Instructions, and fresh-context acceptance. Until every gate holds, `REPAIR_ONLY` mode and the
+`CI_GATE_BLOCKER` repair opener are unavailable and section 24 as it stood on the base governs (where 24.5 already
+prevails over section 3 on handoff ownership). The rules bind only candidate lifecycles that start after all of
+that and never apply retroactively: no earlier lifecycle — the candidate closed unmerged under `GOVERNANCE_DEADLOCK`
+in PR #453 included — may be reopened, relabelled, repaired, re-audited or re-budgeted under them, and none regains
+a consumed specialist execution. From then on `SETUP_STATUS=CLOSED_FROZEN` holds again under the reopen rules
 above — proven from live evidence, never written into a durable file.
 
 ---
@@ -1719,3 +1835,29 @@ open PR, exact-head CI, the human's exact-head merge authority, standard merge, 
 paper, live, capital and security boundary. Its own acceptance follows the plane before it: Claude Opus 5.5
 implemented it, the GPT-6.1 Sol protected audit accepts it, and it routes nothing before the full transition sequence.
 Docs/setup only: no product code, tests, scripts, workflows or dependencies touched.*
+
+*v6.5 (2026-11-27): `PRE_AUDIT_CI_FAILURE_RESOLUTION_V1` — a prospective setup reopening under `BROKEN_CONTINUITY`
+that closes three governance blockers. (1) `GOV-PRE-AUDIT-CI-DEADLOCK`: 24.4 forbade a substantive audit while a
+required exact-head check failed, and 24.8 let only that audit open the one consolidated repair, so a static-analysis
+false positive left a candidate with no legal next stage. Section 24.4 adds a narrowly bounded first-audit eligibility
+path with ten conditions (the controller's recorded proof that every other required check passed and the failing
+security/static-analysis alerts are reproducible false positives with a behaviour-preserving correction), the
+READ_ONLY whole-contract `REPAIR_ONLY` audit mode (the auditor re-verifies eligibility independently; no `ACCEPT`,
+merge readiness, alert dismissal or CI waiver), separately classified `CI_GATE_BLOCKERS` without P1/P2 severity,
+`UNCONFIRMED_CI_GATE` and `STALE_OR_CHANGED_CHECK_STATE`; 24.8 lets an independently confirmed `CI_GATE_BLOCKER` open
+the existing single consolidated repair even with no P1/P2, requires all required checks terminal green on the
+repaired head before the one re-audit, and keeps the 2 / 4 / hard-5 budget with the `REPAIR_ONLY` audit in the
+ordinary audit slot. (2) `GOV-CI-HANDOFF-OWNERSHIP`: section 3 told an implementation or repair turn to end at
+terminal CI, contrary to 5, 6, 24.5 and the host adapters; section 3 now ends the turn at scoped publication and
+exact-head handoff, and 24.5 `HANDOFF_OWNERSHIP` gives remote CI polling, diagnosis routing and the audit preflight to
+the controller with no implied post-handoff mutation authority. (3) `GOV-ADMINISTRATIVE-CLOSURE-STATE`: 24.8
+`ADMINISTRATIVE_CLOSURE` defines the human-authorized, exact-head, unmerged, evidence-preserving closure of a
+candidate that cannot legally proceed, which grants no verdict or adoption, and routes any later attempt through
+`ROOT_CAUSE_ESCAPE`. Sections 4, 6 and 10, `AGENTS.md`, the GPT-6.1 Sol audit adapter and the prompting guides were
+aligned. The transition (24.14 `PRE_AUDIT_CI_FAILURE_RESOLUTION_TRANSITION`) keeps this change governed by the plane
+before it, including an ordinary all-green first audit, and never applies retroactively, in particular not to the
+candidate closed unmerged in PR #453 or its consumed budget. Unchanged: the council, effort and runtime proof, audit
+independence and protected `Ultra` exclusivity, `COMPLETE_BLOCKER_COLLECTION`, `AUDIT_MATERIALITY_BOUNDARY_V1`, one
+writer, one open PR, one consolidated repair, `FIXED_POINT_STOP`, exact-head CI, the human's exact-head merge authority
+and every product, paper, live, capital and security boundary. Docs/setup only: no product code, tests, scripts,
+workflows, validators, schemas or dependencies touched.*

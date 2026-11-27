@@ -111,6 +111,14 @@ candidate-only adoption claim returns to the controller at preflight. Implemente
   base (accepted main). That base routes its acceptance to this lane's own protected audit at `Ultra`; the executor
   adapter and the doctrine the candidate carries are the object under audit, never the audit procedure, and they
   route nothing until the full transition sequence completes.
+- `PRE_AUDIT_CI_FAILURE_RESOLUTION_V1` (section 24.4; available only after its section 24.14 transition): a first
+  audit dispatched in `REPAIR_ONLY` mode first verifies the controller's recorded eligibility independently and
+  stops with proof when it cannot; it then audits the whole declared contract exactly as an ordinary audit, never
+  as a CodeQL-only review, reports confirmed `CI_GATE_BLOCKERS` separately and without P1/P2 severity, and never
+  returns `ACCEPT`, merge readiness, an alert dismissal or a CI waiver. Otherwise, and for every re-audit, a stale
+  head or a missing, pending or failed required check returns to the controller before substantive audit. When the
+  candidate is the change that introduces this amendment, apply this adapter and section 24 as they stand on its
+  base: its own first audit needs ordinary all-green exact-head CI and CodeQL.
 - Severity follows `AUDIT_MATERIALITY_BOUNDARY_V1` and `FINITE_AUDIT_RULE` (section 24.4): a P1/P2 needs
   demonstrated material relevance on a supported path inside the declared contract, with invariant, source
   evidence, entry or consumer path, effect, materiality and minimum regression proof; P3 is advisory and never
@@ -132,7 +140,8 @@ candidate-only adoption claim returns to the controller at preflight. Implemente
 
 ## Report (section 24.6 `COMPACT_AUDIT_HANDOFF`)
 
-`VERDICT`, `RUNTIME_PROOF`, `HEAD_SHA`, `HEAD_TREE`, `CI`, `P1_BLOCKERS`, `P2_BLOCKERS`, `P3_NOTES`,
+`VERDICT`, `AUDIT_MODE`, `RUNTIME_PROOF`, `HEAD_SHA`, `HEAD_TREE`, `CI`, `P1_BLOCKERS`, `P2_BLOCKERS`,
+`CI_GATE_BLOCKERS` (`REPAIR_ONLY` only; otherwise `N/A`), `P3_NOTES`,
 `COMPLETE_BLOCKER_COLLECTION_STATUS`, `MERGE_READINESS` and `NEXT_SAFE_ACTION`, with the auditing lane, the
 protected-trigger classification, the specialist prompt count, and the speed and usage telemetry. Detailed
 evidence only for a material P1/P2, an authority conflict, a runtime or procedural stop, or a novel

@@ -140,9 +140,12 @@ STATE_PIN: PR <n> OPEN; head <sha> == local == origin; base <sha>; current §24.
 MODEL_RUNTIME_PROOF: <as 3.1>
 ALLOWED_FILES: <exact files>; no new files unless named
 INVARIANTS: <as 3.1; the original contract's invariants are unchanged by the repair>
-BLOCKER_INVENTORY: <the COMPLETE audited P1/P2 set, verbatim, with blocker identities and evidence>
-VALIDATION_MATRIX: a regression proof for every blocker that fails before and passes after; then the full
-  ladder of 3.1
+BLOCKER_INVENTORY: <the COMPLETE audited P1/P2 set and any CI_GATE_BLOCKERS the auditor independently
+  confirmed under PRE_AUDIT_CI_FAILURE_RESOLUTION_V1 (§24.4), verbatim, with blocker identities and evidence>
+VALIDATION_MATRIX: a regression proof for every P1/P2 blocker that fails before and passes after; for a
+  CI_GATE_BLOCKER, the audit-confirmed behaviour-preserving correction proven by unchanged existing tests plus any targeted test the contract needs (no
+  suppression, check weakening or waiver; the controller verifies the check on the repaired head); then the
+  full ladder of 3.1
 GITHUB_AUTHORIZATION: one normal same-branch commit and push AUTHORIZED; new PR FORBIDDEN; amend/force
   FORBIDDEN; merge NOT AUTHORIZED; resolving review threads FORBIDDEN
 FORBIDDEN: <as 3.1>; any change beyond the blocker set

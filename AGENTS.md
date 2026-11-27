@@ -16,7 +16,9 @@
 This file is the entrypoint and holds the durable rails. The single canonical active workflow authority is
 `docs/crypto_core/agent_workflow.md` section 24 (`CRYPTO_CORE_AGENT_OS_V1`), whose active content is
 `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by `ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`,
-`GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1`, `CODEX_EXECUTOR_QUOTA_FALLBACK_V1` and the prospective host/workflow closure in section 24.3. The host
+`GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1`, `CODEX_EXECUTOR_QUOTA_FALLBACK_V1` and the prospective host/workflow closure in section 24.3.
+The prospective `PRE_AUDIT_CI_FAILURE_RESOLUTION_V1` amendment (sections 3, 24.4, 24.5, 24.8) applies only after
+its full section 24.14 transition. The host
 adapters (`CLAUDE.md`,
 `.claude/skills/crypto-core-token-efficient-loop/SKILL.md`, `.codex/skills/crypto-core-max-safe/SKILL.md`,
 `.codex/skills/crypto-core-executor-fallback/SKILL.md`)
@@ -127,6 +129,19 @@ post-merge verification.
   exactly ONE whole-contract re-audit (GPT-6.1 Sol). `FIXED_POINT_STOP`: any genuine material
   P1/P2 that remains after it rejects and freezes the candidate, after controller severity adjudication; no
   further mutation on it. P3 never triggers it.
+- `PRE_AUDIT_CI_FAILURE_RESOLUTION_V1` (sections 24.4 and 24.8; prospective, section 24.14
+  `PRE_AUDIT_CI_FAILURE_RESOLUTION_TRANSITION`): when a frozen candidate's only obstacle to its first audit is a
+  failed required security/static-analysis gate that the controller proves to be a reproducible false positive —
+  every other required check terminal green and every eligibility condition recorded in the preflight packet — the
+  first audit runs in the ordinary audit slot in READ_ONLY whole-contract `REPAIR_ONLY` mode. The auditor verifies
+  eligibility independently and never returns `ACCEPT`; an independently confirmed `CI_GATE_BLOCKER` (never given
+  P1/P2 severity) may open the one consolidated repair even with no P1/P2. The repaired head needs every required
+  CI and CodeQL check terminal green before the one re-audit. No CI waiver, alert dismissal, pre-audit patch,
+  second repair, extra audit or extra slot; stale or changed check state re-preflights.
+- `ADMINISTRATIVE_CLOSURE` (section 24.8): a candidate that cannot legally proceed closes unmerged only on the
+  human's explicit authorization naming the PR and its exact head, preserving branch, history, alerts, threads,
+  blocker identities and consumed executions; it grants no verdict or adoption, and a later attempt needs
+  `ROOT_CAUSE_ESCAPE`.
 - `ROOT_CAUSE_ESCAPE`: a later attempt needs a new explicit ChatGPT controller `TASK_INTENT=ARCHITECTURE`
   decision that inherits blocker identity, changes the architecture or boundary, and starts from accepted
   main. There is no automatic replacement chain. A blocker keeps its identity across rewording, renames,
@@ -154,7 +169,8 @@ post-merge verification.
 Controller-mediated and sequential: no autonomous scheduler, no auto-loop, no direct model-to-model runtime
 messaging, one repository writer at a time, one open PR, no concurrent patching. Chain: state proof → serious
 prompt (`SERIOUS_PROMPT_COMPILER`, section 24.6) → one implementer (Claude Opus 5.5, or the conditional Codex
-executor of section 24.3) → handoff → controller verification →
+executor of section 24.3) → exact-head handoff, where the writer's mutation authority ends (`HANDOFF_OWNERSHIP`,
+section 24.5) → controller CI/CodeQL polling and verification →
 exhaustive independent audit (GPT-6.1 Sol; for protected work also the protected audit) → at most one
 consolidated repair and one whole-contract re-audit → exact-head CI terminal green → controller live-state proof → explicit human
 exact-head merge authorization → standard merge → post-merge verify → next action. All reports move as
