@@ -35,8 +35,10 @@ controller, a governance authority, or an independent or protected auditor.
 - **Thinking.** Thinking is always enabled on Opus 5.5, and `THINKING_ACTUAL` is still reported from runtime
   evidence rather than assumed. Control cost through scope and context, never by suppressing reasoning.
 - **Stops.** A wrong or `UNKNOWN` model, `UNKNOWN` or disabled required thinking, or a known prohibited fallback
-  is `STOP_WITH_PROOF` before mutation. A proven execution-effort conflict also stops unless a human waives it for
-  one task; the waiver and the true actual effort are both recorded, and no waiver covers identity, thinking or a
+  is `STOP_WITH_PROOF` before mutation. A proven execution-effort conflict also stops unless §24.12
+  `EFFORT_MISMATCH_WAIVER` applies: an explicit attributable one-task human waiver granted before mutation and bound
+  to the stage and session, with the controller's sufficiency judgement; the waiver and the true actual effort are
+  both recorded, and no waiver covers identity, thinking, an unsupported selection, missing capability or a
   prohibited mode.
 - **De-escalation.** Effort follows the work: when the remaining work is narrower than expected, the controller
   can choose an appropriate offered setting for the next stage.

@@ -10,8 +10,9 @@ in this guide proves repository state or authorizes a merge.
 
 Active council (section 24.3): ChatGPT controller (read-only first, `CONTROLLER_READONLY_FIRST_POLICY`),
 Claude Opus 5.5 (`claude-opus-5-5`), the conditional Codex executor (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`, adopted id
-`gpt-6.2-astra`, routed only by an explicit controller selection), the `ACTIVE_SOL_AUDITOR` (GPT-6.1 Sol,
-`gpt-6.1-sol`, until the named GPT-6.2 Sol activation of section 24.14; GPT-6.2 Sol, `gpt-6.2-sol`, afterwards),
+`gpt-6.2-astra`, routed only by an explicit controller selection), the `ACTIVE_SOL_AUDITOR` (resolved under section
+24.7 `SOL_ROUTE_STATE_RESOLUTION`: GPT-6.1 Sol, `gpt-6.1-sol`, for a verified pre-activation state; GPT-6.2 Sol,
+`gpt-6.2-sol`, for a verified post-activation state after the named activation of section 24.14; no route if unknown),
 ChatGPT Work, Deep Research. GPT-6.1 Terra (`gpt-6.1-terra`) is `EVALUATION_ONLY`. Not routable, and never an automatic fallback: GPT-6 Astra
 (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT`); Codex GPT-5.6 Sol (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_ROUTING`); Claude
 Sonnet 5, Codex GPT-5.6 Terra and Codex GPT-5.6 Luna (`NOT_IN_ACTIVE_COUNCIL`); Claude Opus 5
@@ -62,13 +63,15 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   acceptance — do not count); never issue a specialist sixth; never hide specialist work inside governance; adjudicate a
   disputed severity under `AUDIT_MATERIALITY_BOUNDARY_V1` before applying `FIXED_POINT_STOP`; open a new attempt only through a `TASK_INTENT=ARCHITECTURE` `ROOT_CAUSE_ESCAPE` decision.
 - **Audit routing and last-resort fallback:** route every independent audit to the `ACTIVE_SOL_AUDITOR` (sections
-  24.3 and 24.4) with the compact `SOL_AUDIT_PREFLIGHT_PACKET`, reconstructing which id that is from accepted
-  activation evidence (section 24.7), never from memory. For a non-protected candidate only, when GPT-6.1 Sol is unavailable,
-  quota-blocked or stopped by runtime proof — reason recorded — the controller audits as the last resort: the
-  controller, including through ChatGPT Work, neither implemented nor repaired the candidate; fresh pinned-head
-  READ_ONLY; complete blocker collection with evidence; zero mutation; never a protected audit. Protected work
-  waits for GPT-6.1 Sol on the frozen exact head; GPT-6 Astra and Codex GPT-5.6 Sol are no fallback. No
-  independent eligible reviewer → `STOP_WITH_PROOF`. Exception: the change that introduces this routing is
+  24.3 and 24.4) with the compact `SOL_AUDIT_PREFLIGHT_PACKET`, resolving which id that is only under section 24.7
+  `SOL_ROUTE_STATE_RESOLUTION` (never from memory, a missing record or model availability) and carrying the
+  resolved state and its record origin in `MODEL_RUNTIME_PROOF`; an unresolved state holds the audit after one
+  bounded recovery attempt and is no fallback reason. For a non-protected candidate only, when GPT-6.1 Sol is
+  unavailable, quota-blocked or stopped by runtime proof — reason recorded — the controller audits as the last
+  resort: the controller, including through ChatGPT Work, neither implemented nor repaired the candidate; fresh
+  pinned-head READ_ONLY; complete blocker collection with evidence; zero mutation; never a protected audit.
+  Protected work waits for GPT-6.1 Sol on the frozen exact head; GPT-6 Astra and Codex GPT-5.6 Sol are no fallback.
+  No independent eligible reviewer → `STOP_WITH_PROOF`. Exception: the change that introduces this routing is
   audited under section 24 and the adapters of its base — the final legacy GPT-6 Astra audit — not its own text
   (section 24.14 `GPT61_SOL_AUDIT_TRANSITION`); the change that introduces
   `CRYPTO_CORE_FINAL_CONTROL_PLANE_STABILIZATION_V1` is accepted by the incumbent GPT-6.1 Sol at `Ultra` under its
@@ -77,9 +80,11 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   decision naming the residual assurance limitation (section 24.12). Classify every failing required check
   (`CANDIDATE_SEMANTIC_DEFECT`, `CI_GATE_BLOCKER`, `INFRASTRUCTURE_FAILURE`, `UNCONFIRMED_OR_UNCLASSIFIED`) and admit a
   first `REPAIR_ONLY` audit only on the ten section 24.4 eligibility conditions; otherwise wait for terminal green CI.
-- **Successor activation:** follow the eight steps of section 24.14 `GPT62_SOL_SUCCESSOR_ACTIVATION` exactly; issue the
-  activation decision only on complete adjudicated qualification evidence, preserve its record in the accepted
-  handoff chain, and report the upgrade incomplete when qualification fails or stops.
+- **Successor activation:** follow the steps of section 24.14 `GPT62_SOL_SUCCESSOR_ACTIVATION` exactly; issue the
+  activation decision only on complete adjudicated qualification evidence, publish its record in the accepted
+  handoff chain and the Project Instructions, dispatch no Sol audit until a fresh context has verified the effective
+  route, carry `SOL_ROUTE_STATE` in every accepted handoff, and report the upgrade incomplete when qualification
+  fails or stops.
 - **Prompt safety (`CONTROLLER_PROMPT_SAFETY_AND_SCOPE_V1`, section 24.6):** compile legitimate, explicitly scoped
   tasks with stable authority references; never request hidden reasoning, credentials or unrelated session data;
   on a platform restriction, collect only safely reportable state, mark the work `INCOMPLETE` and never rephrase,
@@ -91,7 +96,9 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   a current attributable firsthand human statement that Claude is quota-blocked or unavailable suffices; reuse it
   while current and refresh it only on a passed reset, changed applicability or contradiction.
   For F, explain why the named writer can finish this scope and validation. Leave executing-session confirmation
-  to the writer before mutation. Preserve the stage boundary, slot and interrupted-stage rules of §24.3.
+  to the writer before mutation. A proven effort conflict proceeds only under §24.12 `EFFORT_MISMATCH_WAIVER`: record
+  the human waiver's binding and your sufficiency judgement with F before mutation; it never fills D or E. Preserve
+  the stage boundary, slot and interrupted-stage rules of §24.3.
 - **Never:** product implementation; any protected audit; an independent audit outside that fallback or of
   its own implementation or repair; a substitute for local tests; memory as repository state; GitHub mutation
   without an exact human action authorization; merge authority.

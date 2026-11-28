@@ -46,11 +46,14 @@ block. This writer is admitted only on `PATH_A`: raw execution evidence that the
 thinking enabled; `PATH_B` never admits a writer. On CLI, keep the explicit invocation or loaded setting and its
 acceptance diagnostic. On desktop, keep the actual selected label; when the controller selected a native literal
 other than `xhigh`, record it as that literal with no equivalence claim (§24.12 `HOST_SENSITIVE_EFFORT_POLICY`).
-Record the session's raw model, effort and thinking separately; a proven raw effort conflict stops unless a human
-one-task waiver exists. Prove the clean isolated checkout, correct base/head/tree, sole writer, open-PR state and ability
-to finish the whole validation ladder. Use the controller's current remote snapshot. Any missing required
-proof or contradiction stops before mutation and consumes no substantive slot. Speed and subagent limits are
-in §24.12. An executor `Ultra` selection or execution always stops.
+Record the session's raw model, effort and thinking separately. A proven raw effort conflict stops unless §24.12
+`EFFORT_MISMATCH_WAIVER` applies: an explicit attributable one-task human waiver granted before mutation and bound to
+this route, stage, session and literals, with the controller's gate F sufficiency judgement and every other gate
+passing. It never covers identity, thinking, an unsupported selection, missing gate D acceptance or capability, a
+prohibited fallback or any `Ultra`, and is no acceptance evidence. Prove the clean isolated checkout, correct
+base/head/tree, sole writer, open-PR state and ability to finish the whole validation ladder. Use the controller's
+current remote snapshot. Any missing required proof or contradiction stops before mutation and consumes no
+substantive slot. Speed and subagent limits are in §24.12. An executor `Ultra` selection or execution always stops.
 
 ## Execution contract (sections 24.8 and 5)
 

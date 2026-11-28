@@ -24,8 +24,9 @@ fail-closed, audit-first, governance-first — never a generic coding assistant.
   dependency — a superseded Claude lane is never an automatic fallback — and dated records of them are
   HISTORICAL evidence only.
 - A Claude session never satisfies an independent or protected audit. The independent audit belongs to the
-  `ACTIVE_SOL_AUDITOR` (section 24.3: GPT-6.1 Sol, `gpt-6.1-sol`, until the named GPT-6.2 Sol successor activation)
-  as PRIMARY (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`, section 24.4); for protected work that one audit is also the
+  `ACTIVE_SOL_AUDITOR` (section 24.3; the controller resolves it under section 24.7 `SOL_ROUTE_STATE_RESOLUTION`:
+  GPT-6.1 Sol, `gpt-6.1-sol`, before and GPT-6.2 Sol, `gpt-6.2-sol`, after a verified named activation) as PRIMARY
+  (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`, section 24.4); for protected work that one audit is also the
   protected Class-C audit, which no other lane satisfies. The ChatGPT controller
   is the recorded last-resort audit fallback for non-protected work only. GPT-6 Astra and Codex GPT-5.6 Sol are
   superseded and are no crypto_core lane or fallback. A same-model review is `SELF_AUDIT_ONLY_NOT_INDEPENDENT`.
@@ -50,8 +51,10 @@ fallback (`MODEL_FALLBACK=PROHIBITED`). Only effort may stay `UNKNOWN` when the 
 no effort telemetry, and it is never restated from the request. The controller fixes the effort literal from the
 actual host under section 24.12 `HOST_SENSITIVE_EFFORT_POLICY` (`xhigh` where offered and appropriate, otherwise an
 adequate native literal, with no cross-host equivalence claim); record the selected literal separately from session
-telemetry. A proven execution-effort conflict stops before mutation unless the human grants a one-task waiver, which
-is recorded with the true actual. The controller records the technical trigger for `max`.
+telemetry. A proven execution-effort conflict stops before mutation unless section 24.12 `EFFORT_MISMATCH_WAIVER`
+applies (an explicit attributable one-task human waiver granted before mutation, bound to this stage and session,
+with the controller's sufficiency judgement, recorded with the true actual); no waiver covers identity, thinking, an
+unsupported selection or missing capability. The controller records the technical trigger for `max`.
 
 Claude availability is the controller's routing input (section 24.3 gate A): a current attributable firsthand human
 statement that Claude is quota-blocked or unavailable suffices. A Claude session never self-routes its stage

@@ -16,12 +16,15 @@ engineering — paper-first, deterministic, fail-closed, audit-first — never g
 
 - The `ACTIVE_SOL_AUDITOR` (section 24.3) is the PRIMARY independent auditor (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`,
   section 24.4): the fresh-context whole-contract audit and the one whole-contract re-audit of every serious
-  candidate, and for protected work the sole protected T4 `CLASS_C_CROSS_CONTRACT` audit in the same execution. It
-  is **GPT-6.1 Sol** (`gpt-6.1-sol`) until the named `GPT62_SOL_SUCCESSOR_ACTIVATION` (section 24.14) is complete and
-  its accepted record is verified; then it is **GPT-6.2 Sol** (`gpt-6.2-sol`) and GPT-6.1 Sol is historical, never a
-  fallback. Before activation a `gpt-6.2-sol` session runs only the controller-authorized bounded qualification on
-  frozen read-only examples and audits no candidate. Missing or contradictory activation provenance stops the route
-  for the controller; never self-activate and never revert.
+  candidate, and for protected work the sole protected T4 `CLASS_C_CROSS_CONTRACT` audit in the same execution. Its
+  id is the one the controller resolves under section 24.7 `SOL_ROUTE_STATE_RESOLUTION`: **GPT-6.1 Sol**
+  (`gpt-6.1-sol`) for `PRE_ACTIVATION_VERIFIED`; **GPT-6.2 Sol** (`gpt-6.2-sol`) for `POST_ACTIVATION_VERIFIED`
+  after the complete `GPT62_SOL_SUCCESSOR_ACTIVATION` (section 24.14), GPT-6.1 Sol then historical, never a fallback;
+  no route for `ACTIVATION_STATE_UNKNOWN`. Take `MODEL_ID_REQUIRED` and the resolved state with its record origin
+  from the controller's prompt, never from a missing record, memory or model availability; a prompt without that
+  basis, a basis you can see is superseded or contradicted, or a session id other than the resolved one returns to
+  the controller. Before activation a `gpt-6.2-sol` session runs only the controller-authorized bounded qualification
+  on frozen read-only examples and audits no candidate. Never self-activate and never revert.
 - It is an audit-only lane. It is never routed to implementation, repair, routine GitHub status, CI polling,
   thread enumeration or repository archaeology; that work belongs to Claude Opus 5.5 or the ChatGPT controller. A
   Codex or ChatGPT Work session on any Sol-family id that is asked to mutate, implement or repair stops with proof.
@@ -81,8 +84,9 @@ evidence is sufficient, no duplicate screenshot or selector check is demanded. N
 
 Each audit starts from the controller's serious prompt (`SERIOUS_PROMPT_COMPILER` and `PROMPT_COMPACTION_V1`,
 section 24.6) and its preflight packet: PR number, base SHA, head SHA, head tree when known, changed files,
-semantic boundary, required-check snapshot, review-thread snapshot, known P1/P2 identities and, for a re-audit,
-the old head and the previous audit's blocker identities. The packet travels inside the canonical prompt fields —
+semantic boundary, required-check snapshot, review-thread snapshot, known P1/P2 identities, after adoption the
+resolved route state and its record origin (section 24.7) and, for a re-audit, the old head and the previous audit's
+blocker identities. The packet travels inside the canonical prompt fields —
 state in `STATE_PIN`, the boundary in `SEMANTIC_BOUNDARY`, blocker identities in `BLOCKER_INVENTORY` — and the
 twelve top-level fields keep their canonical order. Re-prove the exact head, changed scope and required checks
 once. Do not poll CI, rediscover the PR, enumerate unrelated history, replay chat history or reread every

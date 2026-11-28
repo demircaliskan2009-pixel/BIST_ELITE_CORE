@@ -22,7 +22,8 @@ saving is subordinate to correctness; no gate may be skipped to save tokens. Ope
    `claude-opus-5-5` and thinking positively `ENABLED` on execution evidence; `UNKNOWN`, a mismatch, disabled
    thinking, a known prohibited fallback, or selector/config/default/cache/request text alone →
    `STOP_WITH_PROOF`. Only effort may stay `UNKNOWN`. Report the controller's literal effort selection
-   (§24.12 `HOST_SENSITIVE_EFFORT_POLICY`); a proven effort conflict stops unless a human one-task waiver exists.
+   (§24.12 `HOST_SENSITIVE_EFFORT_POLICY`); a proven effort conflict stops unless §24.12 `EFFORT_MISMATCH_WAIVER`
+   applies.
 3. Prove the local base, HEAD, tree, branch and clean status. Bind them to the controller's current PR snapshot.
 4. Read the named set; use symbol search before full files; build one source surface map.
 5. Close the whole semantic boundary as the largest safe semantic closure (§24.8) inside the allowed files,
@@ -43,7 +44,8 @@ saving is subordinate to correctness; no gate may be skipped to save tokens. Ope
   (`claude-opus-5-5`) for deep semantic implementation and repair, including the repo-native navigation,
   dependency-tracing, test and validation work of that same task; the conditional Codex executor
   (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`), routed only by the controller for a whole stage Claude cannot run (§24.3);
-  the `ACTIVE_SOL_AUDITOR` (GPT-6.1 Sol, `gpt-6.1-sol`, until the named GPT-6.2 Sol activation of §24.14) as the
+  the `ACTIVE_SOL_AUDITOR` (resolved by the controller under §24.7 `SOL_ROUTE_STATE_RESOLUTION`: GPT-6.1 Sol,
+  `gpt-6.1-sol`, before and GPT-6.2 Sol, `gpt-6.2-sol`, after a verified §24.14 activation) as the
   audit-only PRIMARY independent auditor (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`), which for protected work is also the
   protected T4 audit, never reassigned, with the ChatGPT controller as the last-resort non-protected fallback
   (§24.4); ChatGPT Work; Deep Research. GPT-6 Astra is `SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT` and Codex GPT-5.6

@@ -36,8 +36,8 @@ wins.
 | **ChatGPT controller** | Controller and router, architecture adjudication, prompt compiler, evidence judge, live GitHub verification, the Sol audit preflight packet and the CI/status polling around audits, contradiction detection, merge-readiness judgement, exactly one next action; severity adjudication under section 24.4; an independent audit only as the last-resort non-protected fallback of section 24.4. |
 | **Claude Opus 5.5** (`claude-opus-5-5`) | Primary deep semantic implementation and repair, with the repo-native navigation, dependency-tracing, mechanical, test and local-validation work of that same task. |
 | **Codex executor fallback** (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`; adopted id `gpt-6.2-astra`) | CONDITIONAL: one whole implementation stage or the one consolidated repair stage, only when the controller routes it after fresh Claude Opus 5.5 quota-block or unavailability evidence and every section 24.3 activation gate holds; never an audit, never a Sol-family model, never an automatic switch. |
-| **GPT-6.1 Sol** (`gpt-6.1-sol`) | Incumbent `ACTIVE_SOL_AUDITOR` (section 24.3) until the named successor activation: PRIMARY independent auditor (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`): READ_ONLY exhaustive whole-contract audit and the one whole-contract re-audit, and for protected work the sole protected T4 audit in the same execution; an audit-only lane, never implementation, repair or routine status work. |
-| **GPT-6.2 Sol** (`gpt-6.2-sol`) | Named prospective successor auditor, not yet active: only a separately authorized bounded qualification before activation; after the complete section 24.14 `GPT62_SOL_SUCCESSOR_ACTIVATION`, the `ACTIVE_SOL_AUDITOR` with the role above. Never an executor. |
+| **GPT-6.1 Sol** (`gpt-6.1-sol`) | Incumbent `ACTIVE_SOL_AUDITOR` (section 24.3) while the route state resolves to `PRE_ACTIVATION_VERIFIED` (section 24.7 `SOL_ROUTE_STATE_RESOLUTION`): PRIMARY independent auditor (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`): READ_ONLY exhaustive whole-contract audit and the one whole-contract re-audit, and for protected work the sole protected T4 audit in the same execution; an audit-only lane, never implementation, repair or routine status work. |
+| **GPT-6.2 Sol** (`gpt-6.2-sol`) | Named prospective successor auditor: only a separately authorized bounded qualification before activation; the `ACTIVE_SOL_AUDITOR` with the role above only when the route state resolves to `POST_ACTIVATION_VERIFIED` (section 24.7) after the complete section 24.14 `GPT62_SOL_SUCCESSOR_ACTIVATION`. Never an executor. |
 | **ChatGPT Work** | Substantial multi-step execution when a cloud browser/computer, many files, apps or evidence collection materially help; never governance authority. |
 | **Deep Research** | Current load-bearing external facts only; advisory. |
 
@@ -752,34 +752,37 @@ restates it as authority. The council is closed: a model or tool not listed here
 | **ChatGPT controller** | Controller and router; architecture adjudication; prompt compiler (24.6); evidence judge; severity adjudication under `AUDIT_MATERIALITY_BOUNDARY_V1` (24.4); live GitHub verification through the connector/`gh`; the compact `SOL_AUDIT_PREFLIGHT_PACKET` and the CI/status polling around every audit (24.4); contradiction detection; merge-readiness judgement; exactly one next action; an independent audit only as the last resort of `NON_PROTECTED_AUDIT_FALLBACK` (24.4) | Product implementation; any independent audit outside that fallback; auditing a candidate it implemented or repaired; any protected audit; a substitute for local tests or unverified repository state; GitHub mutation without an exact human action authorization; merge authority |
 | **Claude Opus 5.5** (`claude-opus-5-5`) | Primary deep semantic IMPLEMENTATION and REPAIR, including the single consolidated repair of a candidate (24.8) and the `ROOT_CAUSE_ESCAPE` implementation (24.8), together with the repo-native navigation, dependency-tracing, mechanical, static-inspection, test-generation, local validation and CI-diagnosis work that belongs to that same task | Any independent audit of its own work; any protected audit; controller, governance or merge authority |
 | **Codex executor fallback** (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`; the adopted executor id `gpt-6.2-astra`, GPT-6.2 Astra, on a Codex host) | CONDITIONAL implementation and repair executor for ONE whole specialist stage — an IMPLEMENTATION, including a `ROOT_CAUSE_ESCAPE` implementation, or the candidate's `ONE_CONSOLIDATED_REPAIR` (24.8) — only when the ChatGPT controller explicitly routes that stage to it because the Claude lane cannot run it and every activation gate below holds, under the same prompt shape, validation ladder, budget slot and gates as the Claude stage it replaces | Any audit or re-audit; any Sol-family model id; a route without its recorded activation; switching or being switched mid-stage; mutation concurrent with any other writer; automatic or self-selected routing; controller, governance or merge authority |
-| **GPT-6.1 Sol** (`gpt-6.1-sol`, on the ChatGPT Work/Codex host) | The incumbent `ACTIVE_SOL_AUDITOR` (below) until the named successor activation, as the PRIMARY independent auditor (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`, 24.4): the READ_ONLY fresh-context exhaustive whole-contract audit and the one whole-contract re-audit of serious candidates, and for protected work the sole protected T4 `CLASS_C_CROSS_CONTRACT` audit in the same execution, run under `SOL_AUDIT_USAGE_EFFICIENCY_V1` (24.4). Requested effort `Ultra`, mandatory for protected audits; speed `STANDARD`; subagents 0 by default (24.12) | Mutation; implementation or repair; routine GitHub status, CI polling, thread enumeration, repository archaeology or mechanical work that belongs to the controller or Claude; auditing a candidate that it, or any execution on its model id, implemented or repaired; any reassignment of protected T4 to another lane; an automatic fallback after the successor activation |
-| **GPT-6.2 Sol** (`gpt-6.2-sol`) | Named prospective successor auditor (`GPT62_SOL_SUCCESSOR_ACTIVATION`, 24.14). Before activation: only the separately authorized bounded read-only qualification of 24.14, outside any candidate lifecycle. After the complete activation: the `ACTIVE_SOL_AUDITOR`, with the GPT-6.1 Sol role above (requested effort `Ultra`, mandatory for protected audits; speed `STANDARD`; subagents 0 by default) | Any production audit, protected audit or route before activation; implementation, repair or any executor role; mutation; self-activation; auditing a candidate that any execution on its model id implemented or repaired |
+| **GPT-6.1 Sol** (`gpt-6.1-sol`, on the ChatGPT Work/Codex host) | The incumbent `ACTIVE_SOL_AUDITOR` (below) while the route state is `PRE_ACTIVATION_VERIFIED`, as the PRIMARY independent auditor (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`, 24.4): the READ_ONLY fresh-context exhaustive whole-contract audit and the one whole-contract re-audit of serious candidates, and for protected work the sole protected T4 `CLASS_C_CROSS_CONTRACT` audit in the same execution, run under `SOL_AUDIT_USAGE_EFFICIENCY_V1` (24.4). Requested effort `Ultra`, mandatory for protected audits; speed `STANDARD`; subagents 0 by default (24.12) | Mutation; implementation or repair; routine GitHub status, CI polling, thread enumeration, repository archaeology or mechanical work that belongs to the controller or Claude; auditing a candidate that it, or any execution on its model id, implemented or repaired; any reassignment of protected T4 to another lane; an automatic fallback after the successor activation |
+| **GPT-6.2 Sol** (`gpt-6.2-sol`) | Named prospective successor auditor (`GPT62_SOL_SUCCESSOR_ACTIVATION`, 24.14). Before activation: only the separately authorized bounded read-only qualification of 24.14, outside any candidate lifecycle. When the route state is `POST_ACTIVATION_VERIFIED` after the complete activation: the `ACTIVE_SOL_AUDITOR`, with the GPT-6.1 Sol role above (requested effort `Ultra`, mandatory for protected audits; speed `STANDARD`; subagents 0 by default) | Any production audit, protected audit or route before activation; implementation, repair or any executor role; mutation; self-activation; auditing a candidate that any execution on its model id implemented or repaired |
 | **ChatGPT Work** | Substantial multi-step execution when a cloud browser/computer, many files, apps or evidence collection materially help, under the same prompt shape (24.6) and gates | Governance authority; accepted state; merge authority |
 | **Deep Research** | Current load-bearing external facts only (24.9) | Repository/PR/CI state; implementation; mutation; gate waivers |
 
 `ACTIVE_SOL_AUDITOR` — exactly one model id holds the primary independent and exclusive protected audit route at
-any time, reconstructable from accepted canonical rules plus attributable accepted activation evidence (24.7):
-- PRE-ACTIVATION (default): `gpt-6.1-sol` (GPT-6.1 Sol, the incumbent). This holds until every
-  `GPT62_SOL_SUCCESSOR_ACTIVATION` predicate (24.14) is met and its activation record is accepted and verified from a
-  fresh controller context.
-- POST-ACTIVATION: `gpt-6.2-sol` (GPT-6.2 Sol). `gpt-6.1-sol` is then HISTORICAL for the active route and is no
-  automatic fallback, default or dependency.
-- Missing or contradictory activation provenance stops the affected audit route for controller recovery; it never
-  silently activates the successor and never reverts an established activation. An incomplete, stopped or failed
-  qualification leaves the PRE-ACTIVATION route in force.
+any time. After canonical adoption that id is determined only by the route state that `SOL_ROUTE_STATE_RESOLUTION`
+(24.7) resolves from positive current evidence — never from the absence of a record, memory, preference, model
+availability or a guess:
+- `PRE_ACTIVATION_VERIFIED` → `gpt-6.1-sol` (GPT-6.1 Sol, the incumbent).
+- `POST_ACTIVATION_VERIFIED` → `gpt-6.2-sol` (GPT-6.2 Sol). `gpt-6.1-sol` is then HISTORICAL for the active route and
+  is no automatic fallback, default or dependency.
+- `ACTIVATION_STATE_UNKNOWN` (including its `CONTRADICTORY` subtype) → `UNRESOLVED`: no audit route is selected, and
+  every stage that needs one holds for controller recovery (24.7). It never silently activates the successor and
+  never reverts an effective activation.
+- A failed, stopped or incomplete qualification changes no route state: the incumbent stays eligible only while
+  `PRE_ACTIVATION_VERIFIED` holds. Before adoption the introducing lifecycle names literal `gpt-6.1-sol` under its
+  accepted-base procedure (24.14) and consults no route state.
 - Wherever an active rule of this section, sections 1–19, the host adapters or the prompting guides names GPT-6.1
   Sol, `gpt-6.1-sol` or a `GPT61_SOL_*` rule as the auditor of a candidate, it names the `ACTIVE_SOL_AUDITOR` and
-  that id's literal `MODEL_ID_REQUIRED`. Dated records, completed transitions and the introducing transition of
-  `CRYPTO_CORE_FINAL_CONTROL_PLANE_STABILIZATION_V1` (24.14) name the literal model they state. Distinct Sol ids
-  confer no rights on one another.
+  that id's literal `MODEL_ID_REQUIRED` (none while `UNRESOLVED`). Dated records, completed transitions and the
+  introducing transition of `CRYPTO_CORE_FINAL_CONTROL_PLANE_STABILIZATION_V1` (24.14) name the literal model they
+  state. Distinct Sol ids confer no rights on one another.
 
 `GPT61_SOL_T4_EXCLUSIVE` — protected T4 belongs to the `ACTIVE_SOL_AUDITOR` alone. When it is unavailable,
-quota-blocked, cannot be requested at its required effort label or is stopped by runtime admission (24.12), the
-protected gate waits on the frozen exact head (`CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE`); nothing reassigns or
-silently substitutes T4 — not the other Sol id, GPT-6 Astra, Codex GPT-5.6 Sol, Claude Opus 5.5, GPT-6.2 Astra, the
-ChatGPT controller, ChatGPT Work or any other lane. A retired or permanently unavailable protected auditor with no
-authorized eligible successor is a `MATERIAL_CAPABILITY_CHANGE` (24.13), never permission for arbitrary
-substitution. Non-protected work continues under 24.4.
+quota-blocked, cannot be requested at its required effort label, is stopped by runtime admission (24.12) or is
+`UNRESOLVED` (24.7), the protected gate waits on the frozen exact head (`CLASS_C_LANE_REQUIRED_BUT_UNAVAILABLE`);
+nothing reassigns or silently substitutes T4 — not the other Sol id, GPT-6 Astra, Codex GPT-5.6 Sol, Claude Opus 5.5,
+GPT-6.2 Astra, the ChatGPT controller, ChatGPT Work or any other lane. A retired or permanently unavailable protected
+auditor with no authorized eligible successor is a `MATERIAL_CAPABILITY_CHANGE` (24.13), never permission for
+arbitrary substitution. Non-protected work continues under 24.4.
 
 `HOST_UI_LABELS_ARE_LITERAL` — record the selected host control and the executing session's values verbatim.
 Keep the provider, model ID and client surface attached to each observation. Never translate an effort across
@@ -931,8 +934,8 @@ exception to the Sol-family prohibition; no amendment proposes one.
 
 ### 24.4 Independent audit (GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1), protected Class C, complete blocker collection and Sol usage efficiency
 
-- `GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1` — the `ACTIVE_SOL_AUDITOR` (24.3: `gpt-6.1-sol` until the named
-  successor activation) is the PRIMARY independent auditor of
+- `GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1` — the `ACTIVE_SOL_AUDITOR` (24.3; the id resolved by 24.7
+  `SOL_ROUTE_STATE_RESOLUTION`) is the PRIMARY independent auditor of
   every serious crypto_core PR candidate; requested effort `Ultra` (recorded literally, 24.3; mandatory for
   protected audits, 24.12) at `STANDARD` speed. An audit under this rule is: fresh context; pinned to the exact
   head; READ_ONLY with zero repository or GitHub mutation; runtime-admitted (24.12 `PATH_A`, or `PATH_B` where
@@ -1037,7 +1040,8 @@ exception to the Sol-family prohibition; no amendment proposes one.
     A stale base/head or missing, pending or failed required exact-head CI/CodeQL returns to the controller
     before substantive audit. The only exception is a first audit admitted in `REPAIR_ONLY` mode under
     `PRE_AUDIT_CI_FAILURE_RESOLUTION_V1` below; nothing admits a stale head or a pending, missing, stale,
-    infrastructure-only or unclassified check, and nothing admits a failed check to a re-audit. For a `PATH_B`
+    infrastructure-only or unclassified check, and nothing admits a failed check to a re-audit. After adoption the
+    packet carries the resolved route state and its record origin (24.7) in `MODEL_RUNTIME_PROOF`. For a `PATH_B`
     admission the packet also carries the attributable human selection attestation and the controller's admission
     decision (24.12). A verdict missing the complete material P1/P2 inventory cannot support
     acceptance or dispatch of the one consolidated repair.
@@ -1171,14 +1175,15 @@ an otherwise attributable decision unless that detail is required for the gate. 
 state only the actions actually granted. A methodology approval grants no publication or merge permission.
 
 Keep the human statement distinct from controller interpretation, attributed host observations, fresh runtime
-proof, GitHub/CI evidence, accepted repository authority and implementer claims. Two human operational statements
+proof, GitHub/CI evidence, accepted repository authority and implementer claims. Three human operational statements
 are evidence classes of their own, never governance approvals and never runtime telemetry: a human availability
-statement (24.3 gate A) and a human selection attestation (24.12 `PATH_B`). Each records its actor, scope,
-applicable host and model, and stage or session binding, and is never relabelled as execution evidence. Carry the same source into
-the existing handoff and the independent audit preflight (24.4). A candidate may cite its authority but cannot
-supply that authority by asserting its own adoption. If the original decision or direct approval is missing,
-inaccessible, superseded or inconsistent with the requested scope, stop before dependent mutation or
-substantive audit. The controller resolves the source and revision before resumption.
+statement (24.3 gate A), a human selection attestation (24.12 `PATH_B`) and a human confirmation of the governance
+decision state (24.7 `SOL_ROUTE_STATE_RESOLUTION`). Each records its actor, scope, applicable host and model (or the
+route state it confirms), and stage or session binding, and is never relabelled as execution evidence. Carry the
+same source into the existing handoff and the independent audit preflight (24.4). A candidate may cite its
+authority but cannot supply that authority by asserting its own adoption. If the original decision or direct
+approval is missing, inaccessible, superseded or inconsistent with the requested scope, stop before dependent
+mutation or substantive audit. The controller resolves the source and revision before resumption.
 
 ### 24.6 SERIOUS_PROMPT_COMPILER and AGENT_OS_HANDOFF_V1
 
@@ -1229,10 +1234,12 @@ protected-trigger classification, and whether it ran as PRIMARY (GPT-6.1 Sol) or
 `NON_PROTECTED_AUDIT_FALLBACK` with its reason (24.4); for an implementation or repair routed under
 `CODEX_EXECUTOR_QUOTA_FALLBACK_V1` (24.3), the executor route, the fallback reason with its Claude-unavailability
 evidence, the attributable A–G controller record, the pre-mutation host/runtime/local proof and every executing model id of the candidate; the specialist prompt count of
-the PR lifecycle (24.8), with any invalid or interrupted execution and the remaining legal stages; any recorded
-effort waiver with the true actual; for a `PATH_B` admission, the residual assurance limitation (24.4); and exactly
-one next safe action. Missing facts are `UNKNOWN`, never invented; failure tails only; a handoff never authorizes
-mutation. Runtime fields that do not apply to the stage are `N/A`; optional unavailable telemetry is `UNKNOWN`.
+the PR lifecycle (24.8), with any invalid or interrupted execution and the remaining legal stages; any
+`EFFORT_MISMATCH_WAIVER` (24.12) with its binding, the controller's sufficiency judgement and the true actual; for a
+`PATH_B` admission, the residual assurance limitation (24.4); after adoption, in every controller-accepted handoff,
+the `SOL_ROUTE_STATE` record (24.7); and exactly one next safe action. Missing facts are `UNKNOWN`, never
+invented; failure tails only; a handoff never authorizes mutation. Runtime fields that do not apply to the stage
+are `N/A`; optional unavailable telemetry is `UNKNOWN`.
 
 `COMPACT_AUDIT_HANDOFF` — an audit's handoff is compact by default: `VERDICT`, `AUDIT_MODE` (`ORDINARY`, or
 `REPAIR_ONLY` with the auditor's own eligibility finding, 24.4), `RUNTIME_PROOF` (including `RUNTIME_ELIGIBILITY`
@@ -1268,13 +1275,66 @@ only: no handoff, state record, archive or memory ever relaxes a rule of this do
 
 `EFFECTIVE_ROUTE_RECOVERY` — the governing authority is this section as accepted on main; the external ChatGPT
 Project Instructions and the adapters apply it and never redefine it. A fresh context reconstructs the effective
-model routes from that authority plus attributable accepted evidence: the `ACTIVE_SOL_AUDITOR` (24.3) is
-`gpt-6.1-sol` unless an accepted `GPT62_SOL_SUCCESSOR_ACTIVATION` record (24.14) is present in the accepted
-controller handoff and continuity chain, bound to its policy revision, model and role, qualification evidence,
-decision source and effective boundary. No local flag, memory note or new registry records it. A conflict between
-Project Instructions, an adapter and this section is resolved in favour of this section and reported as drift; a
-missing or contradictory activation record stops the affected route (24.3) until the controller recovers it.
-Context compaction or loss is recovered the same way and never resets a lifecycle count or authority.
+model routes from that authority plus attributable accepted evidence; the `ACTIVE_SOL_AUDITOR` (24.3) is resolved
+only by `SOL_ROUTE_STATE_RESOLUTION` below. No local flag, memory note or new registry records a route. A conflict
+between Project Instructions, an adapter and this section is resolved in favour of this section and reported as
+drift. Context compaction or loss is recovered the same way and never resets a lifecycle count or authority.
+
+`SOL_ROUTE_STATE_RESOLUTION` — the one procedure that resolves the `ACTIVE_SOL_AUDITOR` after canonical adoption. The
+controller applies it; adapters, guides, prompts and the Project Instructions carry its result and never resolve the
+route themselves. Git and GitHub prove repository state only (the accepted policy revision, branches, PRs, checks).
+An activation decision is external to them, so the same repository state follows both a successor that was never
+activated and an activation whose evidence was lost; repository evidence, `LIVE_STATE_PRECEDENCE` included, never
+stands in for a route-state record.
+- Record. Every controller-accepted handoff after adoption carries `SOL_ROUTE_STATE`: the state, its origin and the
+  accepted policy revision (an unresolved state is carried as `ACTIVATION_STATE_UNKNOWN` with its reason). The
+  `PRE_ACTIVATION` origin is the fresh-context verification of the adopted policy (24.14
+  `GPT62_SOL_SUCCESSOR_ACTIVATION` step 4), when no activation can exist yet because qualification follows it, or a
+  human confirmation under Recovery below. The `POST_ACTIVATION` origin is the complete activation record (24.14),
+  which names the pre-activation record it supersedes. Each later accepted handoff carries the entry forward with
+  its origin until an activation record supersedes it. The Project Instructions name the same effective state and
+  identify its record (24.14) without granting any authority.
+- Currentness. A record is current only when the controller establishes all of: (1) it comes from the designated
+  current accepted state — the controller's own retained accepted state, the handoff that the human or the previous
+  controller supplies with the task or new chat as current, or the record that handoff or the Project Instructions
+  identify — not merely from an accessible older record; (2) its origin is present and every later accepted handoff
+  in hand carries the same state; (3) the canonical policy on main still defines this successor route (unrelated
+  later commits leave it applicable; a later adopted role change governs under its own authority); (4) the Project
+  Instructions name the same effective state; and (5) no conflicting record is known, and no activation decision
+  whose 24.14 publication (step 8) is unfinished. A timestamp, a recent conversation, a matching Git SHA or the
+  absence of a newer record never establishes currentness alone.
+- States. `PRE_ACTIVATION_VERIFIED`: a current `PRE_ACTIVATION` record. `POST_ACTIVATION_VERIFIED`: a current
+  `POST_ACTIVATION` record whose complete activation record is accessible, whose 24.14 publication (step 8) is
+  complete and whose effectiveness is verified from a fresh controller context (24.14 step 9; the first fresh context
+  to resolve it performs and records that verification). Anything else is `ACTIVATION_STATE_UNKNOWN`, recorded with
+  its reason: `MISSING` (no record), `STALE` (currentness not established, or superseded), `INACCESSIBLE` (a
+  referenced record cannot be retrieved), `CONTRADICTORY` (conflicting records, or Project Instructions or an adapter
+  inconsistent with the accepted record) or `PUBLICATION_INCOMPLETE` (an activation decision whose 24.14 publication
+  or fresh-context verification is unfinished). A missing activation record is never evidence of `PRE_ACTIVATION`,
+  and a missing pre-activation record is never evidence of activation.
+- Reuse. A current record is reused across stages, hosts, quota resets and context compaction without new human
+  confirmation while it stays uncontradicted; it is re-established only after a fresh or lost controller context, a
+  change of 24.3 or 24.14 on main, a known activation decision or a conflict.
+- Recovery. For `ACTIVATION_STATE_UNKNOWN` the controller makes one bounded recovery attempt: it retrieves the
+  designated record through the accepted handoff chain or the continuity pointer that the latest handoff or the
+  Project Instructions identify and, only where that cannot establish currentness or a positive pre-activation
+  state, obtains one focused current human confirmation of the governance decision state (24.5). That confirmation
+  can establish which record is current and, consistent with the Project Instructions and canonical policy, that no
+  activation decision was made — it is then the origin of `PRE_ACTIVATION_VERIFIED`. It never supplies qualification
+  evidence, an activation record, execution identity or backend independence, so it never establishes
+  `POST_ACTIVATION_VERIFIED` and never overrides a complete accepted activation record. For `PUBLICATION_INCOMPLETE`
+  the recovery is completing 24.14 steps 8 and 9 of the recorded decision. While the state stays unresolved, every
+  stage that needs the `ACTIVE_SOL_AUDITOR` — an audit, re-audit or protected gate, and 24.14 steps 5–7 — holds,
+  and it is never a `NON_PROTECTED_AUDIT_FALLBACK` reason (24.4). A writer stage is not held, because gate G
+  independence (24.3) holds for every Sol id, but its audit waits.
+- Supersession. A pre-activation statement that an activation record supersedes is stale and never authorizes
+  incumbent dispatch. A verified post-activation state is never reverted by a stale or inconsistent pre-activation
+  statement: the conflict is resolved on evidence or the dependent stage holds. Nothing here creates a deactivation
+  or reverse transition; an unrelated retirement or role change follows its own canonical authority (24.3, 24.13).
+- Dispatch. An audit prompt carries the resolved state and its record origin in `MODEL_RUNTIME_PROOF` (24.4, 24.6),
+  compiled at dispatch; a prompt compiled before an activation took effect is never dispatched after it. An agent
+  never resolves the route itself: a prompt without that basis, or one whose basis the agent can see is superseded
+  or contradicted, returns to the controller. No resolution changes the model of a stage already started.
 
 ### 24.8 LOW_PROMPT_MAXIMUM_WORK_POLICY — PR sizing, prompt budget and the fixed-point lifecycle
 
@@ -1514,10 +1574,30 @@ substantive work is procedurally invalid (24.4, 24.8).
   cross-spelling equivalence claim is required to approve an appropriate native selection, none is inferred (for
   example, `Extra High` is never asserted to equal `xhigh`), and no unsupported effort mapping is made. A spelling
   difference without established semantics is not by itself proof of a mismatch. A proven execution-effort conflict
-  with the approved selection stops the stage unless an applicable accepted one-task human effort waiver exists,
-  recorded with the true actual; no waiver can authorize a prohibited mode, a wrong identity, missing required
-  thinking, an unsupported selection or a missing mandatory capability. Session-bound selection or configuration
-  acceptance, actual writer identity, thinking, host capability and known-contradiction checks are preserved.
+  with the approved selection stops the stage unless `EFFORT_MISMATCH_WAIVER` below applies. Session-bound selection
+  or configuration acceptance, actual writer identity, thinking, host capability and known-contradiction checks are
+  preserved.
+- `EFFORT_MISMATCH_WAIVER` — the one effort-waiver rule for every routed stage and lane, the Codex executor included;
+  no other rule, adapter or guide defines another. A conflict is proven only when the running session's raw execution
+  effort is established and its conflict with the approved selection rests on the same host vocabulary or on host
+  documentation linking both values for that client and model. A spelling difference without established semantics
+  is recorded with both literals and no claimed relationship: it needs no waiver, and the raw value is never itself
+  acceptance evidence. A stage with a proven conflict may proceed only when all hold: (1) the requested and selected
+  settings are supported on that host and model; (2) the actual conflicting effort is established and is not
+  prohibited; (3) the conflict is the only condition waived; (4) the human grants an explicit attributable one-task
+  waiver before any dependent mutation or substantive work; (5) the waiver binds the exact route and model id, stage,
+  session, requested and selected literals and the true reported actual; (6) the controller judges, before that
+  work (for the Codex executor in its gate F record), that the actual effort suffices for the whole authorized stage;
+  and (7) every other A–G, host, runtime, thinking, independence, state, capability and authority condition passes.
+  No waiver covers: a wrong or unknown actual writer identity; unknown or disabled required thinking; an unsupported
+  selection; missing mandatory host configuration or selection acceptance (24.3 gate D and its paths below); missing
+  edit, shell or validation capability; a known prohibited model fallback; executor `Ultra` or `ultra` requested,
+  selected, configured or observed; unauthorized speed, delegation or repository mutation; or any unresolved
+  material contradiction other than the established waived conflict. A waiver is not execution or host-acceptance
+  evidence, never replaces a required selection (such as protected `Ultra`), binds no other task, session or stage,
+  and authorizes nothing retroactively: work done before it stays ineligible (24.8). It is recorded in the handoff with
+  the true actual, which is never restated as the requested value, and it applies only to stages that start after
+  canonical adoption (24.14).
 - `CLAUDE_EFFORT_POLICY` — use `xhigh` where the actual Opus 5.5 host offers it and it is appropriate; otherwise
   the controller selects an adequate supported host-native literal and records why it suffices. Use `max` only when
   offered and a named capability-critical implementation or hardest correctness-critical consolidated repair
@@ -1532,14 +1612,16 @@ substantive work is procedurally invalid (24.4, 24.8).
   - **Visible selector:** cite the selected literal on this host and model; the controller's recorded selection of
     that literal (requested or native) establishes the selection. Record the source and the literal; a raw
     execution value, when exposed, is recorded beside it.
-  - In either path reject a proven raw effort conflict with the approved selection, unsupported selections,
-    contradictory evidence, and executor `Ultra` or `ultra`
-    requested, selected, configured or observed. No executor waiver permits these cases or automatic
-    delegation. Gate E independently requires the adopted runtime id, thinking enabled and no model fallback.
-    Speed is `STANDARD` (Fast requires explicit time-critical authorization) and subagents are 0. Host
-    approval or sandbox settings confer no action authority.
+  - In either path reject unsupported selections, contradictory evidence other than a conflict waived under
+    `EFFORT_MISMATCH_WAIVER`, and executor `Ultra` or `ultra` requested, selected, configured or observed; no waiver
+    permits these cases or automatic delegation. A proven raw execution-effort conflict with the approved selection
+    stops unless `EFFORT_MISMATCH_WAIVER` applies, and that waiver is available only once the path's selection or
+    acceptance evidence above is independently established: a raw value that conflicts with the selection is never
+    acceptance evidence, and a waiver never supplies it. Gate E independently requires the adopted runtime id,
+    thinking enabled and no model fallback. Speed is `STANDARD` (Fast requires explicit time-critical authorization)
+    and subagents are 0. Host approval or sandbox settings confer no action authority.
 - `SOL_AUDIT_EFFORT_POLICY` — every audit or re-audit by the `ACTIVE_SOL_AUDITOR` requires `MODEL_ID_REQUIRED` set to
-  that auditor's id (`gpt-6.1-sol` before the named activation, `gpt-6.2-sol` after it; a qualification stage names
+  that auditor's id (the id resolved under 24.7 `SOL_ROUTE_STATE_RESOLUTION`; a qualification stage names
   `gpt-6.2-sol`) and thinking `ENABLED`, admitted under `FAIL_CLOSED_RUNTIME_PROOF` above (`PATH_A`, or `PATH_B` where
   authorized); effort is recorded literally (24.3), is never
   correctness proof, and no host label is ever mapped onto another (`Ultra`, `max` and `xhigh` are never
@@ -1727,14 +1809,15 @@ above — proven from live evidence, never written into a durable file.
 admission and literal effort of 24.12; Claude availability evidence, `ACTIVE_SOL_AUDITOR`, the removal of Sol-family
 executor candidacy and the named successor of 24.3; audit admission, `INDEPENDENCE_ASSURANCE` and
 `PRE_AUDIT_CI_FAILURE_RESOLUTION_V1` of 24.4; `HANDOFF_OWNERSHIP` and approval sources of section 3 and 24.5; prompt
-safety and handoff fields of 24.6; `EFFECTIVE_ROUTE_RECOVERY` of 24.7; execution accounting, `OPERATIONAL_INTERRUPTION`
-and `ADMINISTRATIVE_CLOSURE` of 24.8; the hierarchy, flexibility and learning rules of 24.13; this transition and
-`GPT62_SOL_SUCCESSOR_ACTIVATION`; the aligned sections 2, 4, 6, 8 and 10; and the adapters and guides that apply them)
-is a reopening under `BROKEN_CONTINUITY` and `MATERIAL_CAPABILITY_CHANGE`. Lifecycles reached states with no legal
-next stage: a failed required check blocked the only audit that could open the repair, section 3 allowed repair for
-P1/P2 alone, writer and controller both owned terminal CI, and no rule closed a candidate that could not proceed.
-The protected auditor's host does not expose execution identity, so accepted-base 24.12 could not admit any Sol
-audit, and the base's prior-plane acceptance rule therefore could not accept this change.
+safety and handoff fields of 24.6; `EFFECTIVE_ROUTE_RECOVERY` and `SOL_ROUTE_STATE_RESOLUTION` of 24.7; execution
+accounting, `OPERATIONAL_INTERRUPTION` and `ADMINISTRATIVE_CLOSURE` of 24.8; the hierarchy, flexibility and learning
+rules of 24.13; this transition and `GPT62_SOL_SUCCESSOR_ACTIVATION`; the aligned sections 2, 4, 6, 8 and 10; and
+the adapters and guides that apply them) is a reopening under `BROKEN_CONTINUITY` and `MATERIAL_CAPABILITY_CHANGE`.
+Lifecycles reached states with no legal next stage: a failed required check blocked the only audit that could open
+the repair, section 3 allowed repair for P1/P2 alone, writer and controller both owned terminal CI, and no rule
+closed a candidate that could not proceed. The protected auditor's host does not expose execution identity, so
+accepted-base 24.12 could not admit any Sol audit, and the base's prior-plane acceptance rule therefore could not
+accept this change.
 - Introducing authority: the introducing transition is governed by a narrowly scoped external human governance
   decision, carried in the lifecycle's `APPROVAL_SOURCE_PACKET` (24.5), which authorizes a bounded external transition
   policy in place of the accepted-base 24.12 runtime-admission and prior-plane acceptance provisions that block it.
@@ -1768,13 +1851,24 @@ further governance amendment when its predicates are met; any unrelated future m
 independent prospective adoption. The sequence, each step on attributable evidence:
 1. independent acceptance and merge of this amendment under its introducing transition (above);
 2. remote post-merge verification;
-3. synchronization of the external Project Instructions to the accepted conditional policy;
-4. verification of that policy from a fresh controller context;
+3. synchronization of the external Project Instructions to the accepted conditional policy, naming the route state
+   `PRE_ACTIVATION`;
+4. verification of that policy from a fresh controller context, whose accepted handoff records the initial
+   `SOL_ROUTE_STATE=PRE_ACTIVATION` with that verification as its origin (24.7);
 5. a controller-authorized bounded GPT-6.2 Sol qualification at literal `Ultra` under the adopted runtime policy;
 6. independent controller adjudication of the qualification evidence;
-7. when every condition below holds, an explicit named prospective activation decision;
-8. verification of the effective auditor selection from a fresh context.
+7. when every condition below holds, an explicit named prospective activation decision, recorded at once in the
+   controller's accepted handoff with the route state `ACTIVATION_STATE_UNKNOWN` (`PUBLICATION_INCOMPLETE`);
+8. publication: the complete activation record enters the accepted handoff chain, and the external Project
+   Instructions are synchronized to name `POST_ACTIVATION` and identify that record;
+9. a fresh controller context resolves `POST_ACTIVATION_VERIFIED` (24.7) from those published sources alone and records
+   that verification; the record of step 9 is the effective future-stage boundary.
 
+- Activation status: until step 7 the activation is at most proposed and changes no route state (a complete valid
+  qualification alone dispatches nothing to `gpt-6.2-sol`); from step 7 until step 9 is recorded it is incomplete and
+  no new audit stage is dispatched under either Sol id; after step 9 it is effective for audit stages dispatched from
+  then on. No step needs a further governance amendment or an already-activated GPT-6.2 Sol, and no step depends on
+  a later one.
 - Qualification: frozen, read-only, representative examples outside any candidate lifecycle, including at least one
   whole-contract review, known material-defect detection, negative controls and false-positive adjudication, within a
   task-specific evaluation boundary against a source-grounded controller reference inventory withheld from the model.
@@ -1788,14 +1882,17 @@ independent prospective adoption. The sequence, each step on attributable eviden
   runtime admission, positive thinking, host capability and supported literal `Ultra`; the explicit prospective
   controller activation decision; and the existing human successor authorization (the human governance decision that
   approved this successor's qualification and prospective adoption).
-- The activation record binds the accepted policy revision, the exact model id and role, the qualification evidence,
-  the decision source and the effective future-stage boundary. It is preserved through the accepted controller
-  handoff and continuity mechanisms (24.7), accessible to fresh controllers and agents — no new registry and no
-  undocumented mutable local flag. It never applies to a stage already started.
-- After activation `gpt-6.2-sol` is the primary and exclusive protected auditor (`ACTIVE_SOL_AUDITOR`, 24.3) and
-  `gpt-6.1-sol` is historical for the active route, never an automatic fallback. When qualification fails, stops or
-  stays incomplete, the incumbent route remains under the adopted policy and the requested upgrade is reported
-  incomplete. Missing or contradictory activation provenance stops the affected route (24.3).
+- The activation record binds the accepted policy revision, the exact model id and role, the qualification evidence
+  and its independent adjudication, the existing human successor authorization, the explicit prospective controller
+  activation decision, the effective future-stage boundary (step 9), the pre-activation record it supersedes and its
+  attributable continuity source (the accepted handoff that carries it). It is preserved through the accepted
+  controller handoff and continuity mechanisms (24.7), accessible to fresh controllers and agents — no new registry
+  and no undocumented mutable local flag. It never applies to a stage already started.
+- After the effective activation `gpt-6.2-sol` is the primary and exclusive protected auditor (`ACTIVE_SOL_AUDITOR`,
+  24.3) and `gpt-6.1-sol` is historical for the active route, never an automatic fallback. When qualification fails,
+  stops or stays incomplete, no route state changes: the incumbent stays eligible only while
+  `PRE_ACTIVATION_VERIFIED` holds, and the requested upgrade is reported incomplete. After adoption the route state is
+  resolved only under 24.7 `SOL_ROUTE_STATE_RESOLUTION`.
 
 `STABILIZATION_ADOPTION_STATUS` — human decision, construction, independent acceptance, CI, merge authorization,
 merge, remote verification, Project Instructions synchronization, fresh-context acceptance, qualification and
@@ -1803,9 +1900,11 @@ successor activation are separate facts, never collapsed into one acceptance cla
 is used only after canonical adoption. Core setup status and the requested successor-upgrade status are recorded
 separately: product work under the incumbent auditor is possible once its actual canonical prerequisites hold, and
 the full requested stabilization is never reported finished while a material applicable adoption requirement
-remains. After activation, the controller verifies that the external instructions and fresh-context routing apply
-the effective accepted role. The final Project Instructions are complete and at most 8,000 characters including spaces
-and line breaks, checked computationally by the controller, and carry no volatile PR, SHA, quota or transient
+remains. The Project Instructions name the effective route state (`PRE_ACTIVATION` from adoption, `POST_ACTIVATION`
+from the activation publication) and identify its accepted record; they apply the policy and grant no activation
+authority (24.7). After activation, the controller verifies that the external instructions and fresh-context routing
+apply the effective accepted role. The final Project Instructions are complete and at most 8,000 characters including
+spaces and line breaks, checked computationally by the controller, and carry no volatile PR, SHA, quota or transient
 blocker state; they preserve the controller responsibilities, the exact authority hierarchy, independent
 verification, evidence discipline, routing, recovery, lifecycle and product safety. `CLOSED_FROZEN` is derived from
 live accepted evidence and never asserted by a candidate; the default next action then returns to `PRODUCT_DEFAULT`.
@@ -2117,7 +2216,13 @@ availability (24.3); `ACTIVE_SOL_AUDITOR` with the named conditional `GPT62_SOL_
 and the removal of GPT-6.2 Sol executor candidacy; `HOST_SENSITIVE_EFFORT_POLICY` with native literals and no
 cross-host equivalence claims (24.12); execution accounting, `CONTINUATION_BUDGET_CHECK` and
 `OPERATIONAL_INTERRUPTION` (24.8); `CONTROLLER_PROMPT_SAFETY_AND_SCOPE_V1` (24.6); `EFFECTIVE_ROUTE_RECOVERY` (24.7);
-and `POLICY_HIERARCHY`, `OPERATIONAL_FLEXIBILITY` and `PERFORMANCE_AND_LEARNING` (24.13). Historical findings
+and `POLICY_HIERARCHY`, `OPERATIONAL_FLEXIBILITY` and `PERFORMANCE_AND_LEARNING` (24.13). The one consolidated repair
+after the independent replacement audit closes by root cause `P2-GOV-EXECUTOR-EFFORT-WAIVER-AUTHORITY-CONFLICT` (24.12
+`EFFORT_MISMATCH_WAIVER` is the single effort-waiver rule that `HOST_SENSITIVE_EFFORT_POLICY`,
+`CODEX_EXECUTOR_EFFORT_POLICY` and every adapter reference) and `P2-GOV-SOL-ACTIVATION-STATE-RECOVERY-AMBIGUITY` (24.7
+`SOL_ROUTE_STATE_RESOLUTION`: three route states from positive current evidence, currentness, supersession and
+bounded recovery through the accepted handoff chain and the Project Instructions; the 24.14 activation publication
+boundary; `CONTINUITY_INDEX.md` separates repository state from external governance decisions). Historical findings
 `CI-CODEQL-665`, `CODEQL-666`, `OWN-HISTORY-C2-BOOST`, `OWN-HISTORY-FA4-COVERAGE-RESTART` and
 `SETUP-INJECTED-CLAUDE-DRIFT` are preserved and not claimed fixed by this governance change. Unchanged: every
 product, paper, PIT, live, capital and security boundary; one writer; one open PR; the 2 / 4 / hard-5 budget; one

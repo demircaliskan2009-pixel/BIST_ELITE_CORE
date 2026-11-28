@@ -55,10 +55,12 @@ genuinely cannot reconstruct material operational state.
   executor and a preserved independent GPT-6.1 Sol audit. It changes executor only at a stage boundary, takes the
   replaced Claude stage's budget slot, never audits, never runs on a Sol-family model and never switches
   automatically. GPT-6.2 Astra is a different model id from the superseded GPT-6 Astra.
-- **GPT-6.1 Sol** (`gpt-6.1-sol`, ChatGPT Work/Codex host) — the incumbent `ACTIVE_SOL_AUDITOR` (section 24.3)
-  until the named successor activation; the named prospective successor GPT-6.2 Sol (`gpt-6.2-sol`) takes this role
-  only after the complete section 24.14 `GPT62_SOL_SUCCESSOR_ACTIVATION`, is never an executor, and GPT-6.1 Sol is then
-  historical, not a fallback. The active Sol auditor is the PRIMARY independent auditor
+- **GPT-6.1 Sol** (`gpt-6.1-sol`, ChatGPT Work/Codex host) — the incumbent `ACTIVE_SOL_AUDITOR` (section 24.3). The
+  controller resolves the active id only under section 24.7 `SOL_ROUTE_STATE_RESOLUTION`, from positive current
+  evidence and never from a missing record: GPT-6.1 Sol for a verified pre-activation state; the named prospective
+  successor GPT-6.2 Sol (`gpt-6.2-sol`) only for a verified post-activation state after the complete section 24.14
+  `GPT62_SOL_SUCCESSOR_ACTIVATION`, GPT-6.1 Sol then historical, not a fallback; and no route while the state is
+  unknown. GPT-6.2 Sol is never an executor. The active Sol auditor is the PRIMARY independent auditor
   (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`; requested effort `Ultra`, mandatory for protected audits; speed
   `STANDARD`): fresh-context, exact-head, READ_ONLY, runtime-proven, exhaustive and materiality-aware, run under
   `SOL_AUDIT_USAGE_EFFICIENCY_V1`; for protected work the same audit is the sole protected T4
