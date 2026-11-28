@@ -19,9 +19,15 @@ never what the current state is.
 
 - Accepted bounded state is an `AGENT_OS_HANDOFF_V1` packet the ChatGPT controller has verified
   (`CONTROLLER_ACCEPTED_STATE`, section 24.5). It is supplied with the task or the new chat; the repository
-  keeps no copy, because a durable copy of live state goes stale.
-- Without an accepted handoff, reconstruct current state from live evidence alone: `git fetch`,
+  keeps no copy, because a durable copy of live state goes stale. An older handoff is not current merely because
+  it is accessible (section 24.7).
+- Repository and GitHub state: without an accepted handoff, reconstruct it from live evidence alone: `git fetch`,
   `git rev-parse origin/main`, `gh pr list --state open`, and the relevant PR's checks and review threads.
+- External governance decisions — human approvals and the `ACTIVE_SOL_AUDITOR` route state (section 24.3) — are not
+  recorded in Git or GitHub. Live repository evidence never reconstructs them, and a missing record never implies
+  one; they need attributable current decision evidence. The route state is resolved only by
+  `SOL_ROUTE_STATE_RESOLUTION` (section 24.7) from the accepted handoff chain and the Project Instructions; while it
+  is unresolved, the dependent audit holds.
 - When sources disagree (`LIVE_STATE_PRECEDENCE`, section 24.7): fresh local/terminal → live GitHub/CI →
   accepted bounded state/handoff → exact repository source → canonical doctrine → continuity → archives →
   memory. Fresh evidence overrides a stale handoff. This order ranks evidence about state only: no source in

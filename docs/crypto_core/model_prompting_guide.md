@@ -1,8 +1,7 @@
 # crypto_core Model Prompting Guide
 
-Durable authoring guide for the active council of `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by
-`ASTRA_UNIFIED_AUDIT_CONTROL_PLANE_V1`, `GPT61_SOL_UNIFIED_AUDIT_CONTROL_PLANE_V1` and
-`CODEX_EXECUTOR_QUOTA_FALLBACK_V1` and `CRYPTO_CORE_AGENT_OS_HOST_AND_WORKFLOW_CLOSURE_V1` (`docs/crypto_core/agent_workflow.md` section 24 — the authority; this guide
+Durable authoring guide for the active council of `MINIMAL_OPERATIONAL_CONTROL_PLANE_KERNEL_V1` as amended by the
+amendments listed in its header (`docs/crypto_core/agent_workflow.md` section 24 — the authority; this guide
 teaches how to WRITE prompts for it and never overrides it). Claude prompt templates:
 `docs/crypto_core/agent_prompts/opus5_prompting_playbook.md`. Codex executor adapter:
 `.codex/skills/crypto-core-executor-fallback/SKILL.md`. Research protocol:
@@ -11,8 +10,10 @@ in this guide proves repository state or authorizes a merge.
 
 Active council (section 24.3): ChatGPT controller (read-only first, `CONTROLLER_READONLY_FIRST_POLICY`),
 Claude Opus 5.5 (`claude-opus-5-5`), the conditional Codex executor (`CODEX_EXECUTOR_QUOTA_FALLBACK_V1`, adopted id
-`gpt-6.2-astra`, routed only by an explicit controller selection), GPT-6.1 Sol (`gpt-6.1-sol`, the audit lane),
-ChatGPT Work, Deep Research. Not routable, and never an automatic fallback: GPT-6 Astra
+`gpt-6.2-astra`, routed only by an explicit controller selection), the `ACTIVE_SOL_AUDITOR` (resolved under section
+24.7 `SOL_ROUTE_STATE_RESOLUTION`: GPT-6.1 Sol, `gpt-6.1-sol`, for a verified pre-activation state; GPT-6.2 Sol,
+`gpt-6.2-sol`, for a verified post-activation state after the named activation of section 24.14; no route if unknown),
+ChatGPT Work, Deep Research. GPT-6.1 Terra (`gpt-6.1-terra`) is `EVALUATION_ONLY`. Not routable, and never an automatic fallback: GPT-6 Astra
 (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_AUDIT`); Codex GPT-5.6 Sol (`SUPERSEDED_FOR_ACTIVE_CRYPTO_CORE_ROUTING`); Claude
 Sonnet 5, Codex GPT-5.6 Terra and Codex GPT-5.6 Luna (`NOT_IN_ACTIVE_COUNCIL`); Claude Opus 5
 (`SUPERSEDED_BY_OPUS_5_5`); Claude Opus 4.8 (`SUPERSEDED_BY_OPUS_5`); Claude Fable 5 (`INACTIVE_EXPIRED_RETIRED`);
@@ -29,9 +30,11 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 - `SEMANTIC_BOUNDARY` names the one contract the PR closes as the largest safe semantic closure (section
   24.8) — never a file-count or LOC target.
 - `STATE_PIN` carries exact SHAs, branch, PR and open-PR count; the writer binds its local base/head/tree and clean status to the controller’s remote proof.
-- `MODEL_RUNTIME_PROOF` carries the section 24.12 fields and requirements (`MODEL_ID_REQUIRED`, required
-  thinking), with the host label written literally; identity and required thinking fail closed on `UNKNOWN`, and
-  only effort may stay `UNKNOWN`.
+- `MODEL_RUNTIME_PROOF` carries the compact section 24.12 runtime block and requirements (`MODEL_ID_REQUIRED`,
+  required thinking, the fixed literal effort, the admission path), with the host label written literally. Writers
+  are admitted on `PATH_A` only; an authorized Sol audit or qualification may use `PATH_B` with the human selection
+  attestation and the controller's admission decision. Required thinking fails closed on `UNKNOWN`, and only
+  optional effort, speed and usage telemetry may stay `UNKNOWN`.
 - `BLOCKER_INVENTORY` names inherited blockers by semantic defect (identity survives renames) and, for a repair
   or re-audit, the complete audited P1/P2 set.
 - `VALIDATION_MATRIX` is exact; the full crypto_core suite runs only via `run_full_tests_logged.ps1`.
@@ -59,21 +62,43 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   reads, adjudication, merge-readiness, the authorization request, merge, post-merge verification, fresh-chat
   acceptance — do not count); never issue a specialist sixth; never hide specialist work inside governance; adjudicate a
   disputed severity under `AUDIT_MATERIALITY_BOUNDARY_V1` before applying `FIXED_POINT_STOP`; open a new attempt only through a `TASK_INTENT=ARCHITECTURE` `ROOT_CAUSE_ESCAPE` decision.
-- **Audit routing and last-resort fallback:** route every independent audit to GPT-6.1 Sol (section 24.4) with the
-  compact `SOL_AUDIT_PREFLIGHT_PACKET`. For a non-protected candidate only, when GPT-6.1 Sol is unavailable,
-  quota-blocked or stopped by runtime proof — reason recorded — the controller audits as the last resort: the
-  controller, including through ChatGPT Work, neither implemented nor repaired the candidate; fresh pinned-head
-  READ_ONLY; complete blocker collection with evidence; zero mutation; never a protected audit. Protected work
-  waits for GPT-6.1 Sol on the frozen exact head; GPT-6 Astra and Codex GPT-5.6 Sol are no fallback. No
-  independent eligible reviewer → `STOP_WITH_PROOF`. Exception: the change that introduces this routing is
+- **Audit routing and last-resort fallback:** route every independent audit to the `ACTIVE_SOL_AUDITOR` (sections
+  24.3 and 24.4) with the compact `SOL_AUDIT_PREFLIGHT_PACKET`, resolving which id that is only under section 24.7
+  `SOL_ROUTE_STATE_RESOLUTION` (never from memory, a missing record or model availability) and carrying the
+  resolved state and its record origin in `MODEL_RUNTIME_PROOF`; an unresolved state holds the audit after one
+  bounded recovery attempt and is no fallback reason. For a non-protected candidate only, when GPT-6.1 Sol is
+  unavailable, quota-blocked or stopped by runtime proof — reason recorded — the controller audits as the last
+  resort: the controller, including through ChatGPT Work, neither implemented nor repaired the candidate; fresh
+  pinned-head READ_ONLY; complete blocker collection with evidence; zero mutation; never a protected audit.
+  Protected work waits for GPT-6.1 Sol on the frozen exact head; GPT-6 Astra and Codex GPT-5.6 Sol are no fallback.
+  No independent eligible reviewer → `STOP_WITH_PROOF`. Exception: the change that introduces this routing is
   audited under section 24 and the adapters of its base — the final legacy GPT-6 Astra audit — not its own text
-  (section 24.14 `GPT61_SOL_AUDIT_TRANSITION`).
+  (section 24.14 `GPT61_SOL_AUDIT_TRANSITION`); the change that introduces
+  `CRYPTO_CORE_FINAL_CONTROL_PLANE_STABILIZATION_V1` is accepted by the incumbent GPT-6.1 Sol at `Ultra` under its
+  base as modified only by the external human transition decision (`FINAL_CONTROL_PLANE_STABILIZATION_TRANSITION`).
+- **Audit admission:** for a `PATH_B` audit, record the human selection attestation and an explicit admission
+  decision naming the residual assurance limitation (section 24.12). Classify every failing required check
+  (`CANDIDATE_SEMANTIC_DEFECT`, `CI_GATE_BLOCKER`, `INFRASTRUCTURE_FAILURE`, `UNCONFIRMED_OR_UNCLASSIFIED`) and admit a
+  first `REPAIR_ONLY` audit only on the ten section 24.4 eligibility conditions; otherwise wait for terminal green CI.
+- **Successor activation:** follow the steps of section 24.14 `GPT62_SOL_SUCCESSOR_ACTIVATION` exactly; issue the
+  activation decision only on complete adjudicated qualification evidence, publish its record in the accepted
+  handoff chain and the Project Instructions, dispatch no Sol audit until a fresh context has verified the effective
+  route, carry `SOL_ROUTE_STATE` in every accepted handoff, and report the upgrade incomplete when qualification
+  fails or stops.
+- **Prompt safety (`CONTROLLER_PROMPT_SAFETY_AND_SCOPE_V1`, section 24.6):** compile legitimate, explicitly scoped
+  tasks with stable authority references; never request hidden reasoning, credentials or unrelated session data;
+  on a platform restriction, collect only safely reportable state, mark the work `INCOMPLETE` and never rephrase,
+  obfuscate or switch models to get around it.
 - **Usage duty (`SOL_AUDIT_USAGE_EFFICIENCY_V1`):** spend Sol allowance on independent judgment only — do every
   status read, CI poll, thread enumeration and preflight step around an audit yourself; never inflate an audit
   prompt; never narrow, shorten or fragment an audit to save allowance.
-- **Executor routing.** Put the attributable §24.3 A–G decisions in `MODEL_RUNTIME_PROOF` for this stage.
+- **Executor routing.** Put the attributable §24.3 A–G decisions in `MODEL_RUNTIME_PROOF` for this stage. For gate A,
+  a current attributable firsthand human statement that Claude is quota-blocked or unavailable suffices; reuse it
+  while current and refresh it only on a passed reset, changed applicability or contradiction.
   For F, explain why the named writer can finish this scope and validation. Leave executing-session confirmation
-  to the writer before mutation. Preserve the stage boundary, slot and interrupted-stage rules of §24.3.
+  to the writer before mutation. A proven effort conflict proceeds only under §24.12 `EFFORT_MISMATCH_WAIVER`: record
+  the human waiver's binding and your sufficiency judgement with F before mutation; it never fills D or E. Preserve
+  the stage boundary, slot and interrupted-stage rules of §24.3.
 - **Never:** product implementation; any protected audit; an independent audit outside that fallback or of
   its own implementation or repair; a substitute for local tests; memory as repository state; GitHub mutation
   without an exact human action authorization; merge authority.
@@ -103,20 +128,23 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
   consolidated repair of a candidate, together with the repo-native navigation, mechanical, static-inspection,
   test-generation, local validation and CI-diagnosis work of that same task.
 - **Prompt:** name the contract, affected entry points, invariants and negative cases. Give the validation ladder
-  and publication authority. Choose an offered Opus 5.5 setting under §24.12. Use the existing Opus playbook for
-  implementation or the single consolidated repair.
+  and publication authority. Fix an offered Opus 5.5 literal under §24.12 (`xhigh` where offered and appropriate,
+  otherwise an adequate native literal, no equivalence claim). Use the existing Opus playbook for implementation or
+  the single consolidated repair.
 
 ### 2.5 GPT-6.2 Astra — conditional whole-stage executor
 
 - **Prompt:** name the dependency chain, financial or authority boundary, and the negative case that would
   expose a broken link. For difficult repairs, supply the complete blocker set and require root-cause and
   regression evidence. Supply the same complete contract and validation, plus the §24.3 A–G controller record inside
-  `MODEL_RUNTIME_PROOF`. For a CLI writer, name the literal config option and require proof this execution
-  accepted it. For desktop, name the actual selector label and the §24.12 evidence path. Ask for the writer's
+  `MODEL_RUNTIME_PROOF`. Prefer `xhigh`, `max` only on a named critical trigger, never `ultra`; a different supported
+  native literal may be selected explicitly without an equivalence claim. For a CLI writer, name the literal config
+  option and require proof this execution accepted it. For desktop, name the actual selector label and the §24.12
+  evidence path. Ask for the writer's
   separate session and checkout proof, then a scoped commit and exact-head handoff where authorized.
   [Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference)
 
-### 2.6 GPT-6.1 Sol — primary independent auditor (audit-only lane)
+### 2.6 Active Sol auditor (GPT-6.1 Sol; GPT-6.2 Sol after activation) — primary independent auditor (audit-only lane)
 
 - **Best tasks:** the exhaustive fresh-context whole-contract audit and the one whole-contract re-audit of every
   serious candidate (`GPT61_SOL_UNIFIED_INDEPENDENT_AUDIT_V1`); for protected work, including control-plane
@@ -124,14 +152,16 @@ Every serious prompt uses the section 24.6 `SERIOUS_PROMPT_COMPILER` order: `TAS
 - **Bad tasks:** implementation, repair, routine GitHub status, CI polling, thread enumeration, repository
   archaeology and mechanical work — they belong to Claude or the controller and spend the allowance that buys
   independent judgment.
-- **Rules:** `MODEL_ID_REQUIRED=gpt-6.1-sol` and thinking `ENABLED`; host labels written literally and never mapped
+- **Rules:** `MODEL_ID_REQUIRED` is the active Sol auditor's id and thinking `ENABLED`, admitted on `PATH_A` or, where
+  authorized, `PATH_B` (section 24.12); host labels written literally and never mapped
   (`Ultra` is never written as `max`). A protected audit requires `Ultra`, and an unexposed `Ultra` stops it for the
   controller to re-prove the host vocabulary; a non-protected audit requests `Ultra` by default and otherwise the
   available literal label the controller supplies, without that stop; `SPEED_MODE_DEFAULT=STANDARD`, Fast only on
   a recorded time-critical authorization and never as a correctness upgrade; `SOL_SUBAGENTS_DEFAULT=0`; runtime
   proof before substantive audit; never mutates; independence by lane and executing model id; complete material
-  P1/P2 collection under `AUDIT_MATERIALITY_BOUNDARY_V1` and `FINITE_AUDIT_RULE`. A first-audit P1/P2 opens the one
-  consolidated repair; a genuine P1/P2 remaining after the one re-audit rejects the candidate. Unavailability makes
+  P1/P2 collection under `AUDIT_MATERIALITY_BOUNDARY_V1` and `FINITE_AUDIT_RULE`. A first-audit P1/P2, or a confirmed
+  `CI_GATE_BLOCKER` from a `REPAIR_ONLY` first audit, opens the one consolidated repair; a genuine P1/P2 remaining
+  after the one re-audit rejects the candidate. Unavailability makes
   a protected gate wait on the frozen exact head; it never reassigns T4.
 - **Efficiency (`SOL_AUDIT_USAGE_EFFICIENCY_V1`):** the prompt carries the controller's preflight packet inside its
   canonical fields; the
@@ -148,8 +178,7 @@ runtime/thinking evidence reported separately. A prospective profile cannot auth
 
 | Model and question | What to put in the prompt |
 |---|---|
-| GPT-6.2 Sol (`gpt-6.2-sol`), bounded implementation or repair | Use a non-protected historical fixture, explicit acceptance criteria, finite dependencies and a complete validation ladder. Ask for the smallest sufficient tool reads and one checked result. Compare total work through independent acceptance with the usual writer. Exclude open-ended architecture and financial trust boundaries. |
-| GPT-6.2 Sol, independent non-protected audit | Use a different fixture with independently established material defects and clean paths. Withhold the answer key. Request one fresh-context, read-only whole-contract verdict with evidence for every blocker. Score misses and false findings, exclude every implementing/repairing ID, and examine shared-family misses. The production audit remains with §24.4. |
+| GPT-6.2 Sol (`gpt-6.2-sol`), successor auditor qualification (§24.14 `GPT62_SOL_SUCCESSOR_ACTIVATION`, step 5) | Frozen read-only representative examples with independently established material defects, negative controls and clean paths; at least one whole-contract review. Withhold the source-grounded reference inventory. Literal `Ultra`, `STANDARD` speed, runtime admission under §24.12. Request one fresh-context whole-contract verdict per example with evidence for every blocker. Score misses and false findings, exclude every implementing/repairing ID, examine shared-family misses, and use comparable usage only where available. No executor profile exists for any Sol id. |
 | GPT-6.1 Terra (`gpt-6.1-terra`), mechanical or visual evidence | Supply an exact image or UI state, permitted observations/actions, expected output and independently checkable reference. Require a stop on ambiguous or missing inputs. Keep ordinary GitHub verification with the controller. Exclude repository writing, governance and audit. |
 
 ### 2.7 Superseded lanes
@@ -186,8 +215,10 @@ HANDOFF: <§24.6 packet, specialist count and one next safe action>
   Keep the direct grant and its limits in `GITHUB_AUTHORIZATION`. Link the exact accessible source to avoid
   replaying the surrounding conversation.
 - **Audit:** place the §24.4 packet's check/thread snapshot in `STATE_PIN` and known findings in
-  `BLOCKER_INVENTORY`. Request the complete material P1/P2 set in one read-only pass.
-- **Consolidated repair:** supply that entire blocker set with the expected regression proof per defect.
+  `BLOCKER_INVENTORY`. Request the complete material P1/P2 set in one read-only pass. For a `REPAIR_ONLY` first
+  audit, add the eligibility record and failure classification and request `CI_GATE_BLOCKERS` separately.
+- **Consolidated repair:** supply that entire blocker set, including confirmed `CI_GATE_BLOCKERS`, with the expected
+  regression proof per defect.
 - **Whole-contract re-audit:** supply both heads and inherited identities. Inspect the delta first, then the
   whole contract. Apply §24.8 to the result.
 - **Root-cause escape:** the controller's architecture decision names the failed invariant, changed boundary
